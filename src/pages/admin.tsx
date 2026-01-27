@@ -124,11 +124,20 @@ export default function AdminPanel() {
     if (!selectedEvent) return;
 
     try {
-      await eventService.generateEventQuestions(selectedEvent.id);
-      toast({
-        title: "Success",
-        description: "90 questions generated for event"
-      });
+      const result = await eventService.generateEventQuestions(selectedEvent.id);
+      
+      if (result.count < 90) {
+        toast({
+          title: "Warning",
+          description: `Not enough questions in pool. Generated ${result.count} questions (pool has only ${result.total}). Add more questions to reach 90.`,
+          variant: "default"
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: "90 questions generated for event"
+        });
+      }
     } catch (error: any) {
       toast({
         title: "Error",

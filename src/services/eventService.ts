@@ -107,12 +107,15 @@ export const eventService = {
     
     if (questionsError) throw questionsError;
     
-    if (allQuestions.length < 90) {
-      throw new Error(`Need at least 90 questions. Only ${allQuestions.length} available.`);
+    const availableCount = allQuestions.length;
+    const questionCount = Math.min(availableCount, 90);
+
+    if (availableCount === 0) {
+      throw new Error("No questions available in the pool. Please create some questions first.");
     }
 
     const shuffled = [...allQuestions].sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, 90);
+    const selected = shuffled.slice(0, questionCount);
 
     const eventQuestions = selected.map((q, index) => ({
       event_id: eventId,
@@ -126,7 +129,7 @@ export const eventService = {
       .insert(eventQuestions);
     
     if (insertError) throw insertError;
-    return true;
+    return { count: questionCount, total: availableCount };
   },
 
   async generateTickets(eventId: string, count: number) {
