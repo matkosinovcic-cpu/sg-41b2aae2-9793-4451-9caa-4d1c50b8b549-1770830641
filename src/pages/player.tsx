@@ -16,6 +16,7 @@ export default function PlayerScreen() {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [answered, setAnswered] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
+  const [pollingActive, setPollingActive] = useState(false);
   const [lastReceivedQuestionNumber, setLastReceivedQuestionNumber] = useState<number | null>(null);
   const lastQuestionNumberRef = useRef<number | null>(null);
   const { toast } = useToast();
