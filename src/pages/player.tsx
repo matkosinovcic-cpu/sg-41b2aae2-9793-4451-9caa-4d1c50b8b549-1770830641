@@ -219,25 +219,29 @@ export default function PlayerScreen() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-5 gap-2">
-                {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
-                  const onTicket = isNumberOnTicket(num);
-                  const isDrawn = event?.current_question_number && num <= event.current_question_number;
-                  return (
-                    <div
-                      key={num}
-                      className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg transition-all ${
-                        onTicket
-                          ? isDrawn
-                            ? "bg-green-500 text-white scale-110"
-                            : "bg-purple-500 text-white"
-                          : "bg-gray-200 text-gray-400"
-                      }`}
-                    >
-                      {num}
-                    </div>
-                  );
-                })}
+              {/* Display only the ticket's 15 numbers in 3x5 grid */}
+              <div className="grid grid-cols-5 gap-3">
+                {ticket.ticket_questions
+                  ?.map((tq: any) => tq.question_number)
+                  .sort((a: number, b: number) => a - b)
+                  .map((num: number) => {
+                    const isDrawn = event?.current_question_number && num <= event.current_question_number;
+                    return (
+                      <div
+                        key={num}
+                        className={`aspect-square flex items-center justify-center rounded-lg font-black text-3xl transition-all shadow-md ${
+                          isDrawn
+                            ? "bg-gradient-to-br from-green-500 to-green-600 text-white scale-105 shadow-lg"
+                            : "bg-gradient-to-br from-purple-500 to-purple-600 text-white hover:scale-105"
+                        }`}
+                      >
+                        {num}
+                      </div>
+                    );
+                  })}
+              </div>
+              <div className="mt-4 text-center text-sm text-gray-600">
+                Your ticket has 15 numbers
               </div>
             </CardContent>
           </Card>
