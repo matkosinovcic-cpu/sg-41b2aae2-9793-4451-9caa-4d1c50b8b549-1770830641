@@ -416,17 +416,20 @@ export default function AdminPanel() {
                   {currentDrawnQuestion && selectedEvent.status === "active" && (
                     <Card className="bg-gradient-to-r from-blue-500 to-purple-600 text-white">
                       <CardHeader>
-                        <CardTitle className="text-white text-center">
-                          Current Question #{currentDrawnQuestion.question_number}
+                        <CardTitle className="text-white text-center text-3xl">
+                          Question #{currentDrawnQuestion.question_number} Drawn
                         </CardTitle>
+                        <p className="text-white/90 text-center text-lg">
+                          Draw Index: {currentDrawnQuestion.question_number} / 90
+                        </p>
                       </CardHeader>
                       <CardContent>
-                        <div className="p-6 bg-white/20 backdrop-blur-sm rounded-lg text-center">
-                          <p className="text-2xl font-bold text-white">
+                        <div className="p-8 bg-white/20 backdrop-blur-sm rounded-lg text-center">
+                          <p className="text-3xl font-black text-white mb-4">
                             {currentDrawnQuestion.questions?.text}
                           </p>
-                          <div className="mt-4">
-                            <Badge className={currentDrawnQuestion.questions?.correct_answer ? "bg-green-500" : "bg-red-500"}>
+                          <div className="mt-6">
+                            <Badge className={`text-lg px-6 py-2 ${currentDrawnQuestion.questions?.correct_answer ? "bg-green-500" : "bg-red-500"}`}>
                               Correct Answer: {currentDrawnQuestion.questions?.correct_answer ? "YES" : "NO"}
                             </Badge>
                           </div>
