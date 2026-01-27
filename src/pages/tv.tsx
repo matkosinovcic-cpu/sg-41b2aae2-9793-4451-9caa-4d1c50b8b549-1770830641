@@ -11,6 +11,7 @@ export default function TVScreen() {
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastQuestionNumberRef = useRef<number | null>(null);
 
@@ -18,38 +19,59 @@ export default function TVScreen() {
     loadEvents();
     // Initialize AudioContext
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Load from localStorage
+    const storedEventId = localStorage.getItem("tv_event_id");
+    if (storedEventId) {
+      console.log("[TV] Auto-selecting stored event:", storedEventId);
+      setSelectedEventId(storedEventId);
+    }
   }, []);
+
+  // Save selected event to localStorage
+  useEffect(() => {
+    if (selectedEventId) {
+      localStorage.setItem("tv_event_id", selectedEventId);
+    }
+  }, [selectedEventId]);
 
   // Real-time subscriptions
   useEffect(() => {
-    if (!selectedEventId) return;
+    if (!selectedEventId) {
+      setSubscriptionStatus("disconnected");
+      return;
+    }
 
-    console.log(`[TV] Subscribing to event ${selectedEventId}`);
+    console.log("[TV] Setting up subscription for event:", selectedEventId);
 
     // Initial load
     loadEventData();
 
     // Subscribe to event changes
-    const eventSubscription = eventService.subscribeToEvent(selectedEventId, (payload) => {
-      console.log("[TV] Event updated:", payload.new);
+    const eventSubscription = eventService.subscribeToEvent(selectedEventId, async (payload) => {
+      console.log("[TV] Real-time event update received:", payload);
       const updatedEvent = payload.new;
       
       // Check if question number changed
       const questionChanged = updatedEvent.current_question_number !== lastQuestionNumberRef.current;
       
       if (questionChanged && updatedEvent.current_question_number) {
-        console.log(`[TV] New question detected: #${updatedEvent.current_question_number}`);
+        console.log(`[TV] Question changed from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
         playBeep('start');
         lastQuestionNumberRef.current = updatedEvent.current_question_number;
-        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
       }
       
       setEvent(updatedEvent);
     });
 
+    setSubscriptionStatus("connected");
+    console.log("[TV] Subscription active");
+
     return () => {
-      console.log("[TV] Unsubscribing from event");
+      console.log("[TV] Cleaning up subscription");
       eventSubscription.unsubscribe();
+      setSubscriptionStatus("disconnected");
     };
   }, [selectedEventId]);
 
@@ -85,7 +107,7 @@ export default function TVScreen() {
       const data = await eventService.getAllEvents();
       setEvents(data);
     } catch (error) {
-      console.error("Failed to load events");
+      console.error("[TV] Failed to load events:", error);
     }
   };
 
@@ -97,16 +119,16 @@ export default function TVScreen() {
       
       // Load current question if one exists
       if (data.current_question_number) {
-        loadCurrentQuestion(data.id, data.current_question_number);
+        await loadCurrentQuestion(data.id, data.current_question_number);
       }
     } catch (error) {
-      console.error("Failed to load event");
+      console.error("[TV] Failed to load event:", error);
     }
   };
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log(`[TV] Fetching question #${questionNumber}`);
+      console.log(`[TV] Loading question #${questionNumber}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[TV] Question loaded:", data);
       setCurrentQuestion(data);
@@ -183,8 +205,13 @@ export default function TVScreen() {
       <SEO title="TV Display - Pitalica Skitalica" />
       <div className="min-h-screen bg-black text-white overflow-hidden relative">
         {/* Debug Info */}
-        <div className="fixed top-2 right-2 text-xs text-white/60 bg-black/50 px-2 py-1 rounded font-mono z-50">
-          event={event.id.slice(0, 8)} | status={event.status} | q={event.current_question_number || 0}
+        <div className="fixed top-2 right-2 text-xs text-white bg-black/70 px-3 py-2 rounded font-mono z-50 space-y-1 border border-white/20">
+          <div>event: {event.id.slice(0, 8)}</div>
+          <div>q: {event.current_question_number || 0}</div>
+          <div>status: {event.status}</div>
+          <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
+            sub: {subscriptionStatus}
+          </div>
         </div>
 
         {/* Background Elements */}

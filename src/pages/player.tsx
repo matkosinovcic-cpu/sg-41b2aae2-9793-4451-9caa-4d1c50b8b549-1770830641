@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { eventService } from "@/services/eventService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,8 @@ export default function PlayerScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [answered, setAnswered] = useState(false);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
+  const lastQuestionNumberRef = useRef<number | null>(null);
   const { toast } = useToast();
 
   // Load from localStorage on mount
@@ -22,6 +24,7 @@ export default function PlayerScreen() {
     const storedEventId = localStorage.getItem("event_id");
 
     if (storedSerial && storedEventId) {
+      console.log("[PLAYER] Auto-rejoining with stored ticket:", storedSerial);
       autoRejoin(storedSerial, storedEventId);
     }
   }, []);
@@ -33,12 +36,19 @@ export default function PlayerScreen() {
         setTicket(ticketData);
         const eventData = await eventService.getEvent(eventId);
         setEvent(eventData);
+        lastQuestionNumberRef.current = eventData.current_question_number;
+        
+        // Load current question if one exists
+        if (eventData.current_question_number) {
+          await loadCurrentQuestion(eventId, eventData.current_question_number);
+        }
       } else {
         // Invalid data, clear storage
         localStorage.removeItem("ticket_serial");
         localStorage.removeItem("event_id");
       }
     } catch (error) {
+      console.error("[PLAYER] Auto-rejoin failed:", error);
       // Invalid ticket, clear storage
       localStorage.removeItem("ticket_serial");
       localStorage.removeItem("event_id");
@@ -47,31 +57,41 @@ export default function PlayerScreen() {
 
   // Real-time subscriptions
   useEffect(() => {
-    if (!event?.id) return;
+    if (!event?.id) {
+      setSubscriptionStatus("disconnected");
+      return;
+    }
 
-    console.log(`[PLAYER] Subscribing to event ${event.id}`);
+    console.log("[PLAYER] Setting up subscription for event:", event.id);
 
-    // Subscribe to event changes (status, current_question_number, winner, etc.)
-    const eventSubscription = eventService.subscribeToEvent(event.id, (payload) => {
-      console.log("[PLAYER] Event updated:", payload.new);
+    // Subscribe to event changes
+    const eventSubscription = eventService.subscribeToEvent(event.id, async (payload) => {
+      console.log("[PLAYER] Real-time event update received:", payload);
       const updatedEvent = payload.new;
-      setEvent(updatedEvent);
       
-      // Load new question if question number changed
-      if (updatedEvent.current_question_number) {
-        console.log(`[PLAYER] Loading question #${updatedEvent.current_question_number}`);
-        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+      // Check if question number changed
+      const questionChanged = updatedEvent.current_question_number !== lastQuestionNumberRef.current;
+      
+      if (questionChanged && updatedEvent.current_question_number) {
+        console.log(`[PLAYER] Question changed from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
+        lastQuestionNumberRef.current = updatedEvent.current_question_number;
         setAnswered(false); // Reset answered state for new question
+        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
       }
+      
+      setEvent(updatedEvent);
     });
 
-    // Subscribe to tickets changes (for winner status)
+    // Subscribe to ticket changes (for winner status)
     const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
-      console.log("[PLAYER] Ticket updated:", payload.new);
+      console.log("[PLAYER] Ticket update received:", payload);
       if (payload.new && payload.new.id === ticket?.id) {
         setTicket(payload.new);
       }
     });
+
+    setSubscriptionStatus("connected");
+    console.log("[PLAYER] Subscriptions active");
 
     // Load current question on mount if one exists
     if (event.current_question_number) {
@@ -79,11 +99,12 @@ export default function PlayerScreen() {
     }
 
     return () => {
-      console.log("[PLAYER] Unsubscribing from event");
+      console.log("[PLAYER] Cleaning up subscriptions");
       eventSubscription.unsubscribe();
       ticketsSubscription.unsubscribe();
+      setSubscriptionStatus("disconnected");
     };
-  }, [event?.id]);
+  }, [event?.id, ticket?.id]);
 
   // Timer countdown
   useEffect(() => {
@@ -104,11 +125,11 @@ export default function PlayerScreen() {
     }, 100);
 
     return () => clearInterval(interval);
-  }, [event?.question_open_until]);
+  }, [event?.question_open_until, timeRemaining]);
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log(`[PLAYER] Fetching question #${questionNumber}`);
+      console.log(`[PLAYER] Loading question #${questionNumber}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[PLAYER] Question loaded:", data);
       setCurrentQuestion(data);
@@ -133,10 +154,16 @@ export default function PlayerScreen() {
       setTicket(ticketData);
       const eventData = await eventService.getEvent(ticketData.event_id);
       setEvent(eventData);
+      lastQuestionNumberRef.current = eventData.current_question_number;
       
       // Persist to localStorage
       localStorage.setItem("ticket_serial", serialNumber);
       localStorage.setItem("event_id", ticketData.event_id);
+      
+      // Load current question if one exists
+      if (eventData.current_question_number) {
+        await loadCurrentQuestion(eventData.id, eventData.current_question_number);
+      }
       
       toast({
         title: "Success",
@@ -170,11 +197,6 @@ export default function PlayerScreen() {
     }
   };
 
-  const isNumberOnTicket = (num: number) => {
-    if (!ticket?.ticket_questions) return false;
-    return ticket.ticket_questions.some((tq: any) => tq.question_number === num);
-  };
-
   if (!ticket) {
     return (
       <>
@@ -206,8 +228,13 @@ export default function PlayerScreen() {
       <SEO title="Player - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-500 to-indigo-600 p-4">
         {/* Debug Info */}
-        <div className="fixed top-2 right-2 text-xs text-white/60 bg-black/30 px-2 py-1 rounded font-mono">
-          event={event?.id.slice(0, 8)} | status={event?.status} | q={event?.current_question_number || 0}
+        <div className="fixed top-2 right-2 text-xs text-white bg-black/50 px-3 py-2 rounded font-mono z-50 space-y-1">
+          <div>event: {event?.id?.slice(0, 8) || "none"}</div>
+          <div>q: {event?.current_question_number || 0}</div>
+          <div>status: {event?.status || "unknown"}</div>
+          <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
+            sub: {subscriptionStatus}
+          </div>
         </div>
 
         <div className="container mx-auto max-w-2xl space-y-4">
