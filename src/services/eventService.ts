@@ -212,6 +212,16 @@ export const eventService = {
   },
 
   async startEvent(eventId: string) {
+    // First, deactivate ALL other active events
+    const { error: deactivateError } = await supabase
+      .from("events")
+      .update({ status: "draft" })
+      .eq("status", "active")
+      .neq("id", eventId);
+    
+    if (deactivateError) throw deactivateError;
+
+    // Then activate the selected event
     const { error } = await supabase
       .from("events")
       .update({ status: "active" })
