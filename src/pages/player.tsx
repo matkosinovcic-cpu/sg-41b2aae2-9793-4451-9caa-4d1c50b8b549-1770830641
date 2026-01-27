@@ -45,47 +45,69 @@ export default function PlayerScreen() {
     }
   };
 
+  // Real-time subscriptions
   useEffect(() => {
-    if (event) {
-      const subscription = eventService.subscribeToEvent(event.id, () => {
-        loadEventData();
-      });
+    if (!event?.id) return;
 
-      const questionsSubscription = eventService.subscribeToEventQuestions(event.id, () => {
-        loadCurrentQuestion();
-      });
+    // Subscribe to event changes (status, current_question_number, winner, etc.)
+    const eventSubscription = eventService.subscribeToEvent(event.id, (payload) => {
+      console.log("Event updated:", payload.new);
+      const updatedEvent = payload.new;
+      setEvent(updatedEvent);
+      
+      // Load new question if question number changed
+      if (updatedEvent.current_question_number !== event.current_question_number) {
+        loadCurrentQuestion(updatedEvent);
+      }
+    });
 
-      const ticketsSubscription = eventService.subscribeToTickets(event.id, () => {
-        loadTicketData();
-      });
+    // Subscribe to event_questions changes
+    const questionsSubscription = eventService.subscribeToEventQuestions(event.id, () => {
+      console.log("Event questions updated");
+      loadCurrentQuestion(event);
+    });
 
-      return () => {
-        subscription.unsubscribe();
-        questionsSubscription.unsubscribe();
-        ticketsSubscription.unsubscribe();
-      };
+    // Subscribe to ticket changes (for winner status)
+    const ticketsSubscription = eventService.subscribeToTickets(event.id, () => {
+      console.log("Tickets updated");
+      loadTicketData();
+    });
+
+    // Load current question on mount if one exists
+    if (event.current_question_number) {
+      loadCurrentQuestion(event);
     }
-  }, [event]);
 
+    return () => {
+      eventSubscription.unsubscribe();
+      questionsSubscription.unsubscribe();
+      ticketsSubscription.unsubscribe();
+    };
+  }, [event?.id]);
+
+  // Timer countdown
   useEffect(() => {
-    if (event?.question_open_until) {
-      const interval = setInterval(() => {
-        const now = new Date().getTime();
-        const deadline = new Date(event.question_open_until).getTime();
-        const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
-        setTimeRemaining(remaining);
-
-        if (remaining === 0) {
-          setAnswered(true);
-        }
-      }, 100);
-
-      return () => clearInterval(interval);
+    if (!event?.question_open_until) {
+      setTimeRemaining(0);
+      return;
     }
+
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const deadline = new Date(event.question_open_until).getTime();
+      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+      setTimeRemaining(remaining);
+
+      if (remaining === 0 && timeRemaining > 0) {
+        setAnswered(true);
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
   }, [event?.question_open_until]);
 
   const loadTicketData = async () => {
-    if (!ticket) return;
+    if (!ticket?.id) return;
     try {
       const ticketData = await eventService.getTicket(ticket.id);
       setTicket(ticketData);
@@ -94,31 +116,20 @@ export default function PlayerScreen() {
     }
   };
 
-  const loadEventData = async () => {
-    if (!ticket) return;
-    try {
-      const eventData = await eventService.getEvent(ticket.event_id);
-      setEvent(eventData);
-      if (eventData.current_question_number) {
-        loadCurrentQuestion();
-      }
-    } catch (error) {
-      console.error("Failed to load event data");
+  const loadCurrentQuestion = async (eventData: any) => {
+    if (!eventData?.current_question_number) {
+      setCurrentQuestion(null);
+      setAnswered(false);
+      return;
     }
-  };
-
-  const loadCurrentQuestion = async () => {
-    if (!ticket || !event?.current_question_number) return;
 
     try {
-      const data = await eventService.getEventQuestion(ticket.event_id, event.current_question_number);
-
-      if (data) {
-        setCurrentQuestion(data);
-        setAnswered(false);
-      }
+      const data = await eventService.getEventQuestion(eventData.id, eventData.current_question_number);
+      console.log("Loaded current question:", data);
+      setCurrentQuestion(data);
+      setAnswered(false);
     } catch (error) {
-      console.error("Failed to load current question");
+      console.error("Failed to load current question:", error);
     }
   };
 

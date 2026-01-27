@@ -19,56 +19,70 @@ export default function TVScreen() {
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
   }, []);
 
+  // Real-time subscriptions
   useEffect(() => {
-    if (selectedEventId) {
-      loadEventData();
-      const subscription = eventService.subscribeToEvent(selectedEventId, (payload) => {
-        setEvent(payload.new);
-        // Play sound on new question if question number changed
-        if (payload.new.current_question_number !== event?.current_question_number) {
-          playBeep('start');
-        }
-      });
+    if (!selectedEventId) return;
 
-      const questionsSubscription = eventService.subscribeToEventQuestions(selectedEventId, () => {
-        loadCurrentQuestion();
-      });
+    // Initial load
+    loadEventData();
 
-      return () => {
-        subscription.unsubscribe();
-        questionsSubscription.unsubscribe();
-      };
-    }
+    // Subscribe to event changes (status, current_question_number, winner, etc.)
+    const eventSubscription = eventService.subscribeToEvent(selectedEventId, (payload) => {
+      console.log("TV: Event updated:", payload.new);
+      const updatedEvent = payload.new;
+      
+      // Play sound on new question if question number changed
+      if (updatedEvent.current_question_number !== event?.current_question_number && updatedEvent.current_question_number) {
+        playBeep('start');
+      }
+      
+      setEvent(updatedEvent);
+      
+      // Load new question if question number changed
+      if (updatedEvent.current_question_number !== event?.current_question_number) {
+        loadCurrentQuestion(updatedEvent);
+      }
+    });
+
+    // Subscribe to event_questions changes
+    const questionsSubscription = eventService.subscribeToEventQuestions(selectedEventId, () => {
+      console.log("TV: Event questions updated");
+      if (event) {
+        loadCurrentQuestion(event);
+      }
+    });
+
+    return () => {
+      eventSubscription.unsubscribe();
+      questionsSubscription.unsubscribe();
+    };
   }, [selectedEventId]);
 
-  // Effect to handle question loading when event updates
+  // Timer countdown with sound effects
   useEffect(() => {
-    if (event?.current_question_number) {
-      loadCurrentQuestion();
+    if (!event?.question_open_until) {
+      setTimeRemaining(0);
+      return;
     }
-  }, [event?.current_question_number]);
 
-  useEffect(() => {
-    if (event?.question_open_until) {
-      const interval = setInterval(() => {
-        const now = new Date().getTime();
-        const deadline = new Date(event.question_open_until!).getTime();
-        const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
-        
-        // Play tick sound for last 3 seconds
-        if (remaining <= 3 && remaining > 0 && remaining !== timeRemaining) {
-          playBeep('tick');
-        }
-        
-        if (remaining === 0 && timeRemaining > 0) {
-           playBeep('end');
-        }
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const deadline = new Date(event.question_open_until).getTime();
+      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+      
+      // Play tick sound for last 3 seconds
+      if (remaining <= 3 && remaining > 0 && remaining !== timeRemaining) {
+        playBeep('tick');
+      }
+      
+      if (remaining === 0 && timeRemaining > 0) {
+        playBeep('end');
+      }
 
-        setTimeRemaining(remaining);
-      }, 100);
+      setTimeRemaining(remaining);
+    }, 100);
 
-      return () => clearInterval(interval);
-    }
+    return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
   const loadEvents = async () => {
@@ -84,18 +98,28 @@ export default function TVScreen() {
     try {
       const data = await eventService.getEvent(selectedEventId);
       setEvent(data);
+      
+      // Load current question if one exists
+      if (data.current_question_number) {
+        loadCurrentQuestion(data);
+      }
     } catch (error) {
       console.error("Failed to load event");
     }
   };
 
-  const loadCurrentQuestion = async () => {
-    if (!selectedEventId || !event?.current_question_number) return;
+  const loadCurrentQuestion = async (eventData: Event) => {
+    if (!eventData?.current_question_number) {
+      setCurrentQuestion(null);
+      return;
+    }
+    
     try {
-      const data = await eventService.getEventQuestion(selectedEventId, event.current_question_number);
+      const data = await eventService.getEventQuestion(eventData.id, eventData.current_question_number);
+      console.log("TV: Loaded current question:", data);
       setCurrentQuestion(data);
     } catch (error) {
-      console.error("Failed to load question");
+      console.error("TV: Failed to load question:", error);
     }
   };
 
