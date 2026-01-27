@@ -114,9 +114,16 @@ export const eventService = {
       throw new Error("No questions available in the pool. Please create some questions first.");
     }
 
-    const shuffled = [...allQuestions].sort(() => Math.random() - 0.5);
+    // Shuffle questions randomly using Fisher-Yates algorithm
+    const shuffled = [...allQuestions];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    
     const selected = shuffled.slice(0, questionCount);
 
+    // Create event_questions with shuffled order (1..N)
     const eventQuestions = selected.map((q, index) => ({
       event_id: eventId,
       question_number: index + 1,
@@ -356,6 +363,22 @@ export const eventService = {
           event: "*",
           schema: "public",
           table: "event_questions",
+          filter: `event_id=eq.${eventId}`
+        },
+        callback
+      )
+      .subscribe();
+  },
+
+  subscribeToTickets(eventId: string, callback: (payload: any) => void) {
+    return supabase
+      .channel(`tickets:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "tickets",
           filter: `event_id=eq.${eventId}`
         },
         callback

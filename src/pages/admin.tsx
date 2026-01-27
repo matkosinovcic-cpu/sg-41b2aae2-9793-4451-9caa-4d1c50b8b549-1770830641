@@ -18,6 +18,7 @@ export default function AdminPanel() {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [ticketCount, setTicketCount] = useState("100");
   const [eventTickets, setEventTickets] = useState<any[]>([]);
+  const [currentDrawnQuestion, setCurrentDrawnQuestion] = useState<any>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -56,7 +57,12 @@ export default function AdminPanel() {
       setEvents(data);
       if (selectedEvent) {
         const updated = data.find(e => e.id === selectedEvent.id);
-        if (updated) setSelectedEvent(updated);
+        if (updated) {
+          setSelectedEvent(updated);
+          if (updated.current_question_number) {
+            loadCurrentQuestion(updated.id, updated.current_question_number);
+          }
+        }
       }
     } catch (error) {
       toast({
@@ -73,6 +79,16 @@ export default function AdminPanel() {
       setEventTickets(data);
     } catch (error) {
       console.error("Failed to load tickets:", error);
+    }
+  };
+
+  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
+    try {
+      const data = await eventService.getEventQuestion(eventId, questionNumber);
+      setCurrentDrawnQuestion(data);
+    } catch (error) {
+      console.error("Failed to load current question:", error);
+      setCurrentDrawnQuestion(null);
     }
   };
 
@@ -396,6 +412,28 @@ export default function AdminPanel() {
                       )}
                     </CardContent>
                   </Card>
+
+                  {currentDrawnQuestion && selectedEvent.status === "active" && (
+                    <Card className="bg-gradient-to-r from-blue-500 to-purple-600 text-white">
+                      <CardHeader>
+                        <CardTitle className="text-white text-center">
+                          Current Question #{currentDrawnQuestion.question_number}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="p-6 bg-white/20 backdrop-blur-sm rounded-lg text-center">
+                          <p className="text-2xl font-bold text-white">
+                            {currentDrawnQuestion.questions?.text}
+                          </p>
+                          <div className="mt-4">
+                            <Badge className={currentDrawnQuestion.questions?.correct_answer ? "bg-green-500" : "bg-red-500"}>
+                              Correct Answer: {currentDrawnQuestion.questions?.correct_answer ? "YES" : "NO"}
+                            </Badge>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
                   <Card className="bg-white/95 backdrop-blur-sm">
                     <CardHeader>

@@ -16,6 +16,35 @@ export default function PlayerScreen() {
   const [answered, setAnswered] = useState(false);
   const { toast } = useToast();
 
+  // Load from localStorage on mount
+  useEffect(() => {
+    const storedSerial = localStorage.getItem("ticket_serial");
+    const storedEventId = localStorage.getItem("event_id");
+
+    if (storedSerial && storedEventId) {
+      autoRejoin(storedSerial, storedEventId);
+    }
+  }, []);
+
+  const autoRejoin = async (serial: string, eventId: string) => {
+    try {
+      const ticketData = await eventService.getTicketBySerial(serial);
+      if (ticketData.event_id === eventId) {
+        setTicket(ticketData);
+        const eventData = await eventService.getEvent(eventId);
+        setEvent(eventData);
+      } else {
+        // Invalid data, clear storage
+        localStorage.removeItem("ticket_serial");
+        localStorage.removeItem("event_id");
+      }
+    } catch (error) {
+      // Invalid ticket, clear storage
+      localStorage.removeItem("ticket_serial");
+      localStorage.removeItem("event_id");
+    }
+  };
+
   useEffect(() => {
     if (event) {
       const subscription = eventService.subscribeToEvent(event.id, () => {
@@ -26,9 +55,14 @@ export default function PlayerScreen() {
         loadCurrentQuestion();
       });
 
+      const ticketsSubscription = eventService.subscribeToTickets(event.id, () => {
+        loadTicketData();
+      });
+
       return () => {
         subscription.unsubscribe();
         questionsSubscription.unsubscribe();
+        ticketsSubscription.unsubscribe();
       };
     }
   }, [event]);
@@ -49,6 +83,16 @@ export default function PlayerScreen() {
       return () => clearInterval(interval);
     }
   }, [event?.question_open_until]);
+
+  const loadTicketData = async () => {
+    if (!ticket) return;
+    try {
+      const ticketData = await eventService.getTicket(ticket.id);
+      setTicket(ticketData);
+    } catch (error) {
+      console.error("Failed to load ticket data");
+    }
+  };
 
   const loadEventData = async () => {
     if (!ticket) return;
@@ -93,6 +137,11 @@ export default function PlayerScreen() {
       setTicket(ticketData);
       const eventData = await eventService.getEvent(ticketData.event_id);
       setEvent(eventData);
+      
+      // Persist to localStorage
+      localStorage.setItem("ticket_serial", serialNumber);
+      localStorage.setItem("event_id", ticketData.event_id);
+      
       toast({
         title: "Success",
         description: "Joined successfully!"
