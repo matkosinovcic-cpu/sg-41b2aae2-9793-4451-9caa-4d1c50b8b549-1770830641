@@ -157,6 +157,64 @@ export default function PlayerScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
+  // Safari-safe fallback polling (1.5s interval)
+  useEffect(() => {
+    if (!event?.id) {
+      console.log("[PLAYER-POLL] No event, skipping polling");
+      setPollingActive(false);
+      return;
+    }
+
+    // Only poll for active events
+    if (event.status !== "active") {
+      console.log("[PLAYER-POLL] Event not active, stopping polling");
+      setPollingActive(false);
+      return;
+    }
+
+    console.log("[PLAYER-POLL] Starting polling for event:", event.id);
+    setPollingActive(true);
+
+    const pollInterval = setInterval(async () => {
+      try {
+        console.log("[PLAYER-POLL] Fetching event state...");
+        const updatedEvent = await eventService.getEvent(event.id);
+        
+        // Check if question number changed
+        if (updatedEvent.current_question_number !== currentQuestionNumber) {
+          console.log(`[PLAYER-POLL] ✅ Question changed: ${currentQuestionNumber} → ${updatedEvent.current_question_number}`);
+          
+          // Update state (triggers UI re-render)
+          setCurrentQuestionNumber(updatedEvent.current_question_number || 0);
+          lastQuestionNumberRef.current = updatedEvent.current_question_number;
+          setEvent(updatedEvent);
+          setAnswered(false);
+          
+          // Load new question
+          if (updatedEvent.current_question_number) {
+            await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+          }
+        } else {
+          console.log("[PLAYER-POLL] No change detected");
+        }
+
+        // Stop polling if event ended
+        if (updatedEvent.status !== "active") {
+          console.log("[PLAYER-POLL] Event ended, stopping polling");
+          setPollingActive(false);
+        }
+      } catch (error) {
+        console.error("[PLAYER-POLL] Polling error:", error);
+      }
+    }, 1500); // Poll every 1.5 seconds
+
+    return () => {
+      console.log("[PLAYER-POLL] Cleaning up polling");
+      clearInterval(pollInterval);
+      setPollingActive(false);
+    };
+  }, [event?.id, event?.status, currentQuestionNumber]);
+
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
       console.log(`[PLAYER] Loading question #${questionNumber} for event ${eventId}`);
@@ -266,6 +324,9 @@ export default function PlayerScreen() {
           <div>status: {event?.status || "unknown"}</div>
           <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
             sub: {subscriptionStatus}
+          </div>
+          <div className={`font-bold ${pollingActive ? "text-green-400" : "text-gray-400"}`}>
+            poll: {pollingActive ? "active" : "inactive"}
           </div>
           <div className="border-t border-white/30 pt-1 mt-1">
             <div className="text-cyan-300">listening_to:</div>
