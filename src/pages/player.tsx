@@ -15,6 +15,7 @@ export default function PlayerScreen() {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [answered, setAnswered] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
+  const [lastReceivedQuestionNumber, setLastReceivedQuestionNumber] = useState<number | null>(null);
   const lastQuestionNumberRef = useRef<number | null>(null);
   const { toast } = useToast();
 
@@ -58,28 +59,52 @@ export default function PlayerScreen() {
   // Real-time subscriptions
   useEffect(() => {
     if (!event?.id) {
+      console.log("[PLAYER] No event ID, skipping subscription");
       setSubscriptionStatus("disconnected");
       return;
     }
 
     console.log("[PLAYER] Setting up subscription for event:", event.id);
+    console.log("[PLAYER] Current question number:", event.current_question_number);
+    console.log("[PLAYER] Listening to: events.current_question_number");
 
     // Subscribe to event changes
     const eventSubscription = eventService.subscribeToEvent(event.id, async (payload) => {
-      console.log("[PLAYER] Real-time event update received:", payload);
+      console.log("═══════════════════════════════════════════");
+      console.log("[PLAYER] Real-time UPDATE received!");
+      console.log("[PLAYER] Payload type:", payload.eventType);
+      console.log("[PLAYER] Full payload:", JSON.stringify(payload, null, 2));
+      
+      if (!payload.new) {
+        console.log("[PLAYER] ⚠️ WARNING: payload.new is missing!");
+        return;
+      }
+
       const updatedEvent = payload.new;
+      console.log("[PLAYER] Updated event data:", updatedEvent);
+      console.log("[PLAYER] New current_question_number:", updatedEvent.current_question_number);
+      console.log("[PLAYER] Previous question number (ref):", lastQuestionNumberRef.current);
+      
+      // Update last received value for debug display
+      setLastReceivedQuestionNumber(updatedEvent.current_question_number);
       
       // Check if question number changed
       const questionChanged = updatedEvent.current_question_number !== lastQuestionNumberRef.current;
+      console.log("[PLAYER] Question changed?", questionChanged);
       
       if (questionChanged && updatedEvent.current_question_number) {
-        console.log(`[PLAYER] Question changed from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
+        console.log(`[PLAYER] ✅ Question CHANGED from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
         lastQuestionNumberRef.current = updatedEvent.current_question_number;
         setAnswered(false); // Reset answered state for new question
+        console.log("[PLAYER] Loading new question...");
         await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+        console.log("[PLAYER] Question loaded successfully");
+      } else {
+        console.log("[PLAYER] No question change detected, updating event state only");
       }
       
       setEvent(updatedEvent);
+      console.log("═══════════════════════════════════════════");
     });
 
     // Subscribe to ticket changes (for winner status)
@@ -91,10 +116,12 @@ export default function PlayerScreen() {
     });
 
     setSubscriptionStatus("connected");
-    console.log("[PLAYER] Subscriptions active");
+    console.log("[PLAYER] ✅ Subscriptions active and ready");
+    console.log("[PLAYER] Waiting for events.current_question_number changes...");
 
     // Load current question on mount if one exists
     if (event.current_question_number) {
+      console.log("[PLAYER] Loading initial question on mount:", event.current_question_number);
       loadCurrentQuestion(event.id, event.current_question_number);
     }
 
@@ -129,7 +156,7 @@ export default function PlayerScreen() {
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log(`[PLAYER] Loading question #${questionNumber}`);
+      console.log(`[PLAYER] Loading question #${questionNumber} for event ${eventId}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[PLAYER] Question loaded:", data);
       setCurrentQuestion(data);
@@ -227,13 +254,27 @@ export default function PlayerScreen() {
     <>
       <SEO title="Player - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-500 to-indigo-600 p-4">
-        {/* Debug Info */}
-        <div className="fixed top-2 right-2 text-xs text-white bg-black/50 px-3 py-2 rounded font-mono z-50 space-y-1">
+        {/* Enhanced Debug Info */}
+        <div className="fixed top-2 right-2 text-xs text-white bg-black/70 px-3 py-2 rounded font-mono z-50 space-y-1 max-w-xs">
+          <div className="font-bold text-yellow-300">🔍 REALTIME DEBUG</div>
           <div>event: {event?.id?.slice(0, 8) || "none"}</div>
           <div>q: {event?.current_question_number || 0}</div>
           <div>status: {event?.status || "unknown"}</div>
           <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
             sub: {subscriptionStatus}
+          </div>
+          <div className="border-t border-white/30 pt-1 mt-1">
+            <div className="text-cyan-300">listening_to:</div>
+            <div className="text-xs">events.current_question_number</div>
+          </div>
+          <div className="border-t border-white/30 pt-1 mt-1">
+            <div className="text-cyan-300">last_received:</div>
+            <div className="text-lg font-bold text-yellow-300">
+              {lastReceivedQuestionNumber ?? "none"}
+            </div>
+          </div>
+          <div className="border-t border-white/30 pt-1 mt-1 text-xs text-gray-300">
+            Open browser console (F12) for detailed logs
           </div>
         </div>
 
