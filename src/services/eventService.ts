@@ -114,19 +114,27 @@ export const eventService = {
       throw new Error("No questions available in the pool. Please create some questions first.");
     }
 
-    // Shuffle questions randomly using Fisher-Yates algorithm
+    // Shuffle ALL questions randomly using Fisher-Yates algorithm
     const shuffled = [...allQuestions];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     
+    // Take first N questions from the shuffled array
     const selected = shuffled.slice(0, questionCount);
 
-    // Create event_questions with shuffled order (1..N)
+    // Create shuffled sequence of question numbers (1..90 in random order)
+    const questionNumbers = Array.from({ length: questionCount }, (_, i) => i + 1);
+    for (let i = questionNumbers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [questionNumbers[i], questionNumbers[j]] = [questionNumbers[j], questionNumbers[i]];
+    }
+
+    // Map shuffled question IDs to shuffled question numbers
     const eventQuestions = selected.map((q, index) => ({
       event_id: eventId,
-      question_number: index + 1,
+      question_number: questionNumbers[index], // Random number from 1..90
       question_id: q.id,
       drawn: false
     }));
