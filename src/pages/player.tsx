@@ -12,6 +12,7 @@ export default function PlayerScreen() {
   const [ticket, setTicket] = useState<any>(null);
   const [event, setEvent] = useState<any>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [currentQuestionNumber, setCurrentQuestionNumber] = useState<number>(0);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [answered, setAnswered] = useState(false);
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
@@ -37,6 +38,7 @@ export default function PlayerScreen() {
         setTicket(ticketData);
         const eventData = await eventService.getEvent(eventId);
         setEvent(eventData);
+        setCurrentQuestionNumber(eventData.current_question_number || 0);
         lastQuestionNumberRef.current = eventData.current_question_number;
         
         // Load current question if one exists
@@ -95,6 +97,7 @@ export default function PlayerScreen() {
       if (questionChanged && updatedEvent.current_question_number) {
         console.log(`[PLAYER] ✅ Question CHANGED from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
         lastQuestionNumberRef.current = updatedEvent.current_question_number;
+        setCurrentQuestionNumber(updatedEvent.current_question_number); // ← TRIGGER RE-RENDER
         setAnswered(false); // Reset answered state for new question
         console.log("[PLAYER] Loading new question...");
         await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
@@ -181,6 +184,7 @@ export default function PlayerScreen() {
       setTicket(ticketData);
       const eventData = await eventService.getEvent(ticketData.event_id);
       setEvent(eventData);
+      setCurrentQuestionNumber(eventData.current_question_number || 0);
       lastQuestionNumberRef.current = eventData.current_question_number;
       
       // Persist to localStorage
@@ -258,7 +262,7 @@ export default function PlayerScreen() {
         <div className="fixed top-2 right-2 text-xs text-white bg-black/70 px-3 py-2 rounded font-mono z-50 space-y-1 max-w-xs">
           <div className="font-bold text-yellow-300">🔍 REALTIME DEBUG</div>
           <div>event: {event?.id?.slice(0, 8) || "none"}</div>
-          <div>q: {event?.current_question_number || 0}</div>
+          <div>q: {currentQuestionNumber || 0}</div>
           <div>status: {event?.status || "unknown"}</div>
           <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
             sub: {subscriptionStatus}
@@ -293,7 +297,7 @@ export default function PlayerScreen() {
                   ?.map((tq: any) => tq.question_number)
                   .sort((a: number, b: number) => a - b)
                   .map((num: number) => {
-                    const isDrawn = event?.current_question_number && num <= event.current_question_number;
+                    const isDrawn = currentQuestionNumber && num <= currentQuestionNumber;
                     return (
                       <div
                         key={num}
