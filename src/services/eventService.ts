@@ -347,5 +347,17 @@ export const eventService = {
         callback
       )
       .subscribe();
+  },
+
+  async getEventQuestion(eventId: string, questionNumber: number) {
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("*, questions(*)")
+      .eq("event_id", eventId)
+      .eq("question_number", questionNumber)
+      .single();
+    
+    if (error) throw error;
+    return data as EventQuestion;
   }
 };

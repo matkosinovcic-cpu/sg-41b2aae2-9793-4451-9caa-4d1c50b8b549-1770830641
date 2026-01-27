@@ -67,12 +67,7 @@ export default function PlayerScreen() {
     if (!ticket || !event?.current_question_number) return;
 
     try {
-      const { data } = await eventService.supabase
-        .from("event_questions")
-        .select("*, questions(*)")
-        .eq("event_id", ticket.event_id)
-        .eq("question_number", event.current_question_number)
-        .single();
+      const data = await eventService.getEventQuestion(ticket.event_id, event.current_question_number);
 
       if (data) {
         setCurrentQuestion(data);
