@@ -190,6 +190,17 @@ export const eventService = {
     return data;
   },
 
+  async getEventTickets(eventId: string) {
+    const { data, error } = await supabase
+      .from("tickets")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: true });
+    
+    if (error) throw error;
+    return data as Ticket[];
+  },
+
   async startEvent(eventId: string) {
     const { error } = await supabase
       .from("events")

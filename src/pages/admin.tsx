@@ -17,6 +17,7 @@ export default function AdminPanel() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [ticketCount, setTicketCount] = useState("100");
+  const [eventTickets, setEventTickets] = useState<any[]>([]);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function AdminPanel() {
 
   useEffect(() => {
     if (selectedEvent) {
+      loadEventTickets(selectedEvent.id);
       const subscription = eventService.subscribeToEvent(selectedEvent.id, () => {
         loadEvents();
       });
@@ -62,6 +64,15 @@ export default function AdminPanel() {
         description: "Failed to load events",
         variant: "destructive"
       });
+    }
+  };
+
+  const loadEventTickets = async (eventId: string) => {
+    try {
+      const data = await eventService.getEventTickets(eventId);
+      setEventTickets(data);
+    } catch (error) {
+      console.error("Failed to load tickets:", error);
     }
   };
 
@@ -162,6 +173,7 @@ export default function AdminPanel() {
 
     try {
       await eventService.generateTickets(selectedEvent.id, count);
+      loadEventTickets(selectedEvent.id);
       toast({
         title: "Success",
         description: `${count} tickets generated successfully`
@@ -414,6 +426,35 @@ export default function AdminPanel() {
                           <Ticket className="mr-2" /> Generate
                         </Button>
                       </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-white/95 backdrop-blur-sm">
+                    <CardHeader>
+                      <CardTitle>Generated Tickets ({eventTickets.length})</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {eventTickets.length === 0 ? (
+                        <p className="text-gray-500 text-center py-4">No tickets generated yet</p>
+                      ) : (
+                        <div className="max-h-64 overflow-y-auto space-y-2">
+                          {eventTickets.map((ticket) => (
+                            <div
+                              key={ticket.id}
+                              className={`p-3 rounded-lg flex justify-between items-center ${
+                                ticket.is_winner
+                                  ? "bg-gradient-to-r from-yellow-100 to-orange-100 border-2 border-yellow-500"
+                                  : "bg-gray-50"
+                              }`}
+                            >
+                              <span className="font-mono font-semibold">{ticket.serial_number}</span>
+                              {ticket.is_winner && (
+                                <Badge className="bg-yellow-500">WINNER 🎉</Badge>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 
