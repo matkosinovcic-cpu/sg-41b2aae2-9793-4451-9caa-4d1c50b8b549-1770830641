@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { PlayCircle, PauseCircle, SkipForward, Plus, Ticket, AlertCircle } from "lucide-react";
+import { PlayCircle, SkipForward, Plus, Ticket, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export default function AdminPanel() {
@@ -104,7 +104,7 @@ export default function AdminPanel() {
     }
 
     try {
-      const event = await eventService.createEvent(eventName);
+      await eventService.createEvent(eventName);
       setEventName("");
       loadEvents();
       toast({
@@ -237,10 +237,9 @@ export default function AdminPanel() {
           </div>
 
           <Tabs defaultValue="questions" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-3 bg-white/20 backdrop-blur-sm">
+            <TabsList className="grid w-full grid-cols-2 bg-white/20 backdrop-blur-sm">
               <TabsTrigger value="questions">Questions</TabsTrigger>
               <TabsTrigger value="events">Events</TabsTrigger>
-              <TabsTrigger value="control">Live Control</TabsTrigger>
             </TabsList>
 
             <TabsContent value="questions" className="space-y-4">
@@ -342,22 +341,13 @@ export default function AdminPanel() {
                   </div>
                 </CardContent>
               </Card>
-            </TabsContent>
 
-            <TabsContent value="control" className="space-y-4">
-              {!selectedEvent ? (
-                <Card className="bg-white/95 backdrop-blur-sm">
-                  <CardContent className="py-12 text-center">
-                    <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600 text-lg">Select an event from the Events tab</p>
-                  </CardContent>
-                </Card>
-              ) : (
+              {selectedEvent && (
                 <>
-                  <Card className="bg-white/95 backdrop-blur-sm">
+                  <Card className="bg-white/95 backdrop-blur-sm border-2 border-purple-500">
                     <CardHeader>
                       <CardTitle className="flex justify-between items-center">
-                        <span>{selectedEvent.name}</span>
+                        <span>Event Details: {selectedEvent.name}</span>
                         {getStatusBadge(selectedEvent.status)}
                       </CardTitle>
                     </CardHeader>
@@ -388,7 +378,7 @@ export default function AdminPanel() {
 
                   <Card className="bg-white/95 backdrop-blur-sm">
                     <CardHeader>
-                      <CardTitle>Setup</CardTitle>
+                      <CardTitle>Event Setup</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <Button
