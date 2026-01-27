@@ -12,6 +12,7 @@ export default function TVScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const lastQuestionNumberRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadEvents();
@@ -23,38 +24,32 @@ export default function TVScreen() {
   useEffect(() => {
     if (!selectedEventId) return;
 
+    console.log(`[TV] Subscribing to event ${selectedEventId}`);
+
     // Initial load
     loadEventData();
 
-    // Subscribe to event changes (status, current_question_number, winner, etc.)
+    // Subscribe to event changes
     const eventSubscription = eventService.subscribeToEvent(selectedEventId, (payload) => {
-      console.log("TV: Event updated:", payload.new);
+      console.log("[TV] Event updated:", payload.new);
       const updatedEvent = payload.new;
       
-      // Play sound on new question if question number changed
-      if (updatedEvent.current_question_number !== event?.current_question_number && updatedEvent.current_question_number) {
+      // Check if question number changed
+      const questionChanged = updatedEvent.current_question_number !== lastQuestionNumberRef.current;
+      
+      if (questionChanged && updatedEvent.current_question_number) {
+        console.log(`[TV] New question detected: #${updatedEvent.current_question_number}`);
         playBeep('start');
+        lastQuestionNumberRef.current = updatedEvent.current_question_number;
+        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
       }
       
       setEvent(updatedEvent);
-      
-      // Load new question if question number changed
-      if (updatedEvent.current_question_number !== event?.current_question_number) {
-        loadCurrentQuestion(updatedEvent);
-      }
-    });
-
-    // Subscribe to event_questions changes
-    const questionsSubscription = eventService.subscribeToEventQuestions(selectedEventId, () => {
-      console.log("TV: Event questions updated");
-      if (event) {
-        loadCurrentQuestion(event);
-      }
     });
 
     return () => {
+      console.log("[TV] Unsubscribing from event");
       eventSubscription.unsubscribe();
-      questionsSubscription.unsubscribe();
     };
   }, [selectedEventId]);
 
@@ -98,28 +93,26 @@ export default function TVScreen() {
     try {
       const data = await eventService.getEvent(selectedEventId);
       setEvent(data);
+      lastQuestionNumberRef.current = data.current_question_number;
       
       // Load current question if one exists
       if (data.current_question_number) {
-        loadCurrentQuestion(data);
+        loadCurrentQuestion(data.id, data.current_question_number);
       }
     } catch (error) {
       console.error("Failed to load event");
     }
   };
 
-  const loadCurrentQuestion = async (eventData: Event) => {
-    if (!eventData?.current_question_number) {
-      setCurrentQuestion(null);
-      return;
-    }
-    
+  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      const data = await eventService.getEventQuestion(eventData.id, eventData.current_question_number);
-      console.log("TV: Loaded current question:", data);
+      console.log(`[TV] Fetching question #${questionNumber}`);
+      const data = await eventService.getEventQuestion(eventId, questionNumber);
+      console.log("[TV] Question loaded:", data);
       setCurrentQuestion(data);
     } catch (error) {
-      console.error("TV: Failed to load question:", error);
+      console.error("[TV] Failed to load question:", error);
+      setCurrentQuestion(null);
     }
   };
 
@@ -189,6 +182,11 @@ export default function TVScreen() {
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
       <div className="min-h-screen bg-black text-white overflow-hidden relative">
+        {/* Debug Info */}
+        <div className="fixed top-2 right-2 text-xs text-white/60 bg-black/50 px-2 py-1 rounded font-mono z-50">
+          event={event.id.slice(0, 8)} | status={event.status} | q={event.current_question_number || 0}
+        </div>
+
         {/* Background Elements */}
         <div className="absolute inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-black opacity-50" />
         

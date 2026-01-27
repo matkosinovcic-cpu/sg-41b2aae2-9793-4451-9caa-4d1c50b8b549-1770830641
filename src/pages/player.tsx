@@ -49,38 +49,38 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (!event?.id) return;
 
+    console.log(`[PLAYER] Subscribing to event ${event.id}`);
+
     // Subscribe to event changes (status, current_question_number, winner, etc.)
     const eventSubscription = eventService.subscribeToEvent(event.id, (payload) => {
-      console.log("Event updated:", payload.new);
+      console.log("[PLAYER] Event updated:", payload.new);
       const updatedEvent = payload.new;
       setEvent(updatedEvent);
       
       // Load new question if question number changed
-      if (updatedEvent.current_question_number !== event.current_question_number) {
-        loadCurrentQuestion(updatedEvent);
+      if (updatedEvent.current_question_number) {
+        console.log(`[PLAYER] Loading question #${updatedEvent.current_question_number}`);
+        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+        setAnswered(false); // Reset answered state for new question
       }
     });
 
-    // Subscribe to event_questions changes
-    const questionsSubscription = eventService.subscribeToEventQuestions(event.id, () => {
-      console.log("Event questions updated");
-      loadCurrentQuestion(event);
-    });
-
-    // Subscribe to ticket changes (for winner status)
-    const ticketsSubscription = eventService.subscribeToTickets(event.id, () => {
-      console.log("Tickets updated");
-      loadTicketData();
+    // Subscribe to tickets changes (for winner status)
+    const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
+      console.log("[PLAYER] Ticket updated:", payload.new);
+      if (payload.new && payload.new.id === ticket?.id) {
+        setTicket(payload.new);
+      }
     });
 
     // Load current question on mount if one exists
     if (event.current_question_number) {
-      loadCurrentQuestion(event);
+      loadCurrentQuestion(event.id, event.current_question_number);
     }
 
     return () => {
+      console.log("[PLAYER] Unsubscribing from event");
       eventSubscription.unsubscribe();
-      questionsSubscription.unsubscribe();
       ticketsSubscription.unsubscribe();
     };
   }, [event?.id]);
@@ -106,30 +106,15 @@ export default function PlayerScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until]);
 
-  const loadTicketData = async () => {
-    if (!ticket?.id) return;
+  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      const ticketData = await eventService.getTicket(ticket.id);
-      setTicket(ticketData);
-    } catch (error) {
-      console.error("Failed to load ticket data");
-    }
-  };
-
-  const loadCurrentQuestion = async (eventData: any) => {
-    if (!eventData?.current_question_number) {
-      setCurrentQuestion(null);
-      setAnswered(false);
-      return;
-    }
-
-    try {
-      const data = await eventService.getEventQuestion(eventData.id, eventData.current_question_number);
-      console.log("Loaded current question:", data);
+      console.log(`[PLAYER] Fetching question #${questionNumber}`);
+      const data = await eventService.getEventQuestion(eventId, questionNumber);
+      console.log("[PLAYER] Question loaded:", data);
       setCurrentQuestion(data);
-      setAnswered(false);
     } catch (error) {
-      console.error("Failed to load current question:", error);
+      console.error("[PLAYER] Failed to load question:", error);
+      setCurrentQuestion(null);
     }
   };
 
@@ -220,6 +205,11 @@ export default function PlayerScreen() {
     <>
       <SEO title="Player - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-pink-500 via-purple-500 to-indigo-600 p-4">
+        {/* Debug Info */}
+        <div className="fixed top-2 right-2 text-xs text-white/60 bg-black/30 px-2 py-1 rounded font-mono">
+          event={event?.id.slice(0, 8)} | status={event?.status} | q={event?.current_question_number || 0}
+        </div>
+
         <div className="container mx-auto max-w-2xl space-y-4">
           <Card className="bg-white/95 backdrop-blur-sm">
             <CardHeader>
@@ -266,7 +256,7 @@ export default function PlayerScreen() {
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardHeader>
                 <CardTitle className="text-center">
-                  <div className="text-sm text-gray-600">Question {event.current_question_number}</div>
+                  <div className="text-sm text-gray-600">Question {currentQuestion.question_number}</div>
                   <div className="text-4xl font-black text-purple-600 my-4">
                     <Clock className="inline mr-2" />
                     {timeRemaining}s
