@@ -101,6 +101,7 @@ export const eventService = {
   },
 
   async generateEventQuestions(eventId: string) {
+    // Get all questions from the pool
     const { data: allQuestions, error: questionsError } = await supabase
       .from("questions")
       .select("id");
@@ -114,28 +115,22 @@ export const eventService = {
       throw new Error("No questions available in the pool. Please create some questions first.");
     }
 
-    // Shuffle ALL questions randomly using Fisher-Yates algorithm
+    // Shuffle ALL questions using Fisher-Yates algorithm
     const shuffled = [...allQuestions];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     
-    // Take first N questions from the shuffled array
-    const selected = shuffled.slice(0, questionCount);
+    // Take first N questions from shuffled array
+    const selectedQuestions = shuffled.slice(0, questionCount);
 
-    // Create shuffled sequence of question numbers (1..90 in random order)
-    const questionNumbers = Array.from({ length: questionCount }, (_, i) => i + 1);
-    for (let i = questionNumbers.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [questionNumbers[i], questionNumbers[j]] = [questionNumbers[j], questionNumbers[i]];
-    }
-
-    // Map shuffled question IDs to shuffled question numbers
-    const eventQuestions = selected.map((q, index) => ({
+    // Assign sequential question_numbers (1, 2, 3...) to the shuffled questions
+    // This creates the pre-randomized draw order
+    const eventQuestions = selectedQuestions.map((q, index) => ({
       event_id: eventId,
-      question_number: questionNumbers[index], // Random number from 1..90
-      question_id: q.id,
+      question_number: index + 1, // Sequential numbers 1..N
+      question_id: q.id,           // But random question IDs
       drawn: false
     }));
 
@@ -234,6 +229,7 @@ export const eventService = {
 
     if (!event) throw new Error("Event not found");
 
+    // Get next undrawn question by question_number order (which is pre-randomized)
     const { data: undrawnQuestions } = await supabase
       .from("event_questions")
       .select("*, questions(*)")
@@ -249,11 +245,13 @@ export const eventService = {
     const nextQuestion = undrawnQuestions[0];
     const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
 
+    // Mark question as drawn
     await supabase
       .from("event_questions")
       .update({ drawn: true, drawn_at: new Date().toISOString() })
       .eq("id", nextQuestion.id);
 
+    // Update event with current question
     await supabase
       .from("events")
       .update({
