@@ -163,11 +163,17 @@ export default function TVScreen() {
 
   const loadEvents = async () => {
     try {
+      console.log("[TV] 🔍 loadEvents: Fetching all events...");
       setLoadingError(null);
       const data = await eventService.getEvents();
+      console.log("[TV] ✅ loadEvents: Found", data.length, "events");
       setEvents(data);
     } catch (error) {
-      console.error("[TV] Failed to load events:", error);
+      console.error("[TV] ❌ loadEvents: Failed to load events:", error);
+      console.error("[TV] ❌ loadEvents: Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       setLoadingError("Failed to load events. Please refresh the page.");
     }
   };
@@ -180,26 +186,43 @@ export default function TVScreen() {
 
     try {
       setLoadingError(null);
-      console.log("[TV] Loading event data for:", selectedEventId);
+      console.log("[TV] 🔍 Step 1: Starting loadEventData for:", selectedEventId);
+      
       const data = await eventService.getEvent(selectedEventId);
+      console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
       
       if (!data) {
         throw new Error("Event not found");
       }
 
-      console.log("[TV] Event loaded successfully:", data.name);
+      console.log("[TV] ✅ Step 3: Event name:", data.name);
+      console.log("[TV] ✅ Step 4: Event status:", data.status);
+      console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
+      
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
       
       // Load drawn numbers from event
       setDrawnNumbers(new Set(data.drawn_numbers || []));
+      console.log("[TV] ✅ Step 6: Drawn numbers set loaded");
       
       // Load current question if one exists
       if (data.current_drawn_number) {
+        console.log("[TV] ✅ Step 7: Loading current question #", data.current_drawn_number);
         await loadCurrentQuestion(data.id, data.current_drawn_number);
+        console.log("[TV] ✅ Step 8: Current question loaded");
+      } else {
+        console.log("[TV] ℹ️ Step 7: No current question (waiting for first draw)");
       }
+      
+      console.log("[TV] 🎉 Event data loaded successfully!");
     } catch (error) {
-      console.error("[TV] Failed to load event:", error);
+      console.error("[TV] ❌ FAILED at some step:", error);
+      console.error("[TV] ❌ Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        selectedEventId,
+      });
       setLoadingError("Failed to load event data. Please try selecting another event.");
       setEvent(null);
     }
@@ -207,12 +230,17 @@ export default function TVScreen() {
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log(`[TV] Loading question #${questionNumber}`);
+      console.log(`[TV] 🔍 loadCurrentQuestion: Loading question #${questionNumber} for event ${eventId}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
-      console.log("[TV] Question loaded:", data);
+      console.log("[TV] ✅ loadCurrentQuestion: Question loaded:", data);
       setCurrentQuestion(data);
     } catch (error) {
-      console.error("[TV] Failed to load question:", error);
+      console.error("[TV] ❌ loadCurrentQuestion: Failed to load question:", error);
+      console.error("[TV] ❌ loadCurrentQuestion: Details:", {
+        message: error instanceof Error ? error.message : String(error),
+        eventId,
+        questionNumber,
+      });
       setCurrentQuestion(null);
     }
   };
