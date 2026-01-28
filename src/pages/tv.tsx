@@ -13,13 +13,19 @@ export default function TVScreen() {
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
+  const [loadingError, setLoadingError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadEvents();
-    // Initialize AudioContext
-    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Initialize AudioContext with error handling
+    try {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    } catch (error) {
+      console.warn("[TV] AudioContext initialization failed:", error);
+    }
     
     // Load from localStorage
     const storedEventId = localStorage.getItem("tv_event_id");
@@ -157,15 +163,18 @@ export default function TVScreen() {
 
   const loadEvents = async () => {
     try {
+      setLoadingError(null);
       const data = await eventService.getEvents();
       setEvents(data);
     } catch (error) {
       console.error("[TV] Failed to load events:", error);
+      setLoadingError("Failed to load events. Please refresh the page.");
     }
   };
 
   const loadEventData = async () => {
     try {
+      setLoadingError(null);
       const data = await eventService.getEvent(selectedEventId);
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
@@ -179,6 +188,7 @@ export default function TVScreen() {
       }
     } catch (error) {
       console.error("[TV] Failed to load event:", error);
+      setLoadingError("Failed to load event data. Please try selecting another event.");
     }
   };
 
@@ -197,35 +207,60 @@ export default function TVScreen() {
   const playBeep = (type: 'start' | 'tick' | 'end') => {
     if (!audioContextRef.current) return;
     
-    const ctx = audioContextRef.current;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    
-    if (type === 'start') {
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.setValueAtTime(1760, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.5);
-    } else if (type === 'tick') {
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.1);
-    } else if (type === 'end') {
-      osc.frequency.setValueAtTime(220, ctx.currentTime);
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 1);
-      osc.start();
-      osc.stop(ctx.currentTime + 1);
+    try {
+      const ctx = audioContextRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      if (type === 'start') {
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.setValueAtTime(1760, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } else if (type === 'tick') {
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+      } else if (type === 'end') {
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 1);
+        osc.start();
+        osc.stop(ctx.currentTime + 1);
+      }
+    } catch (error) {
+      console.warn("[TV] Audio playback failed:", error);
     }
   };
 
+  // Error state
+  if (loadingError) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-4">
+        <Card className="w-full max-w-md border-red-500">
+          <CardContent className="pt-6">
+            <h1 className="text-2xl font-bold mb-4 text-center text-red-500">Error</h1>
+            <p className="text-center mb-4">{loadingError}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+            >
+              Reload Page
+            </button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Event selection screen
   if (!selectedEventId) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center p-4">
@@ -251,7 +286,13 @@ export default function TVScreen() {
   }
 
   // Loading state
-  if (!event) return null;
+  if (!event) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-white text-2xl">Loading event...</div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -260,7 +301,7 @@ export default function TVScreen() {
         <div className="container mx-auto max-w-7xl">
           
           {/* WINNER SCREEN - Show when winner exists AND game is finished */}
-          {event?.winner_ticket_id && event.status === "finished" && (
+          {event.winner_ticket_id && event.status === "finished" && (
             <div className="fixed inset-0 bg-gradient-to-br from-yellow-400 via-orange-500 to-red-500 flex items-center justify-center z-50 animate-pulse">
               <div className="text-center">
                 <Trophy className="w-48 h-48 text-white mx-auto mb-8 animate-bounce" />
@@ -281,7 +322,7 @@ export default function TVScreen() {
           )}
 
           {/* WINNER BANNER - Show during continue mode (Active + Winner exists) */}
-          {event?.winner_ticket_id && event.status === "active" && (
+          {event.winner_ticket_id && event.status === "active" && (
             <Card className="mb-6 border-4 border-yellow-500 bg-yellow-50">
               <CardContent className="pt-6">
                 <div className="flex items-center justify-center gap-4">
@@ -381,11 +422,11 @@ export default function TVScreen() {
                                 : 'bg-white/10 text-white/60 hover:bg-white/20'
                           }
                         `}
-                      >
-                        {num}
-                      </div>
-                    );
-                  })}
+                        >
+                          {num}
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="mt-4 text-center text-sm text-white/40">
                     {drawnNumbers.size} / 90 drawn
