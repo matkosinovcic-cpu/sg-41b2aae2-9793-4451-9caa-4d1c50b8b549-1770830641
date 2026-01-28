@@ -292,11 +292,11 @@ export default function AdminPanel() {
                             <div className="flex items-center gap-3">
                               <h3 className="text-xl font-bold">{event.name}</h3>
                               {getStatusBadge(event.status)}
-                              {event.winner_ticket_serial && (
+                              {event.winner_ticket_id && (
                                 <div className="flex items-center gap-2 bg-yellow-100 px-3 py-1 rounded">
                                   <Trophy className="w-5 h-5 text-yellow-600" />
                                   <span className="font-bold text-yellow-600">
-                                    Winner: {event.winner_ticket_serial}
+                                    Winner Found!
                                   </span>
                                 </div>
                               )}
@@ -385,7 +385,7 @@ export default function AdminPanel() {
                                   disabled={
                                     loading ||
                                     (event.drawn_numbers?.length || 0) >= 90 ||
-                                    !!event.winner_ticket_serial
+                                    !!event.winner_ticket_id
                                   }
                                   variant="default"
                                   size="sm"

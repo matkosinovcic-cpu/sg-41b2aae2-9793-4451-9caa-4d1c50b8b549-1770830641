@@ -12,7 +12,7 @@ export interface PlayerAnswer {
   session_id: string;
   event_id: string;
   question_number: number;
-  answer: string;
+  answer_yesno: string;
   is_correct: boolean;
   created_at: string;
 }
@@ -94,7 +94,7 @@ export const answerService = {
         session_id: sessionId,
         event_id: eventId,
         question_number: questionNumber,
-        answer: answerYesNo,
+        answer_yesno: answerYesNo,
         is_correct: isCorrect,
       })
       .select()

@@ -86,7 +86,7 @@ export const eventService = {
     return data as Event;
   },
 
-  async getAllEvents() {
+  async getEvents() {
     const { data, error } = await supabase
       .from("events")
       .select("*")
@@ -207,7 +207,7 @@ export const eventService = {
     return data;
   },
 
-  async getEventTickets(eventId: string) {
+  async getTickets(eventId: string) {
     const { data, error } = await supabase
       .from("tickets")
       .select("*")
@@ -307,6 +307,15 @@ export const eventService = {
       .eq("id", eventId);
 
     return { question: questionData, questionOpenUntil, drawnNumber };
+  },
+
+  async pauseEvent(eventId: string) {
+    const { error } = await supabase
+      .from("events")
+      .update({ status: "paused" })
+      .eq("id", eventId);
+    
+    if (error) throw error;
   },
 
   async submitAnswer(ticketId: string, questionNumber: number, answer: boolean) {
