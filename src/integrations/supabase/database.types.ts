@@ -135,6 +135,7 @@ export type Database = {
           event_id: string
           id: string
           is_correct: boolean
+          question_id: string
           question_number: number
           session_id: string
           ticket_id: string | null
@@ -145,6 +146,7 @@ export type Database = {
           event_id: string
           id?: string
           is_correct: boolean
+          question_id: string
           question_number: number
           session_id: string
           ticket_id?: string | null
@@ -155,6 +157,7 @@ export type Database = {
           event_id?: string
           id?: string
           is_correct?: boolean
+          question_id?: string
           question_number?: number
           session_id?: string
           ticket_id?: string | null
@@ -165,6 +168,13 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "player_answers_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: false
+            referencedRelation: "questions"
             referencedColumns: ["id"]
           },
           {

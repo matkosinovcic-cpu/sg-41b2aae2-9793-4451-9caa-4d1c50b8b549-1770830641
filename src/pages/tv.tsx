@@ -1,9 +1,18 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
+import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
+
+interface TicketData {
+  id: string;
+  serial_number: string;
+  event_id: string;
+  is_winner: boolean;
+  ticket_questions: Array<{ question_number: number }>;
+}
 
 export default function TVScreen() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -16,6 +25,9 @@ export default function TVScreen() {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
+  const [tickets, setTickets] = useState<TicketData[]>([]);
+  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
+  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -188,6 +200,13 @@ export default function TVScreen() {
     };
   }, [selectedEventId, event?.id, event?.status, event?.current_drawn_number]);
 
+  // Load statistics when event finishes
+  useEffect(() => {
+    if (event?.status === "finished") {
+      loadStats();
+    }
+  }, [event?.status]);
+
   const loadEvents = async () => {
     try {
       console.log("[TV] 🔍 loadEvents: Fetching all events...");
@@ -313,6 +332,41 @@ export default function TVScreen() {
       }
     } catch (error) {
       console.warn("[TV] Audio playback failed:", error);
+    }
+  };
+
+  const loadDetailedResults = async () => {
+    if (!event || tickets.length === 0) return;
+    
+    try {
+      const resultsMap = new Map<string, TicketDetailedResults>();
+      
+      for (const ticket of tickets) {
+        const details = await answerService.getTicketDetailedResults(
+          ticket.id,
+          ticket,
+          event.id,
+          event.drawn_numbers || []
+        );
+        resultsMap.set(ticket.serial_number, details);
+      }
+      
+      setDetailedResults(resultsMap);
+    } catch (error) {
+      console.error("[TV] Failed to load detailed results:", error);
+    }
+  };
+
+  const loadStats = async () => {
+    if (!event || tickets.length === 0) return;
+    
+    try {
+      const statsData = await answerService.getEventTicketStats(event.id);
+      setTicketStats(statsData);
+      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
+    } catch (error) {
+      console.error("[TV] Failed to load stats:", error);
+      setTicketStats([]);
     }
   };
 

@@ -17,12 +17,6 @@ export default function AdminPanel() {
   const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
-  const [statsDebug, setStatsDebug] = useState<{
-    eventId: string;
-    totalAnswers: number;
-    totalTickets: number;
-    drawnNumbers: number[];
-  } | null>(null);
 
   const [legacyAnswersCount, setLegacyAnswersCount] = useState<number>(0);
   const [isDeletingLegacy, setIsDeletingLegacy] = useState(false);
@@ -102,11 +96,10 @@ export default function AdminPanel() {
 
   const loadTicketStats = async (eventId: string) => {
     try {
-      const result = await answerService.getEventTicketStatsV2(eventId);
-      console.log("[Admin] ✅ Loaded ticket stats:", result.stats.length, "active tickets");
-      setTicketStats(result.stats);
-      setStatsDebug(result.debug);
-
+      const result = await answerService.getEventTicketStats(eventId);
+      console.log("[Admin] ✅ Loaded ticket stats:", result.length, "active tickets");
+      setTicketStats(result);
+      
       // Count legacy answers (ticket_id IS NULL)
       const { count: legacyCount, error: legacyError } = await supabase
         .from("player_answers")
@@ -310,27 +303,11 @@ export default function AdminPanel() {
   };
 
   const handleClearLegacyAnswers = async () => {
-    if (!selectedEvent) return;
-    
-    if (!confirm(`Obrisat ću ${legacyAnswersCount} zastarjelih odgovora za ovaj event. Ova radnja se ne može poništiti. Nastavi?`)) {
-      return;
-    }
-
-    setIsDeletingLegacy(true);
-    try {
-      const result = await answerService.deleteLegacyAnswers(selectedEvent.id);
-      console.log("[Admin] ✅ Deleted legacy answers:", result.count);
-      
-      // Reload stats
-      await loadTicketStats(selectedEvent.id);
-      
-      alert(`✅ Obrisano ${result.count} zastarjelih odgovora.`);
-    } catch (error) {
-      console.error("[Admin] Failed to delete legacy answers:", error);
-      alert("❌ Greška pri brisanju zastarjelih odgovora.");
-    } finally {
-      setIsDeletingLegacy(false);
-    }
+    // Legacy cleanup removed as service method is deprecated
+    toast({
+      title: "Info",
+      description: "Legacy cleanup is no longer needed with the new architecture.",
+    });
   };
 
   return (
@@ -654,7 +631,7 @@ export default function AdminPanel() {
                                 </div>
 
                                 <div className="text-xs text-gray-500 mt-2 pt-2 border-t">
-                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket} / {stat.total}
+                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket} / {stat.drawn_on_ticket}
                                 </div>
                               </div>
                             </CardContent>
