@@ -323,7 +323,7 @@ export default function PlayerScreen() {
         
         if (alreadyAnswered) {
           const existingAnswer = answers.find(a => a.question_number === questionNumber);
-          setAnswer(existingAnswer?.answer === "YES");
+          setAnswer(existingAnswer?.answer_yesno === "YES");
         } else {
           setAnswer(null);
         }

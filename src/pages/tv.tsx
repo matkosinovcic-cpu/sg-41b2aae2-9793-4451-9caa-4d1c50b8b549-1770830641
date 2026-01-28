@@ -163,7 +163,7 @@ export default function TVScreen() {
 
   const loadEvents = async () => {
     try {
-      const data = await eventService.getAllEvents();
+      const data = await eventService.getEvents();
       setEvents(data);
     } catch (error) {
       console.error("[TV] Failed to load events:", error);
