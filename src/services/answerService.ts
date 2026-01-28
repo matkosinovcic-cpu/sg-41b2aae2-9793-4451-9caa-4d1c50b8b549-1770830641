@@ -464,9 +464,15 @@ export const answerService = {
 
   /**
    * Get statistics for all tickets in an event (for admin view)
-   * CRITICAL: Infer ticket ownership by matching answer patterns to ticket question numbers
-   * CRITICAL: Only show tickets that have been actively played (answers exist)
+   * CRITICAL: Infer ticket ownership from answer patterns - match session answers to ticket question numbers
+   * CRITICAL: Only show tickets that have been actively played (significant answer overlap)
    * CRITICAL: Use actual drawn_numbers array from event
+   * 
+   * PATTERN MATCHING RULES:
+   * - A ticket is considered "active" for a session if:
+   *   1. At least 3 answered questions are on that ticket, OR
+   *   2. At least 50% of the session's answered questions are on that ticket
+   * - This reduces false positives from random question number overlaps
    */
   async getEventTicketStats(eventId: string, drawnNumbers: number[]): Promise<TicketStats[]> {
     console.log(`[getEventTicketStats] Loading stats for event ${eventId}`);
@@ -519,7 +525,7 @@ export const answerService = {
 
     console.log(`[getEventTicketStats] Found ${allAnswers.length} total answers across ${sessionIds.length} sessions`);
 
-    // CRITICAL: Infer ticket ownership by matching answer patterns
+    // CRITICAL: Infer ticket ownership with STRICT pattern matching to reduce false positives
     // For each session, find which ticket(s) they're playing based on answered question numbers
     const sessionTicketMap: Map<string, string[]> = new Map(); // session_id -> ticket_id[]
 
@@ -529,17 +535,30 @@ export const answerService = {
 
       if (answeredQuestionNumbers.length === 0) continue;
 
-      // Find tickets where answered questions match ticket's question numbers
+      console.log(`[getEventTicketStats] Session ${session.id}: ${answeredQuestionNumbers.length} answers`);
+
+      // CRITICAL: Find tickets with SIGNIFICANT overlap (not just 1 question match)
       const matchedTickets = tickets.filter((ticket: any) => {
         const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
         
-        // A ticket matches this session if at least 1 answered question is on the ticket
-        // (Player could have multiple tickets, so we match all that have overlap)
-        const hasMatch = answeredQuestionNumbers.some(qNum => 
+        // Count how many answered questions are on this ticket
+        const matchCount = answeredQuestionNumbers.filter(qNum => 
           ticketQuestionNumbers.includes(qNum)
-        );
+        ).length;
         
-        return hasMatch;
+        // Calculate match percentage
+        const matchPercentage = (matchCount / answeredQuestionNumbers.length) * 100;
+        
+        // CRITICAL: Only consider this ticket "active" if:
+        // 1. At least 3 questions match (prevents single-question false positives), OR
+        // 2. At least 50% of answered questions are on this ticket
+        const isSignificantMatch = matchCount >= 3 || matchPercentage >= 50;
+        
+        if (isSignificantMatch) {
+          console.log(`[getEventTicketStats] ✓ Ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%)`);
+        }
+        
+        return isSignificantMatch;
       });
 
       if (matchedTickets.length > 0) {
@@ -547,6 +566,9 @@ export const answerService = {
           session.id,
           matchedTickets.map((t: any) => t.id)
         );
+        console.log(`[getEventTicketStats] Session ${session.id} matched to ${matchedTickets.length} tickets`);
+      } else {
+        console.log(`[getEventTicketStats] Session ${session.id} has no significant ticket matches (possible test/incomplete session)`);
       }
     }
 
@@ -617,10 +639,13 @@ export const answerService = {
 
     const activeTicketStats = Array.from(ticketStatsMap.values());
     
-    console.log(`[getEventTicketStats] Returning stats for ${activeTicketStats.length} active tickets`);
-    console.log(`[getEventTicketStats] Sample:`, activeTicketStats.slice(0, 2));
+    // CRITICAL: Final filter - only return tickets with answered > 0
+    const trulyActiveTickets = activeTicketStats.filter(stat => stat.answered > 0);
+    
+    console.log(`[getEventTicketStats] Returning stats for ${trulyActiveTickets.length} truly active tickets (with answers > 0)`);
+    console.log(`[getEventTicketStats] Sample:`, trulyActiveTickets.slice(0, 2));
 
-    return activeTicketStats;
+    return trulyActiveTickets;
   },
 
   /**
