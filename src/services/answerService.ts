@@ -33,6 +33,22 @@ export interface SessionStats {
   ticket_stats: TicketStats[];
 }
 
+export interface QuestionResult {
+  question_number: number;
+  question_text: string;
+  correct_answer: string; // "DA" or "NE"
+  player_answer: string; // "DA" or "NE" or "MISSED"
+  is_correct: boolean;
+}
+
+export interface TicketDetailedResults {
+  ticket_serial: string;
+  correct: number;
+  total: number;
+  percentage: number;
+  questions: QuestionResult[];
+}
+
 /**
  * Normalize any value to standard YES/NO format
  * Handles: strings (DA/NE/YES/NO), booleans, numbers, etc.
@@ -48,7 +64,20 @@ function normalizeYesNo(value: any): string | null {
   // NO variations
   if (["NE", "NO", "N", "FALSE", "0"].includes(str)) return "NO";
   
+  // MISSED variations
+  if (["MISSED", "TIMEOUT", "UNANSWERED"].includes(str)) return "MISSED";
+  
   return null;
+}
+
+/**
+ * Normalize for display (DA/NE instead of YES/NO)
+ */
+function normalizeForDisplay(value: string | null): string {
+  if (value === "YES") return "DA";
+  if (value === "NO") return "NE";
+  if (value === "MISSED") return "MISSED";
+  return "MISSED";
 }
 
 export const answerService = {
@@ -89,6 +118,7 @@ export const answerService = {
 
   /**
    * Submit an answer for a question
+   * CRITICAL: Only explicit DA/NE answers can be correct
    * CRITICAL: Triggers winner check after successful submission
    */
   async submitAnswer(
@@ -115,16 +145,27 @@ export const answerService = {
 
     // Validate correct answer exists
     if (!normalizedCorrectAnswer) {
+      console.error("[submitAnswer] Invalid correct answer:", correctAnswer);
       throw new Error("Pitanje nema ispravan odgovor u bazi");
     }
 
-    // Validate user answer
-    if (!normalizedUserAnswer) {
+    // Validate user answer (must be explicit YES or NO, never MISSED)
+    if (!normalizedUserAnswer || normalizedUserAnswer === "MISSED") {
+      console.error("[submitAnswer] Invalid user answer:", answerYesNo);
       throw new Error("Neispravan odgovor");
     }
 
-    // Compare normalized answers
+    // CRITICAL: Compare normalized answers
+    // Only explicit DA/NE answers can be correct
     const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
+
+    console.log("[submitAnswer] Recording answer:", {
+      sessionId,
+      questionNumber,
+      userAnswer: normalizedUserAnswer,
+      correctAnswer: normalizedCorrectAnswer,
+      isCorrect
+    });
 
     const { data, error } = await supabase
       .from("player_answers")
@@ -153,6 +194,7 @@ export const answerService = {
 
   /**
    * Mark unanswered question as wrong (for timeout handling)
+   * CRITICAL: MISSED answers are ALWAYS wrong
    */
   async markUnansweredAsWrong(
     sessionId: string,
@@ -168,26 +210,33 @@ export const answerService = {
       .single();
 
     if (existingAnswer) {
+      console.log(`[markUnansweredAsWrong] Question ${questionNumber} already answered, skipping`);
       return null; // Already answered, skip
     }
 
-    // Insert as wrong answer with null answer
+    // CRITICAL: Insert as MISSED with is_correct=false
+    // MISSED answers can NEVER be correct
+    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for session ${sessionId}`);
+
     const { data, error } = await supabase
       .from("player_answers")
       .insert({
         session_id: sessionId,
         event_id: eventId,
         question_number: questionNumber,
-        answer_yesno: "NO", // Default value for unanswered
+        answer_yesno: "MISSED",
         is_correct: false,
       })
       .select()
       .single();
 
     if (error) {
-      console.error("Failed to mark unanswered question:", error);
+      console.error("[markUnansweredAsWrong] Failed to mark unanswered question:", error);
       return null;
     }
+
+    console.log(`[markUnansweredAsWrong] ✅ MISSED saved for question ${questionNumber}`);
+    
     return data as PlayerAnswer;
   },
 
@@ -208,6 +257,7 @@ export const answerService = {
   /**
    * Calculate statistics for a player session
    * CRITICAL: Always calculate out of 15 questions per ticket
+   * CRITICAL: MISSED answers are ALWAYS wrong
    */
   async getSessionStats(
     sessionId: string,
@@ -215,7 +265,10 @@ export const answerService = {
   ): Promise<SessionStats> {
     const answers = await this.getSessionAnswers(sessionId);
 
-    const totalCorrect = answers.filter((a) => a.is_correct).length;
+    // CRITICAL: Only count explicit correct answers (never MISSED)
+    const totalCorrect = answers.filter((a) => 
+      a.is_correct === true && a.answer_yesno !== "MISSED"
+    ).length;
     const totalAnswered = answers.length;
     
     // Total questions = sum of all ticket questions (each ticket has exactly 15)
@@ -228,7 +281,10 @@ export const answerService = {
         ticketQuestionNumbers.includes(answer.question_number)
       );
 
-      const correct = ticketAnswers.filter((a) => a.is_correct).length;
+      // CRITICAL: Only count explicit correct answers (never MISSED)
+      const correct = ticketAnswers.filter((a) => 
+        a.is_correct === true && a.answer_yesno !== "MISSED"
+      ).length;
       const answered = ticketAnswers.length;
       
       // CRITICAL: Each ticket ALWAYS has exactly 15 questions
@@ -253,6 +309,73 @@ export const answerService = {
   },
 
   /**
+   * Get detailed results for a specific ticket
+   * Shows all 15 questions with answers and correctness
+   */
+  async getTicketDetailedResults(
+    sessionId: string,
+    ticket: { id: string; serial_number: string; ticket_questions: Array<{ question_number: number }> },
+    eventId: string
+  ): Promise<TicketDetailedResults> {
+    const ticketQuestionNumbers = ticket.ticket_questions
+      .map((tq) => tq.question_number)
+      .sort((a, b) => a - b);
+
+    // Get event questions for this ticket
+    const { data: eventQuestions, error: eqError } = await supabase
+      .from("event_questions")
+      .select(`
+        question_number,
+        questions (
+          text,
+          correct_answer
+        )
+      `)
+      .eq("event_id", eventId)
+      .in("question_number", ticketQuestionNumbers);
+
+    if (eqError) throw eqError;
+
+    // Get player answers
+    const answers = await this.getSessionAnswers(sessionId);
+
+    // Build detailed results
+    const questions: QuestionResult[] = ticketQuestionNumbers.map((qNum) => {
+      const eventQuestion = eventQuestions?.find((eq) => eq.question_number === qNum);
+      const playerAnswer = answers.find((a) => a.question_number === qNum);
+
+      const correctAnswerRaw = (eventQuestion as any)?.questions?.correct_answer;
+      const correctAnswer = normalizeForDisplay(normalizeYesNo(correctAnswerRaw));
+
+      const playerAnswerRaw = playerAnswer?.answer_yesno || "MISSED";
+      const playerAnswerDisplay = normalizeForDisplay(normalizeYesNo(playerAnswerRaw));
+
+      // CRITICAL: MISSED answers are ALWAYS wrong
+      const isCorrect = playerAnswer?.is_correct === true && playerAnswerRaw !== "MISSED";
+
+      return {
+        question_number: qNum,
+        question_text: (eventQuestion as any)?.questions?.text || "Pitanje nije dostupno",
+        correct_answer: correctAnswer,
+        player_answer: playerAnswerDisplay,
+        is_correct: isCorrect,
+      };
+    });
+
+    const correct = questions.filter((q) => q.is_correct).length;
+    const total = 15;
+    const percentage = Math.round((correct / total) * 100);
+
+    return {
+      ticket_serial: ticket.serial_number,
+      correct,
+      total,
+      percentage,
+      questions,
+    };
+  },
+
+  /**
    * Get all answers for an event (for admin view)
    */
   async getEventAnswers(eventId: string): Promise<PlayerAnswer[]> {
@@ -269,6 +392,7 @@ export const answerService = {
   /**
    * Get statistics for all tickets in an event (for admin view)
    * CRITICAL: Always calculate out of 15 questions per ticket
+   * CRITICAL: MISSED answers are ALWAYS wrong
    */
   async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
     const { data: tickets, error: ticketsError } = await supabase
@@ -318,7 +442,10 @@ export const answerService = {
         ticketQuestionNumbers.includes(answer.question_number)
       );
 
-      const correct = ticketAnswers.filter((a: any) => a.is_correct).length;
+      // CRITICAL: Only count explicit correct answers (never MISSED)
+      const correct = ticketAnswers.filter((a: any) => 
+        a.is_correct === true && a.answer_yesno !== "MISSED"
+      ).length;
       const answered = ticketAnswers.length;
       
       // CRITICAL: Each ticket ALWAYS has exactly 15 questions

@@ -1,12 +1,12 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect } from "react";
 import { eventService, Event } from "@/services/eventService";
-import { answerService, PlayerSession, SessionStats } from "@/services/answerService";
+import { answerService, PlayerSession, SessionStats, TicketDetailedResults } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, X, CheckCircle } from "lucide-react";
+import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface TicketData {
@@ -29,6 +29,8 @@ export default function PlayerScreen() {
   const [hasAnswered, setHasAnswered] = useState(false);
   const [session, setSession] = useState<PlayerSession | null>(null);
   const [stats, setStats] = useState<SessionStats | null>(null);
+  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
+  const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
   // Load tickets from localStorage on mount
@@ -86,6 +88,7 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (session && tickets.length > 0 && event?.status === "finished") {
       loadStats();
+      loadDetailedResults();
     }
   }, [session?.id, tickets.length, event?.status]);
 
@@ -108,6 +111,7 @@ export default function PlayerScreen() {
       // Load stats when event finishes
       if (updatedEvent.status === "finished" && session && tickets.length > 0) {
         loadStats();
+        loadDetailedResults();
       }
     });
 
@@ -127,6 +131,7 @@ export default function PlayerScreen() {
     const answersSubscription = session && event.status === "finished"
       ? answerService.subscribeToEventAnswers(event.id, () => {
           loadStats();
+          loadDetailedResults();
         })
       : null;
 
@@ -160,6 +165,7 @@ export default function PlayerScreen() {
           setEvent(updatedEvent);
           if (session && tickets.length > 0) {
             await loadStats();
+            await loadDetailedResults();
           }
         }
       } catch (error) {
@@ -218,6 +224,39 @@ export default function PlayerScreen() {
     } catch (error) {
       console.error("[Player] Failed to load stats:", error);
     }
+  };
+
+  const loadDetailedResults = async () => {
+    if (!session || !event || tickets.length === 0) return;
+    
+    try {
+      const resultsMap = new Map<string, TicketDetailedResults>();
+      
+      for (const ticket of tickets) {
+        const details = await answerService.getTicketDetailedResults(
+          session.id,
+          ticket,
+          event.id
+        );
+        resultsMap.set(ticket.serial_number, details);
+      }
+      
+      setDetailedResults(resultsMap);
+    } catch (error) {
+      console.error("[Player] Failed to load detailed results:", error);
+    }
+  };
+
+  const toggleTicketDetails = (serial: string) => {
+    setExpandedTickets(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(serial)) {
+        newSet.delete(serial);
+      } else {
+        newSet.add(serial);
+      }
+      return newSet;
+    });
   };
 
   const handleAddTicket = async () => {
@@ -307,6 +346,7 @@ export default function PlayerScreen() {
     setEvent(null);
     setSession(null);
     setStats(null);
+    setDetailedResults(new Map());
     localStorage.removeItem("ticket_serials");
     localStorage.removeItem("ticket_serial");
     localStorage.removeItem("event_id");
@@ -407,6 +447,9 @@ export default function PlayerScreen() {
       ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
       : null;
 
+    const details = detailedResults.get(ticketData.serial_number);
+    const isExpanded = expandedTickets.has(ticketData.serial_number);
+
     return (
       <Card key={ticketData.id} className="relative bg-white/95 backdrop-blur-sm">
         <button
@@ -452,11 +495,76 @@ export default function PlayerScreen() {
               {drawnCount} / 15 izvučeno
             </div>
             {ticketStats && (
-              <div className="text-xs font-semibold text-blue-600">
-                ✓ {ticketStats.correct} / {ticketStats.total} točno ({ticketStats.percentage}%)
-              </div>
+              <>
+                <div className="text-lg font-bold text-blue-600">
+                  ✓ {ticketStats.correct} / {ticketStats.total} točno ({ticketStats.percentage}%)
+                </div>
+                {details && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => toggleTicketDetails(ticketData.serial_number)}
+                    className="w-full mt-2"
+                  >
+                    {isExpanded ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 mr-2" />
+                        Sakrij detalje
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 mr-2" />
+                        Prikaži detalje
+                      </>
+                    )}
+                  </Button>
+                )}
+              </>
             )}
           </div>
+
+          {/* Detailed Results */}
+          {isExpanded && details && (
+            <div className="mt-4 space-y-2 border-t pt-4">
+              <h4 className="font-bold text-sm text-gray-700 mb-3">Detalji po pitanjima:</h4>
+              {details.questions.map((q) => (
+                <div
+                  key={q.question_number}
+                  className={`p-3 rounded-lg border-2 ${
+                    q.is_correct
+                      ? "bg-green-50 border-green-300"
+                      : "bg-red-50 border-red-300"
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    {q.is_correct ? (
+                      <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-xs text-gray-600 mb-1">
+                        Pitanje #{q.question_number}
+                      </div>
+                      <div className="text-sm text-gray-800 mb-2 line-clamp-2">
+                        {q.question_text}
+                      </div>
+                      <div className="flex gap-3 text-xs">
+                        <span className="font-semibold">
+                          Točan odgovor: <span className="text-blue-600">{q.correct_answer}</span>
+                        </span>
+                        <span className="font-semibold">
+                          Vaš odgovor: <span className={q.player_answer === "MISSED" ? "text-gray-500" : "text-purple-600"}>
+                            {q.player_answer}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     );
