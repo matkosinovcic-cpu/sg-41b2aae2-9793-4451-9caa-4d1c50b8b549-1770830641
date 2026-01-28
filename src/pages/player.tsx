@@ -9,12 +9,32 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+// Helper to normalize answers for local comparison (matches service logic)
+function normalizeAnswer(value: any): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") {
+    const v = value.trim().toUpperCase();
+    if (["DA", "YES", "Y", "TRUE", "1"].includes(v)) return true;
+    if (["NE", "NO", "N", "FALSE", "0"].includes(v)) return false;
+  }
+  return null;
+}
+
 interface TicketData {
   id: string;
   serial_number: string;
   event_id: string;
   is_winner: boolean;
   ticket_questions: Array<{ question_number: number }>;
+}
+
+// Interface for aggregated stats used in the UI
+interface AggregatedStats {
+  ticket_stats: Array<SessionStats & { ticket_serial: string }>;
+  total_correct: number;
+  total_questions: number;
 }
 
 export default function PlayerScreen() {
@@ -28,7 +48,7 @@ export default function PlayerScreen() {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [hasAnswered, setHasAnswered] = useState(false);
   const [session, setSession] = useState<PlayerSession | null>(null);
-  const [stats, setStats] = useState<SessionStats | null>(null);
+  const [stats, setStats] = useState<AggregatedStats | null>(null);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
   const { toast } = useToast();
@@ -227,12 +247,28 @@ export default function PlayerScreen() {
     if (!session || tickets.length === 0 || !event) return;
     
     try {
-      const statsData = await answerService.getSessionStats(
-        session.id, 
-        tickets,
-        event.drawn_numbers || []
-      );
-      setStats(statsData);
+      // Fetch stats for each ticket individually
+      const promises = tickets.map(async (t) => {
+        const singleStats = await answerService.getSessionStats(
+          session.id, 
+          event.id,
+          t.serial_number
+        );
+        return { ...singleStats, ticket_serial: t.serial_number };
+      });
+
+      const results = await Promise.all(promises);
+
+      // Aggregate results
+      const totalCorrect = results.reduce((sum, r) => sum + r.correct, 0);
+      // Total drawn questions across all tickets (can overlap, but sum gives total "opportunities")
+      const totalQuestions = results.reduce((sum, r) => sum + r.drawnOnTicket, 0);
+
+      setStats({
+        ticket_stats: results,
+        total_correct: totalCorrect,
+        total_questions: totalQuestions
+      });
     } catch (error) {
       console.error("[Player] Failed to load stats:", error);
     }
@@ -427,11 +463,16 @@ export default function PlayerScreen() {
     setAnswer(answerValue);
 
     try {
-      // Calculate correctness locally
-      const dbCorrectAnswer = currentQuestion.questions?.correct_answer; // "YES" or "NO"
-      const userAnswerString = answerValue ? "YES" : "NO";
-      // Simple comparison (assuming DB always has uppercase YES/NO)
-      const isCorrect = dbCorrectAnswer === userAnswerString;
+      // Calculate correctness locally using normalization
+      const dbCorrectAnswer = currentQuestion.questions?.correct_answer;
+      
+      const normalizedCorrect = normalizeAnswer(dbCorrectAnswer);
+      const normalizedPlayer = normalizeAnswer(answerValue);
+      
+      const isCorrect = 
+        normalizedCorrect !== null && 
+        normalizedPlayer !== null && 
+        normalizedCorrect === normalizedPlayer;
       
       // CRITICAL: Submit answer for ALL tracked tickets
       for (const ticket of tickets) {
@@ -441,7 +482,7 @@ export default function PlayerScreen() {
           currentQuestion.question_number,
           answerValue, // Pass boolean directly
           isCorrect,   // Pass calculated boolean
-          ticket.serial_number // NEW: Pass exact ticket identifier
+          ticket.serial_number // Pass exact ticket identifier
         );
       }
       
