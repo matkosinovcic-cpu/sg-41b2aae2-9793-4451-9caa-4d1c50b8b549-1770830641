@@ -544,7 +544,7 @@ export const answerService = {
         ticket_serial: ticket.serial_number,
         correct,
         answered,
-        drawn: drawnCount,
+        drawn_on_ticket: drawnCount,
         missed,
         total,
         percentage,
