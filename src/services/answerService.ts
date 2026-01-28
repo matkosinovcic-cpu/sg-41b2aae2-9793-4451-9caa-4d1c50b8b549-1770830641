@@ -283,19 +283,20 @@ export const answerService = {
     }
 
     // CRITICAL: Normalize answers before comparison
-    const normalizedPlayerAnswer = normalizeAnswer(answer);
-    const normalizedCorrectAnswer = normalizeAnswer((eventQuestion.questions as any).correct_answer);
-
-    // Calculate correctness using normalized values
+    const dbCorrectAnswer = (eventQuestion.questions as any).correct_answer;
+    
+    const normalizedCorrect = normalizeAnswer(dbCorrectAnswer);
+    const normalizedPlayer = normalizeAnswer(answer);
+    
     const calculatedIsCorrect = 
-      normalizedPlayerAnswer !== null && 
-      normalizedCorrectAnswer !== null && 
-      normalizedPlayerAnswer === normalizedCorrectAnswer;
+      normalizedCorrect !== null && 
+      normalizedPlayer !== null && 
+      normalizedCorrect === normalizedPlayer;
 
     console.log(
       `[submitAnswer] 🔍 Correctness check: ` +
-      `player=${answer} (normalized=${normalizedPlayerAnswer}), ` +
-      `correct=${(eventQuestion.questions as any).correct_answer} (normalized=${normalizedCorrectAnswer}), ` +
+      `player=${answer} (normalized=${normalizedPlayer}), ` +
+      `correct=${dbCorrectAnswer} (normalized=${normalizedCorrect}), ` +
       `result=${calculatedIsCorrect}`
     );
 
