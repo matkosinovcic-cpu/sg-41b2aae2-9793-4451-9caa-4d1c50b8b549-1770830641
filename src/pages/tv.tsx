@@ -102,6 +102,57 @@ export default function TVScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
+  // Safari-safe fallback: Polling mechanism (every 1.5s)
+  useEffect(() => {
+    if (!selectedEventId || !event || event.status !== "active") {
+      setPollingActive(false);
+      return;
+    }
+
+    console.log("[TV-POLL] Starting polling for event:", selectedEventId);
+    setPollingActive(true);
+
+    const pollInterval = setInterval(async () => {
+      try {
+        console.log("[TV-POLL] Fetching event state...");
+        const updatedEvent = await eventService.getEvent(selectedEventId);
+        
+        // Check if question number changed
+        const questionChanged = updatedEvent.current_question_number !== event.current_question_number;
+        
+        if (questionChanged && updatedEvent.current_question_number) {
+          console.log(`[TV-POLL] ✅ Question changed: ${event.current_question_number} → ${updatedEvent.current_question_number}`);
+          
+          // Play sound for question change
+          playBeep('start');
+          
+          // Update ref and load new question
+          lastQuestionNumberRef.current = updatedEvent.current_question_number;
+          await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+        } else {
+          console.log("[TV-POLL] No change detected");
+        }
+
+        // Update event state
+        setEvent(updatedEvent);
+
+        // Stop polling if event ended
+        if (updatedEvent.status !== "active") {
+          console.log("[TV-POLL] Event ended, stopping polling");
+          setPollingActive(false);
+        }
+      } catch (error) {
+        console.error("[TV-POLL] Polling error:", error);
+      }
+    }, 1500); // Poll every 1.5 seconds
+
+    return () => {
+      console.log("[TV-POLL] Cleaning up polling");
+      clearInterval(pollInterval);
+      setPollingActive(false);
+    };
+  }, [selectedEventId, event?.id, event?.status, event?.current_question_number]);
+
   const loadEvents = async () => {
     try {
       const data = await eventService.getAllEvents();
@@ -211,6 +262,9 @@ export default function TVScreen() {
           <div>status: {event.status}</div>
           <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
             sub: {subscriptionStatus}
+          </div>
+          <div className={`font-bold ${pollingActive ? "text-green-400" : "text-gray-400"}`}>
+            poll: {pollingActive ? "active" : "inactive"}
           </div>
         </div>
 
