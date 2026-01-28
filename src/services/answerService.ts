@@ -45,7 +45,7 @@ function normalizeAnswerValue(value: string | boolean | null): string {
   return String(value).trim().toUpperCase();
 }
 
-function checkCorrectness(playerAnswer: string | boolean, correctAnswer: string): boolean {
+function checkCorrectness(playerAnswer: string | boolean, correctAnswer: string | boolean): boolean {
   const normPlayer = normalizeAnswerValue(playerAnswer);
   const normCorrect = normalizeAnswerValue(correctAnswer);
   
@@ -84,7 +84,10 @@ export const answerService = {
 
     const { data: newSession, error } = await supabase
       .from("player_sessions")
-      .insert({ event_id: eventId })
+      .insert({ 
+        event_id: eventId,
+        session_token: crypto.randomUUID()
+      })
       .select()
       .single();
 
