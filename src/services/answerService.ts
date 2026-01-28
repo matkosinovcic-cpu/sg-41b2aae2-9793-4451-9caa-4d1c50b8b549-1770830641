@@ -4,7 +4,7 @@ import {
   computeTicketStats, 
   computeEventStats, 
   getTicketDetailedResults as getDetailedResultsHelper,
-  type TicketStats
+  type TicketStats as HelperTicketStats
 } from "@/lib/statsHelper";
 
 export type PlayerAnswer = Database["public"]["Tables"]["player_answers"]["Row"];
@@ -260,17 +260,19 @@ export const answerService = {
     ticket_serial: string;
     correct: number;
     answered: number;
-    drawnOnTicket: number;
-    accuracy: number;
+    missed: number;
+    drawn_on_ticket: number;
+    percentage: number;
   }>> {
     const eventStats = await computeEventStats(eventId);
     
-    return eventStats.ticketStats.map(ts => ({
+    return eventStats.ticketStats.map((ts: HelperTicketStats) => ({
       ticket_serial: ts.ticketSerial,
       correct: ts.correctCount,
       answered: ts.answeredCount,
-      drawnOnTicket: ts.drawnCount,
-      accuracy: ts.accuracyPercent,
+      missed: ts.missedCount,
+      drawn_on_ticket: ts.drawnCount,
+      percentage: ts.accuracyPercent,
     }));
   },
 
@@ -285,7 +287,10 @@ export const answerService = {
     drawnNumbers: number[]
   ): Promise<TicketDetailedResults> {
     const results = await getDetailedResultsHelper(eventId, ticket.serial_number);
-    return results;
+    return {
+      ticket_serial: ticket.serial_number,
+      questions: results.questions
+    };
   },
 
   /**
