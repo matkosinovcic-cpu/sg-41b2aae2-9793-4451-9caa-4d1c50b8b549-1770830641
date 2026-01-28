@@ -577,95 +577,14 @@ export default function AdminPanel() {
                     </CardContent>
                   </Card>
 
-                  {/* CRITICAL: Only show statistics when event is finished */}
-                  {selectedEvent.status === "finished" && (
-                    <Card className="bg-white/95 backdrop-blur-sm">
-                      <CardHeader>
-                        <CardTitle>📊 Statistika igrača</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        {ticketStats.length === 0 ? (
-                          <p className="text-gray-600 text-center py-4">
-                            Nema odgovora. Nitko nije igrao.
-                          </p>
-                        ) : (
-                          <>
-                            <p className="text-sm text-gray-600 mb-4">
-                              Prikazano: {ticketStats.length} aktivnih ulaznica (ulaznice koje su odgovorile barem na 1 pitanje)
-                            </p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                              {ticketStats.map((stat) => (
-                                <Card key={stat.ticket_serial} className="border-2">
-                                  <CardContent className="pt-4">
-                                    <div className="text-center mb-3">
-                                      <Badge className="bg-purple-600 text-white">
-                                        {stat.ticket_serial}
-                                      </Badge>
-                                    </div>
-                                    <div className="flex items-center justify-center gap-4">
-                                      <div className="flex items-center gap-2">
-                                        <CheckCircle className="w-5 h-5 text-green-600" />
-                                        <span className="text-2xl font-black text-green-600">
-                                          {stat.correct}
-                                        </span>
-                                      </div>
-                                      <span className="text-2xl font-bold text-gray-400">
-                                        /
-                                      </span>
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-2xl font-black text-gray-600">
-                                          {stat.drawn_on_ticket}
-                                        </span>
-                                      </div>
-                                    </div>
-                                    <div className="text-center mt-2 space-y-1">
-                                      <div className="text-sm text-gray-600">
-                                        Izvučeno: {stat.drawn_on_ticket} / {stat.total}
-                                      </div>
-                                      <div className="text-sm text-gray-600">
-                                        Odgovoreno: {stat.answered} / {stat.drawn_on_ticket}
-                                      </div>
-                                      <div className="text-sm text-gray-600">
-                                        Propušteno: {stat.missed}
-                                      </div>
-                                      <div className="text-lg font-bold text-blue-600">
-                                        {stat.percentage}% točno
-                                      </div>
-                                    </div>
-                                  </CardContent>
-                                </Card>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  {/* Message during active game */}
-                  {selectedEvent.status === "active" && (
-                    <Card className="bg-white/95 backdrop-blur-sm">
-                      <CardHeader>
-                        <CardTitle>📊 Statistika igrača</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <p className="text-gray-600 text-center py-4">
-                          Statistika će biti dostupna nakon završetka igre.
-                        </p>
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  {/* Player Statistics */}
-                  <Card>
-                    <CardContent className="pt-6">
-                      <h3 className="text-xl font-bold mb-4">📊 Statistika igrača</h3>
-                      
-                      {/* DEBUG UI - Shows actual data being fetched */}
-                      {statsDebug && (
-                        <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded text-sm">
-                          <div className="font-semibold mb-2">🔍 DEBUG INFO:</div>
-                          <div>Event ID: <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">{statsDebug.eventId}</code></div>
+                  {/* CRITICAL: Only show stats when game is finished */}
+                  {selectedEvent.status === "finished" && ticketStats.length > 0 && (
+                    <>
+                      {/* Debug Info - skriveno po defaultu, aktiviraj samo za troubleshooting */}
+                      {false && statsDebug && (
+                        <div className="mb-4 p-3 bg-gray-100 border rounded text-xs font-mono text-gray-600">
+                          <div className="font-semibold mb-1">🔍 DEBUG INFO:</div>
+                          <div>Event ID: <strong>{statsDebug.eventId}</strong></div>
                           <div>Total Answers in DB: <strong>{statsDebug.totalAnswers}</strong></div>
                           <div>Total Tickets: <strong>{statsDebug.totalTickets}</strong></div>
                           <div>Drawn Numbers: <strong>{statsDebug.drawnNumbers.length}</strong></div>
@@ -675,156 +594,89 @@ export default function AdminPanel() {
 
                       {/* Legacy Data Warning */}
                       {legacyAnswersCount > 0 && (
-                        <div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
-                          <div className="flex items-start gap-3">
-                            <div className="flex-shrink-0 text-2xl">⚠️</div>
-                            <div className="flex-1">
-                              <div className="font-semibold text-yellow-900 dark:text-yellow-100 mb-1">
-                                Zastarjeli podaci ({legacyAnswersCount} odgovora)
-                              </div>
-                              <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-3">
-                                Ovaj event ima odgovore iz starog sustava koji ne sadrže ticket_id. 
-                                Ovi odgovori se ne prikazuju u statistici jer nije moguće pouzdano odrediti kojoj ulaznici pripadaju.
-                              </p>
-                              <button
-                                onClick={handleClearLegacyAnswers}
-                                disabled={isDeletingLegacy}
-                                className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-sm rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {isDeletingLegacy ? "Brišem..." : "Obriši zastarjele odgovore"}
-                              </button>
-                            </div>
+                        <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
+                          <div className="font-semibold text-yellow-900 mb-1">
+                            ⚠️ Zastarjeli podaci ({legacyAnswersCount} odgovora)
                           </div>
+                          <p className="text-sm text-yellow-800 mb-3">
+                            Ovaj event ima odgovore iz starog sustava koji ne sadrže ticket_id. 
+                            Ovi odgovori se ne prikazuju u statistici jer nije moguće pouzdano 
+                            odrediti kojoj ulaznici pripadaju.
+                          </p>
+                          <Button
+                            onClick={handleClearLegacyAnswers}
+                            disabled={isDeletingLegacy}
+                            variant="outline"
+                            size="sm"
+                          >
+                            {isDeletingLegacy ? "Brisanje..." : "Obriši zastarjele odgovore"}
+                          </Button>
                         </div>
                       )}
 
-                      {/* FIXED: Check totalAnswers from debug, not ticketStats.length */}
-                      {statsDebug && statsDebug.totalAnswers === 0 ? (
-                        <p className="text-gray-500">Nema odgovora. Nitko nije igrao.</p>
-                      ) : ticketStats.length === 0 ? (
-                        <p className="text-gray-500">Učitavanje statistike...</p>
-                      ) : (
-                        <>
-                          <p className="text-sm text-gray-600 mb-4">
-                            Prikazano: {ticketStats.length} aktivnih ulaznica
-                          </p>
-                          <div className="space-y-3">
-                            {ticketStats.map((stat) => (
-                              <div
-                                key={stat.ticket_serial}
-                                className="p-4 bg-gray-50 rounded-lg border"
-                              >
-                                <div className="flex items-center justify-between mb-2">
-                                  <Badge className="bg-purple-600 text-white">
-                                    {stat.ticket_serial}
-                                  </Badge>
-                                  <span className="text-lg font-bold text-blue-600">
-                                    ✓ {stat.correct} / {stat.drawn_on_ticket}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {ticketStats.map((stat) => (
+                          <Card key={stat.ticket_serial}>
+                            <CardContent className="pt-6">
+                              <div className="text-center mb-4">
+                                <Badge className="bg-purple-600 text-white">
+                                  {stat.ticket_serial}
+                                </Badge>
+                              </div>
+
+                              <div className="space-y-2">
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Točno:</span>
+                                  <span className="font-semibold text-green-600">
+                                    {stat.correct} / {stat.drawn_on_ticket}
                                   </span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 text-sm">
-                                  <div>
-                                    <span className="text-gray-600">Izvučeno na ulaznici:</span>
-                                    <span className="ml-2 font-semibold">
-                                      {stat.drawn_on_ticket} / {stat.total}
-                                    </span>
-                                  </div>
-                                  <div>
-                                    <span className="text-gray-600">Odgovoreno:</span>
-                                    <span className="ml-2 font-semibold">
-                                      {stat.answered} / {stat.drawn_on_ticket}
-                                    </span>
-                                  </div>
-                                  {stat.missed > 0 && (
-                                    <div>
-                                      <span className="text-gray-600">Propušteno:</span>
-                                      <span className="ml-2 font-semibold text-red-600">
-                                        {stat.missed}
-                                      </span>
-                                    </div>
-                                  )}
-                                  <div>
-                                    <span className="text-gray-600">Točnost:</span>
-                                    <span className="ml-2 font-semibold text-green-600">
-                                      {stat.percentage}%
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </CardContent>
-                  </Card>
 
-                  <Card className="bg-white/95 backdrop-blur-sm">
-                    <CardHeader>
-                      <CardTitle>Ulaznice ({tickets.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {tickets.map((ticket) => (
-                          <Card key={ticket.id} className="border-2">
-                            <CardContent className="pt-4">
-                              <div className="text-center mb-2">
-                                <Badge className="bg-blue-600 text-white">
-                                  {ticket.serial_number}
-                                </Badge>
-                                {ticket.is_winner && (
-                                  <div className="flex items-center justify-center gap-2 mt-2">
-                                    <Trophy className="w-6 h-6 text-yellow-500" />
-                                    <span className="text-lg font-black text-yellow-600">
-                                      POBJEDNIK!
-                                    </span>
-                                  </div>
-                                )}
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Odgovoreno:</span>
+                                  <span className="font-semibold">
+                                    {stat.answered} / {stat.drawn_on_ticket}
+                                  </span>
+                                </div>
+
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Propušteno:</span>
+                                  <span className="font-semibold text-orange-600">
+                                    {stat.missed}
+                                  </span>
+                                </div>
+
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Točnost:</span>
+                                  <span className="font-bold text-blue-600">
+                                    {stat.percentage}%
+                                  </span>
+                                </div>
+
+                                <div className="text-xs text-gray-500 mt-2 pt-2 border-t">
+                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket} / {stat.total}
+                                </div>
                               </div>
                             </CardContent>
                           </Card>
                         ))}
                       </div>
-                    </CardContent>
-                  </Card>
+                    </>
+                  )}
 
-                  <Card className="bg-white/95 backdrop-blur-sm">
-                    <CardHeader>
-                      <CardTitle>Pitanja događaja ({eventQuestions.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {eventQuestions.map((eq) => (
-                          <div
-                            key={eq.id}
-                            className={`p-3 rounded border-2 ${
-                              eq.question_number === selectedEvent.current_question_number
-                                ? "border-green-500 bg-green-50"
-                                : "border-gray-200"
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <Badge
-                                className={
-                                  eq.question_number ===
-                                  selectedEvent.current_question_number
-                                    ? "bg-green-600"
-                                    : "bg-gray-600"
-                                }
-                              >
-                                #{eq.question_number}
-                              </Badge>
-                              <span className="font-semibold">
-                                {eq.questions?.text}
-                              </span>
-                              <Badge variant="outline">
-                                {eq.questions?.correct_answer ? "DA" : "NE"}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
+                  {selectedEvent.status === "finished" && ticketStats.length === 0 && (
+                    <p className="text-center text-gray-500">
+                      {statsDebug && statsDebug.totalAnswers === 0
+                        ? "Nema odgovora. Nitko nije igrao."
+                        : "Učitavanje statistike..."}
+                    </p>
+                  )}
+
+                  {selectedEvent.status !== "finished" && (
+                    <p className="text-center text-gray-500">
+                      Statistika će biti dostupna nakon završetka eventa.
+                    </p>
+                  )}
                 </>
               )}
             </TabsContent>

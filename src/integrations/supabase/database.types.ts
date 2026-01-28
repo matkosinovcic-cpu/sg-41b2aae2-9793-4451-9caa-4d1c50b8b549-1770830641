@@ -174,6 +174,13 @@ export type Database = {
             referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "player_answers_ticket_fkey"
+            columns: ["ticket_id"]
+            isOneToOne: false
+            referencedRelation: "tickets"
+            referencedColumns: ["serial_number"]
+          },
         ]
       }
       player_sessions: {

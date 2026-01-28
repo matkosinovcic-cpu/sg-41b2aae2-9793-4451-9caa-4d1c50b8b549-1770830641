@@ -236,7 +236,7 @@ export const answerService = {
     });
 
     // CRITICAL: Use UPSERT to handle re-answers
-    // INSERT ... ON CONFLICT (event_id, ticket_id, question_number) DO UPDATE
+    // INSERT ... ON CONFLICT (session_id, ticket_id, question_number) DO UPDATE
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -249,7 +249,7 @@ export const answerService = {
           ticket_id: ticketId, // NEW: Store exact ticket identifier
         },
         {
-          onConflict: "event_id,ticket_id,question_number",
+          onConflict: "session_id,ticket_id,question_number",
           ignoreDuplicates: false, // Update if conflict
         }
       )
@@ -579,10 +579,32 @@ export const answerService = {
         };
       }
 
-      // 4. For each ticket, compute stats using ticket_id (100% reliable)
+      // 4. Group answers by ticket_id (100% reliable, no pattern matching!)
+      const answersByTicket = new Map<string, typeof allAnswers>();
+      allAnswers.forEach((answer) => {
+        const ticketId = answer.ticket_id!;
+        if (!answersByTicket.has(ticketId)) {
+          answersByTicket.set(ticketId, []);
+        }
+        answersByTicket.get(ticketId)!.push(answer);
+      });
+
+      console.log("[getEventTicketStatsV2] 📋 Grouped answers into", answersByTicket.size, "unique tickets");
+
+      // 5. For each ticket that has answers, compute stats using SAME logic as player
       const ticketStatsArray: TicketStats[] = [];
 
-      for (const ticket of tickets || []) {
+      for (const [ticketId, ticketAnswers] of answersByTicket.entries()) {
+        // Find this ticket in the tickets list
+        const ticket = tickets?.find((t) => t.serial_number === ticketId);
+
+        if (!ticket) {
+          console.warn(
+            `[getEventTicketStatsV2] ⚠️ Ticket ${ticketId} has answers but not found in tickets table, skipping`
+          );
+          continue;
+        }
+
         const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
 
         // Calculate which questions on this ticket have been drawn
@@ -590,17 +612,17 @@ export const answerService = {
           drawnNumbers.includes(num)
         );
 
-        // CRITICAL: Filter answers strictly by ticket_id (no pattern matching!)
-        const ticketAnswers = allAnswers.filter(
-          (answer) => answer.ticket_id === ticket.serial_number
+        // CRITICAL: Only count answers for questions that were drawn on this ticket
+        const validAnswers = ticketAnswers.filter((answer) =>
+          drawnOnTicket.includes(answer.question_number)
         );
 
-        // Count correct answers
-        const correct = ticketAnswers.filter((a) => a.is_correct === true).length;
-        const answered = ticketAnswers.length;
+        // Count correct answers (SAME logic as player)
+        const correct = validAnswers.filter((a) => a.is_correct === true).length;
+        const answered = validAnswers.length;
         const missed = drawnOnTicket.length - answered;
 
-        // Calculate percentage based on drawn_on_ticket (same as player)
+        // Calculate percentage based on drawn_on_ticket (SAME as player)
         const percentage =
           drawnOnTicket.length > 0 ? Math.round((correct / drawnOnTicket.length) * 100) : 0;
 
@@ -621,7 +643,7 @@ export const answerService = {
           });
         } else {
           console.log(
-            `[getEventTicketStatsV2] ⚠️ Ticket ${ticket.serial_number}: No answers found (answered=0), excluding from active list`
+            `[getEventTicketStatsV2] ⚠️ Ticket ${ticket.serial_number}: No valid answers found (answered=0), excluding from active list`
           );
         }
       }
