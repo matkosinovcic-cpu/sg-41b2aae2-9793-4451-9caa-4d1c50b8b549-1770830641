@@ -567,13 +567,19 @@ export default function AdminPanel() {
                                       </span>
                                       <div className="flex items-center gap-2">
                                         <span className="text-2xl font-black text-gray-600">
-                                          {stat.total}
+                                          {stat.drawn_on_ticket}
                                         </span>
                                       </div>
                                     </div>
                                     <div className="text-center mt-2 space-y-1">
                                       <div className="text-sm text-gray-600">
-                                        {stat.answered} / {stat.total} odgovoreno
+                                        Izvučeno: {stat.drawn_on_ticket} / {stat.total}
+                                      </div>
+                                      <div className="text-sm text-gray-600">
+                                        Odgovoreno: {stat.answered} / {stat.drawn_on_ticket}
+                                      </div>
+                                      <div className="text-sm text-gray-600">
+                                        Propušteno: {stat.missed}
                                       </div>
                                       <div className="text-lg font-bold text-blue-600">
                                         {stat.percentage}% točno
