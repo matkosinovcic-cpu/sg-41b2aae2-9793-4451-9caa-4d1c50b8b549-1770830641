@@ -412,7 +412,7 @@ export const answerService = {
   },
 
   /**
-   * Real-time subscription
+   * Real-time subscription to player answers
    */
   subscribeToEventAnswers(
     eventId: string,
