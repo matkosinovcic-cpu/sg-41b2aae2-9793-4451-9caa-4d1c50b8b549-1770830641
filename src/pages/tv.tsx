@@ -173,9 +173,21 @@ export default function TVScreen() {
   };
 
   const loadEventData = async () => {
+    if (!selectedEventId) {
+      console.warn("[TV] loadEventData called without selectedEventId");
+      return;
+    }
+
     try {
       setLoadingError(null);
+      console.log("[TV] Loading event data for:", selectedEventId);
       const data = await eventService.getEvent(selectedEventId);
+      
+      if (!data) {
+        throw new Error("Event not found");
+      }
+
+      console.log("[TV] Event loaded successfully:", data.name);
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
       
@@ -189,6 +201,7 @@ export default function TVScreen() {
     } catch (error) {
       console.error("[TV] Failed to load event:", error);
       setLoadingError("Failed to load event data. Please try selecting another event.");
+      setEvent(null);
     }
   };
 
