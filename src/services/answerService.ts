@@ -1,3 +1,11 @@
+/**
+ * Answer Service - Handles player answers and statistics
+ * 
+ * ARCHITECTURE:
+ * - Per-ticket tracking: Every answer is linked to a specific ticket via ticket_id.
+ *   - Expected: Admin shows 0/X for both (or hides them completely)
+ */
+
 import { supabase } from "@/integrations/supabase/client";
 import { eventService } from "./eventService";
 
@@ -154,89 +162,59 @@ export const answerService = {
 
   /**
    * Submit an answer for a question
-   * CRITICAL: Only explicit YES/NO answers can be submitted by players
-   * CRITICAL: Database CHECK constraint requires answer_yesno to be 'YES' or 'NO'
-   * CRITICAL: Triggers winner check after successful submission
-   * CRITICAL: Now includes ticket_id for 100% reliable stats tracking
+   * CRITICAL: Must use UPSERT with correct ON CONFLICT clause
+   * Database constraint: UNIQUE (event_id, ticket_id, question_number)
+   * 
+   * @param sessionId - Player session UUID
+   * @param eventId - Event UUID
+   * @param questionNumber - Question number (1-90)
+   * @param answer - User's YES/NO answer
+   * @param isCorrect - Whether the answer is correct
+   * @param ticketId - Ticket serial number (e.g., "T1769...-0001")
+   * @returns The saved answer record
    */
   async submitAnswer(
     sessionId: string,
     eventId: string,
     questionNumber: number,
-    answerYesNo: string,
-    correctAnswer: any,
-    ticketId: string // NEW: Required ticket identifier
+    answer: boolean,
+    isCorrect: boolean,
+    ticketId: string
   ): Promise<PlayerAnswer> {
-    console.log("[submitAnswer] Starting submission:", {
-      sessionId,
-      eventId,
-      questionNumber,
-      answerYesNo,
-      correctAnswer,
-      correctAnswerType: typeof correctAnswer,
-      ticketId // NEW: Log ticket_id
-    });
+    // Normalize answer to "YES" / "NO" string for DB
+    const answerString = answer ? "YES" : "NO";
 
-    // CRITICAL: Validate ticket_id is provided
-    if (!ticketId || ticketId.trim() === "") {
-      throw new Error("ticket_id je obavezan za slanje odgovora");
-    }
+    console.log(
+      `[submitAnswer] 🎯 Attempting: session=${sessionId.slice(0, 8)}, ` +
+        `event=${eventId.slice(0, 8)}, ticket=${ticketId}, ` +
+        `Q${questionNumber}, answer=${answerString}, correct=${isCorrect}`
+    );
 
-    // CRITICAL: Validate ticket exists in database for this event
-    const { data: ticketExists, error: ticketError } = await supabase
+    // Validate ticket exists in database
+    const { data: ticketCheck, error: ticketCheckError } = await supabase
       .from("tickets")
       .select("id")
-      .eq("serial_number", ticketId)
       .eq("event_id", eventId)
+      .eq("serial_number", ticketId)
       .single();
 
-    if (ticketError || !ticketExists) {
-      console.error("[submitAnswer] Ticket validation failed:", ticketError);
-      throw new Error(`Ulaznica ${ticketId} ne postoji za ovaj event`);
+    if (ticketCheckError || !ticketCheck) {
+      console.error(
+        `[submitAnswer] ❌ Ticket validation failed:`,
+        ticketCheckError
+      );
+      throw new Error(
+        `Ticket ${ticketId} not found for event ${eventId}. ` +
+          `Error: ${ticketCheckError?.message || "Not found"}`
+      );
     }
 
-    // ROBUST NORMALIZATION
-    const normalizedUserAnswer = normalizeYesNo(answerYesNo);
-    const normalizedCorrectAnswer = normalizeYesNo(correctAnswer);
+    console.log(
+      `[submitAnswer] ✅ Ticket validated: ${ticketId} (id=${ticketCheck.id})`
+    );
 
-    console.log("[submitAnswer] Normalized values:", {
-      userAnswer: normalizedUserAnswer,
-      correctAnswer: normalizedCorrectAnswer,
-      ticketId
-    });
-
-    // Validate correct answer exists
-    if (!normalizedCorrectAnswer || normalizedCorrectAnswer === "MISSED") {
-      console.error("[submitAnswer] Invalid correct answer:", correctAnswer);
-      throw new Error("Pitanje nema ispravan odgovor u bazi");
-    }
-
-    // CRITICAL: Validate user answer is explicit YES or NO (never MISSED for player submissions)
-    if (!normalizedUserAnswer || normalizedUserAnswer === "MISSED") {
-      console.error("[submitAnswer] Invalid user answer:", answerYesNo);
-      throw new Error("Neispravan odgovor");
-    }
-
-    // CRITICAL: Ensure answer is exactly "YES" or "NO" for database constraint
-    if (normalizedUserAnswer !== "YES" && normalizedUserAnswer !== "NO") {
-      console.error("[submitAnswer] Answer not YES or NO:", normalizedUserAnswer);
-      throw new Error("Odgovor mora biti DA ili NE");
-    }
-
-    // CRITICAL: Compare normalized answers
-    const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
-
-    console.log("[submitAnswer] Recording answer:", {
-      sessionId,
-      questionNumber,
-      userAnswer: normalizedUserAnswer,
-      correctAnswer: normalizedCorrectAnswer,
-      isCorrect,
-      ticketId // NEW: Log ticket_id
-    });
-
-    // CRITICAL: Use UPSERT to handle re-answers
-    // INSERT ... ON CONFLICT (session_id, ticket_id, question_number) DO UPDATE
+    // CRITICAL: Use UPSERT with correct ON CONFLICT clause
+    // Database constraint: UNIQUE (event_id, ticket_id, question_number)
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -244,28 +222,32 @@ export const answerService = {
           session_id: sessionId,
           event_id: eventId,
           question_number: questionNumber,
-          answer_yesno: normalizedUserAnswer, // Will be "YES" or "NO"
+          answer_yesno: answerString, // Fixed: send string "YES"/"NO"
           is_correct: isCorrect,
-          ticket_id: ticketId, // NEW: Store exact ticket identifier
+          ticket_id: ticketId,
         },
         {
-          onConflict: "session_id,ticket_id,question_number",
-          ignoreDuplicates: false, // Update if conflict
+          // MUST MATCH DATABASE CONSTRAINT EXACTLY
+          onConflict: "event_id,ticket_id,question_number",
+          ignoreDuplicates: false, // UPDATE on conflict
         }
       )
       .select()
       .single();
 
     if (error) {
-      console.error("[submitAnswer] Database error:", error);
+      console.error(`[submitAnswer] ❌ Database error:`, error);
       throw error;
     }
 
-    console.log("[submitAnswer] ✅ Answer saved successfully for question", questionNumber, "ticket", ticketId);
+    console.log(
+      `[submitAnswer] ✅ Answer saved: id=${data.id}, ` +
+        `ticket=${ticketId}, Q${questionNumber}, answer=${answerString}`
+    );
 
-    // CRITICAL: Check for winner after each answer
+    // Check if this answer completes a winning ticket
     try {
-      await eventService.checkForWinner(eventId);
+      await this.checkForWinner(eventId, ticketId);
     } catch (winnerError) {
       console.error("Winner check failed:", winnerError);
     }
@@ -970,28 +952,22 @@ export const answerService = {
 
   /**
    * Mark a question as unanswered (missed) when time expires
-   * CRITICAL: Since CHECK constraint only allows 'YES' or 'NO', we store missed as 'NO' with is_correct=false
-   * CRITICAL: Now includes ticket_id for 100% reliable stats tracking
-   * We can identify missed answers by checking if is_correct=false and the question was drawn but not answered
+   * CRITICAL: Uses ignoreDuplicates=true to not overwrite existing answers
+   * Database constraint: UNIQUE (event_id, ticket_id, question_number)
    */
   async markUnansweredAsWrong(
     sessionId: string,
     eventId: string,
     questionNumber: number,
-    ticketId: string // NEW: Required ticket identifier
-  ): Promise<PlayerAnswer | null> {
-    console.log(`[markUnansweredAsWrong] Checking question ${questionNumber} for session ${sessionId} ticket ${ticketId}`);
+    ticketId: string
+  ): Promise<PlayerAnswer> {
+    console.log(
+      `[markUnanswered] ⏱️  Marking as MISSED: session=${sessionId.slice(0, 8)}, ` +
+        `event=${eventId.slice(0, 8)}, ticket=${ticketId}, Q${questionNumber}`
+    );
 
-    // CRITICAL: Validate ticket_id is provided
-    if (!ticketId || ticketId.trim() === "") {
-      console.error("[markUnansweredAsWrong] ticket_id is required");
-      return null;
-    }
-
-    // CRITICAL: Use UPSERT - if already answered, don't overwrite; if not answered, insert as MISSED
-    // We use ON CONFLICT DO NOTHING to preserve existing answers
-    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for ticket ${ticketId}`);
-
+    // CRITICAL: Use UPSERT with ignoreDuplicates=true
+    // If user already answered, keep their answer (don't overwrite with MISSED)
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -999,11 +975,12 @@ export const answerService = {
           session_id: sessionId,
           event_id: eventId,
           question_number: questionNumber,
-          answer_yesno: "NO", // Use "NO" to satisfy CHECK constraint
-          is_correct: false,   // Always incorrect for missed answers
-          ticket_id: ticketId, // NEW: Store exact ticket identifier
+          answer_yesno: "NO", // Fixed: send string "NO"
+          is_correct: false,
+          ticket_id: ticketId,
         },
         {
+          // MUST MATCH DATABASE CONSTRAINT EXACTLY
           onConflict: "event_id,ticket_id,question_number",
           ignoreDuplicates: true, // Don't overwrite if already answered
         }
@@ -1012,12 +989,14 @@ export const answerService = {
       .single();
 
     if (error) {
-      console.error("[markUnansweredAsWrong] Failed to mark unanswered question:", error);
-      return null;
+      console.error(`[markUnanswered] ❌ Database error:`, error);
+      throw error;
     }
 
-    console.log(`[markUnansweredAsWrong] ✅ MISSED saved for question ${questionNumber} ticket ${ticketId}`);
-    
+    console.log(
+      `[markUnanswered] ✅ Marked as MISSED: ticket=${ticketId}, Q${questionNumber}`
+    );
+
     return data as PlayerAnswer;
   },
 };

@@ -427,8 +427,11 @@ export default function PlayerScreen() {
     setAnswer(answerValue);
 
     try {
-      const correctAnswer = currentQuestion.questions?.correct_answer;
-      const answerYesNo = answerValue ? "YES" : "NO";
+      // Calculate correctness locally
+      const dbCorrectAnswer = currentQuestion.questions?.correct_answer; // "YES" or "NO"
+      const userAnswerString = answerValue ? "YES" : "NO";
+      // Simple comparison (assuming DB always has uppercase YES/NO)
+      const isCorrect = dbCorrectAnswer === userAnswerString;
       
       // CRITICAL: Submit answer for ALL tracked tickets
       for (const ticket of tickets) {
@@ -436,8 +439,8 @@ export default function PlayerScreen() {
           session.id,
           event.id,
           currentQuestion.question_number,
-          answerYesNo,
-          correctAnswer,
+          answerValue, // Pass boolean directly
+          isCorrect,   // Pass calculated boolean
           ticket.serial_number // NEW: Pass exact ticket identifier
         );
       }
