@@ -77,7 +77,8 @@ export const eventService = {
         name, 
         status: "draft",
         drawn_numbers: [],
-        current_drawn_number: null
+        current_drawn_number: null,
+        continue_after_winner: false  // CRITICAL: Always OFF for new events
       })
       .select()
       .single();
@@ -251,6 +252,11 @@ export const eventService = {
 
     if (!event) throw new Error("Event not found");
 
+    // CRITICAL: Check if winner exists and continue mode is OFF
+    if (event.winner_ticket_id && !event.continue_after_winner) {
+      throw new Error("Pobjednik pronađen. Omogući 'Nastavi izvlačenje' za nastavak.");
+    }
+
     const drawnNumbers = event.drawn_numbers || [];
     
     // Check if all 90 numbers are drawn
@@ -294,7 +300,7 @@ export const eventService = {
       .update({ drawn: true, drawn_at: new Date().toISOString() })
       .eq("id", questionData.id);
 
-    // Update drawn numbers list and current drawn number
+    // CRITICAL: Update drawn numbers list and current drawn number
     const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
     await supabase
@@ -306,6 +312,11 @@ export const eventService = {
         question_open_until: questionOpenUntil
       })
       .eq("id", eventId);
+
+    console.log("[drawNextQuestion] ✅ Drew number:", drawnNumber, "Total drawn:", updatedDrawnNumbers.length);
+
+    // CRITICAL: Check for winner after drawing number
+    await this.checkForWinner(eventId);
 
     return { question: questionData, questionOpenUntil, drawnNumber };
   },
@@ -358,10 +369,13 @@ export const eventService = {
   },
 
   /**
-   * Check if any ticket has reached 15/15 correct answers and mark as winner
+   * Check if any ticket has all its 15 numbers drawn and mark as winner
+   * CRITICAL: Winner is first ticket with all 15 numbers drawn
    * CRITICAL: Only marks the FIRST winner, never changes winner once set
    */
   async checkForWinner(eventId: string): Promise<{ winnerFound: boolean; winnerSerial?: string } | null> {
+    console.log("[checkForWinner] Checking for winner in event:", eventId);
+
     const { data: event } = await supabase
       .from("events")
       .select("*")
@@ -372,8 +386,12 @@ export const eventService = {
 
     // If winner already exists, don't check again (winner is locked)
     if (event.winner_ticket_id) {
+      console.log("[checkForWinner] Winner already exists:", event.winner_ticket_id);
       return { winnerFound: true, winnerSerial: undefined };
     }
+
+    const drawnNumbers = event.drawn_numbers || [];
+    console.log("[checkForWinner] Drawn numbers:", drawnNumbers.length);
 
     // Get all tickets with their questions
     const { data: tickets } = await supabase
@@ -383,38 +401,16 @@ export const eventService = {
 
     if (!tickets || tickets.length === 0) return null;
 
-    // Get all player answers for this event
-    const { data: sessions } = await supabase
-      .from("player_sessions")
-      .select("id")
-      .eq("event_id", eventId);
-
-    if (!sessions || sessions.length === 0) return null;
-
-    const sessionIds = sessions.map(s => s.id);
-
-    const { data: answers } = await supabase
-      .from("player_answers")
-      .select("*")
-      .eq("event_id", eventId)
-      .in("session_id", sessionIds);
-
-    if (!answers || answers.length === 0) return null;
-
-    // Check each ticket for 15/15 correct
+    // Check each ticket for all 15 numbers drawn
     for (const ticket of tickets) {
-      const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+      const ticketNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
       
-      // Get answers for this ticket's questions
-      const ticketAnswers = answers.filter((a: any) =>
-        ticketQuestionNumbers.includes(a.question_number)
-      );
+      // Check if ALL 15 ticket numbers have been drawn
+      const allNumbersDrawn = ticketNumbers.every((num: number) => drawnNumbers.includes(num));
 
-      // Count correct answers
-      const correctCount = ticketAnswers.filter((a: any) => a.is_correct).length;
+      if (allNumbersDrawn) {
+        console.log("[checkForWinner] 🎉 WINNER FOUND! Ticket:", ticket.serial_number);
 
-      // WINNER: 15 out of 15 correct
-      if (correctCount === 15) {
         // Mark ticket as winner
         await supabase
           .from("tickets")
@@ -434,6 +430,7 @@ export const eventService = {
       }
     }
 
+    console.log("[checkForWinner] No winner yet");
     return { winnerFound: false };
   },
 

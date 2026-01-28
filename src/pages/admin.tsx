@@ -20,7 +20,7 @@ export default function AdminPanel() {
   const [ticketCount, setTicketCount] = useState(10);
   const [loading, setLoading] = useState(false);
   
-  // CRITICAL: Continue mode state - resets to false for each event
+  // CRITICAL: Continue mode state - defaults to FALSE for each event
   const [continueAfterWinner, setContinueAfterWinner] = useState<Record<string, boolean>>({});
   
   const { toast } = useToast();
@@ -32,26 +32,32 @@ export default function AdminPanel() {
   useEffect(() => {
     if (selectedEvent) {
       loadEventDetails(selectedEvent.id);
-      loadTicketStats(selectedEvent.id);
+      // CRITICAL: Only load stats when event is finished
+      if (selectedEvent.status === "finished") {
+        loadTicketStats(selectedEvent.id);
+      }
     }
-  }, [selectedEvent?.id]);
+  }, [selectedEvent?.id, selectedEvent?.status]);
 
-  // Real-time subscription for answers
+  // Real-time subscription for answers (only when finished)
   useEffect(() => {
-    if (!selectedEvent) return;
+    if (!selectedEvent || selectedEvent.status !== "finished") return;
+
+    console.log("[Admin] Setting up answer subscription for finished event:", selectedEvent.id);
 
     const subscription = answerService.subscribeToEventAnswers(selectedEvent.id, () => {
+      console.log("[Admin] Answer update detected, reloading stats");
       loadTicketStats(selectedEvent.id);
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [selectedEvent?.id]);
+  }, [selectedEvent?.id, selectedEvent?.status]);
 
-  // Polling for stats updates
+  // CRITICAL: Only poll stats when event is finished
   useEffect(() => {
-    if (!selectedEvent || selectedEvent.status !== "active") return;
+    if (!selectedEvent || selectedEvent.status !== "finished") return;
 
     const pollInterval = setInterval(() => {
       loadTicketStats(selectedEvent.id);
@@ -84,10 +90,12 @@ export default function AdminPanel() {
 
   const loadTicketStats = async (eventId: string) => {
     try {
+      console.log("[Admin] Loading ticket stats for event:", eventId);
       const stats = await answerService.getEventTicketStats(eventId);
+      console.log("[Admin] ✅ Loaded stats for", stats.length, "active tickets");
       setTicketStats(stats);
     } catch (error) {
-      console.error("Failed to load ticket stats:", error);
+      console.error("[Admin] Failed to load ticket stats:", error);
     }
   };
 
@@ -522,56 +530,78 @@ export default function AdminPanel() {
                     </CardContent>
                   </Card>
 
-                  <Card className="bg-white/95 backdrop-blur-sm">
-                    <CardHeader>
-                      <CardTitle>Statistika igrača</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      {ticketStats.length === 0 ? (
+                  {/* CRITICAL: Only show statistics when event is finished */}
+                  {selectedEvent.status === "finished" && (
+                    <Card className="bg-white/95 backdrop-blur-sm">
+                      <CardHeader>
+                        <CardTitle>📊 Statistika igrača</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {ticketStats.length === 0 ? (
+                          <p className="text-gray-600 text-center py-4">
+                            Nema odgovora. Nitko nije igrao.
+                          </p>
+                        ) : (
+                          <>
+                            <p className="text-sm text-gray-600 mb-4">
+                              Prikazano: {ticketStats.length} aktivnih ulaznica (ulaznice koje su odgovorile barem na 1 pitanje)
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {ticketStats.map((stat) => (
+                                <Card key={stat.ticket_serial} className="border-2">
+                                  <CardContent className="pt-4">
+                                    <div className="text-center mb-3">
+                                      <Badge className="bg-purple-600 text-white">
+                                        {stat.ticket_serial}
+                                      </Badge>
+                                    </div>
+                                    <div className="flex items-center justify-center gap-4">
+                                      <div className="flex items-center gap-2">
+                                        <CheckCircle className="w-5 h-5 text-green-600" />
+                                        <span className="text-2xl font-black text-green-600">
+                                          {stat.correct}
+                                        </span>
+                                      </div>
+                                      <span className="text-2xl font-bold text-gray-400">
+                                        /
+                                      </span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-2xl font-black text-gray-600">
+                                          {stat.total}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="text-center mt-2 space-y-1">
+                                      <div className="text-sm text-gray-600">
+                                        {stat.answered} / {stat.total} odgovoreno
+                                      </div>
+                                      <div className="text-lg font-bold text-blue-600">
+                                        {stat.percentage}% točno
+                                      </div>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Message during active game */}
+                  {selectedEvent.status === "active" && (
+                    <Card className="bg-white/95 backdrop-blur-sm">
+                      <CardHeader>
+                        <CardTitle>📊 Statistika igrača</CardTitle>
+                      </CardHeader>
+                      <CardContent>
                         <p className="text-gray-600 text-center py-4">
-                          Nema odgovora još. Čekamo da igrači odgovore...
+                          Statistika će biti dostupna nakon završetka igre.
                         </p>
-                      ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {ticketStats.map((stat) => (
-                            <Card key={stat.ticket_serial} className="border-2">
-                              <CardContent className="pt-4">
-                                <div className="text-center mb-3">
-                                  <Badge className="bg-purple-600 text-white">
-                                    {stat.ticket_serial}
-                                  </Badge>
-                                </div>
-                                <div className="flex items-center justify-center gap-4">
-                                  <div className="flex items-center gap-2">
-                                    <CheckCircle className="w-5 h-5 text-green-600" />
-                                    <span className="text-2xl font-black text-green-600">
-                                      {stat.correct}
-                                    </span>
-                                  </div>
-                                  <span className="text-2xl font-bold text-gray-400">
-                                    /
-                                  </span>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-2xl font-black text-gray-600">
-                                      {stat.total}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="text-center mt-2 space-y-1">
-                                  <div className="text-sm text-gray-600">
-                                    {stat.answered} / {stat.total} odgovoreno
-                                  </div>
-                                  <div className="text-lg font-bold text-blue-600">
-                                    {stat.percentage}% točno
-                                  </div>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          ))}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                      </CardContent>
+                    </Card>
+                  )}
 
                   <Card className="bg-white/95 backdrop-blur-sm">
                     <CardHeader>

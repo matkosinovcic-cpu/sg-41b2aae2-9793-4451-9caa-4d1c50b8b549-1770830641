@@ -43,17 +43,15 @@ export default function PlayerScreen() {
         const serials: string[] = JSON.parse(storedSerialsJSON);
         console.log("[Player] Restoring tickets from localStorage:", serials);
         
-        // Load event first
         eventService.getEvent(storedEventId).then(eventData => {
           setEvent(eventData);
           setDrawnNumbers(new Set(eventData.drawn_numbers || []));
           
-          // Initialize session
           answerService.getOrCreateSession(storedEventId).then(sessionData => {
             setSession(sessionData);
+            console.log("[Player] ✅ Session initialized:", sessionData.id);
           });
           
-          // Load all tickets
           Promise.all(
             serials.map(serial => 
               eventService.getTicketBySerial(serial).catch(err => {
@@ -66,7 +64,7 @@ export default function PlayerScreen() {
             if (validTickets.length > 0) {
               setTickets(validTickets);
               setTicket(validTickets[0]);
-              console.log("[Player] Restored tickets:", validTickets.length);
+              console.log("[Player] ✅ Restored tickets:", validTickets.map(t => t.serial_number));
             } else {
               localStorage.removeItem("ticket_serials");
               localStorage.removeItem("event_id");
@@ -84,7 +82,7 @@ export default function PlayerScreen() {
     }
   }, []);
 
-  // Load statistics when session and tickets are ready AND event is finished
+  // CRITICAL: Load statistics ONLY when event is finished
   useEffect(() => {
     if (session && tickets.length > 0 && event?.status === "finished") {
       loadStats();
@@ -108,7 +106,7 @@ export default function PlayerScreen() {
         loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
       }
       
-      // Load stats when event finishes
+      // CRITICAL: Load stats when event finishes
       if (updatedEvent.status === "finished" && session && tickets.length > 0) {
         loadStats();
         loadDetailedResults();
@@ -201,7 +199,12 @@ export default function PlayerScreen() {
   const handleTimeout = async () => {
     if (!session || !currentQuestion || !event) return;
     
-    console.log("[Player] Timeout - marking question as unanswered");
+    console.log("[Player] ⏱️ TIMEOUT - marking question as missed:", {
+      sessionId: session.id,
+      eventId: event.id,
+      questionNumber: currentQuestion.question_number,
+      trackedTickets: tickets.map(t => t.serial_number)
+    });
     
     try {
       await answerService.markUnansweredAsWrong(
@@ -210,8 +213,9 @@ export default function PlayerScreen() {
         currentQuestion.question_number
       );
       setHasAnswered(true);
+      console.log("[Player] ✅ Timeout recorded as MISSED");
     } catch (error) {
-      console.error("[Player] Failed to mark timeout:", error);
+      console.error("[Player] ❌ Failed to mark timeout:", error);
     }
   };
 
@@ -304,7 +308,6 @@ export default function PlayerScreen() {
         setEvent(eventData);
         setDrawnNumbers(new Set(eventData.drawn_numbers || []));
         
-        // Initialize session
         const sessionData = await answerService.getOrCreateSession(eventData.id);
         setSession(sessionData);
         
@@ -380,7 +383,6 @@ export default function PlayerScreen() {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       setCurrentQuestion(data);
       
-      // Check if already answered
       if (session) {
         const answers = await answerService.getSessionAnswers(session.id);
         const alreadyAnswered = answers.some(a => a.question_number === questionNumber);
@@ -405,6 +407,14 @@ export default function PlayerScreen() {
   const handleSubmitAnswer = async (answerValue: boolean) => {
     if (!session || !currentQuestion || hasAnswered || !event) return;
 
+    console.log("[Player] Submitting answer:", {
+      sessionId: session.id,
+      eventId: event.id,
+      questionNumber: currentQuestion.question_number,
+      answer: answerValue ? "DA" : "NE",
+      trackedTickets: tickets.map(t => ({ id: t.id, serial: t.serial_number }))
+    });
+
     setAnswer(answerValue);
 
     try {
@@ -421,12 +431,15 @@ export default function PlayerScreen() {
       
       setHasAnswered(true);
       
+      console.log("[Player] ✅ Answer submitted successfully");
+      
       toast({
         title: "Odgovor poslan",
         description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}`,
       });
     } catch (error: any) {
       setAnswer(null);
+      console.error("[Player] ❌ Answer submission failed:", error);
       toast({
         title: "Greška",
         description: error.message || "Vec si odgovorio na ovo pitanje",
@@ -442,7 +455,7 @@ export default function PlayerScreen() {
 
     const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
     
-    // Find stats for this ticket (only show if event is finished)
+    // CRITICAL: Only show stats if event is finished
     const ticketStats = event?.status === "finished" 
       ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
       : null;
@@ -494,6 +507,7 @@ export default function PlayerScreen() {
             <div className="text-sm font-semibold text-gray-600">
               {drawnCount} / 15 izvučeno
             </div>
+            {/* CRITICAL: Only show stats when game is finished */}
             {ticketStats && (
               <>
                 <div className="text-lg font-bold text-blue-600">
@@ -523,8 +537,8 @@ export default function PlayerScreen() {
             )}
           </div>
 
-          {/* Detailed Results */}
-          {isExpanded && details && (
+          {/* CRITICAL: Detailed Results - Only when finished and expanded */}
+          {isExpanded && details && event?.status === "finished" && (
             <div className="mt-4 space-y-2 border-t pt-4">
               <h4 className="font-bold text-sm text-gray-700 mb-3">Detalji po pitanjima:</h4>
               {details.questions.map((q) => (
@@ -554,7 +568,7 @@ export default function PlayerScreen() {
                           Točan odgovor: <span className="text-blue-600">{q.correct_answer}</span>
                         </span>
                         <span className="font-semibold">
-                          Vaš odgovor: <span className={q.player_answer === "MISSED" ? "text-gray-500" : "text-purple-600"}>
+                          Vaš odgovor: <span className={q.player_answer === "NO ANSWER" ? "text-gray-500" : "text-purple-600"}>
                             {q.player_answer}
                           </span>
                         </span>
@@ -671,7 +685,7 @@ export default function PlayerScreen() {
             </Button>
           </div>
 
-          {/* Final Statistics - ONLY when event is finished */}
+          {/* CRITICAL: Final Statistics - ONLY when event is finished */}
           {event?.status === "finished" && stats && (
             <Card className="bg-white/95 backdrop-blur-sm mb-4">
               <CardContent className="p-6 text-center space-y-3">

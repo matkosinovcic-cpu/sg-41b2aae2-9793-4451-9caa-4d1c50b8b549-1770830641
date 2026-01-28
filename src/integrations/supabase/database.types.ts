@@ -91,6 +91,7 @@ export type Database = {
       }
       events: {
         Row: {
+          continue_after_winner: boolean | null
           created_at: string | null
           current_drawn_number: number | null
           current_question_number: number | null
@@ -102,6 +103,7 @@ export type Database = {
           winner_ticket_id: string | null
         }
         Insert: {
+          continue_after_winner?: boolean | null
           created_at?: string | null
           current_drawn_number?: number | null
           current_question_number?: number | null
@@ -113,6 +115,7 @@ export type Database = {
           winner_ticket_id?: string | null
         }
         Update: {
+          continue_after_winner?: boolean | null
           created_at?: string | null
           current_drawn_number?: number | null
           current_question_number?: number | null
