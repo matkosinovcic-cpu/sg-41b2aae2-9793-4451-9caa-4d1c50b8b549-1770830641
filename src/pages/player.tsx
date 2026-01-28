@@ -509,8 +509,31 @@ export default function PlayerScreen() {
   return (
     <>
       <SEO title="Player - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 p-4">
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4">
         <div className="container mx-auto max-w-4xl">
+          <div className="mb-6">
+            <h1 className="text-4xl font-black text-white mb-2">PITALICA SKITALICA</h1>
+            <p className="text-white/80">Odgovori na pitanja i osvoji nagradu!</p>
+          </div>
+
+          {/* WINNER BANNER */}
+          {event?.winner_ticket_id && (
+            <Card className="mb-4 border-4 border-yellow-500 bg-yellow-50">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-center gap-3">
+                  <Trophy className="w-8 h-8 text-yellow-600" />
+                  <div className="text-center">
+                    <p className="text-2xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
+                    <p className="text-lg text-yellow-700">
+                      Ulaznica: {event.winner_ticket_id}
+                    </p>
+                  </div>
+                  <Trophy className="w-8 h-8 text-yellow-600" />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Header */}
           <div className="mb-4 space-y-2">
             <div className="flex gap-2">

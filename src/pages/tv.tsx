@@ -12,7 +12,6 @@ export default function TVScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(0);
-  const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
   const [pollingActive, setPollingActive] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
@@ -40,7 +39,6 @@ export default function TVScreen() {
   // Real-time subscriptions
   useEffect(() => {
     if (!selectedEventId) {
-      setSubscriptionStatus("disconnected");
       return;
     }
 
@@ -70,13 +68,11 @@ export default function TVScreen() {
       setEvent(updatedEvent);
     });
 
-    setSubscriptionStatus("connected");
     console.log("[TV] Subscription active");
 
     return () => {
       console.log("[TV] Cleaning up subscription");
       eventSubscription.unsubscribe();
-      setSubscriptionStatus("disconnected");
     };
   }, [selectedEventId]);
 
@@ -89,7 +85,7 @@ export default function TVScreen() {
 
     const interval = setInterval(() => {
       const now = new Date().getTime();
-      const deadline = new Date(event.question_open_until).getTime();
+      const deadline = new Date(event.question_open_until!).getTime();
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
       
       // Play tick sound for last 3 seconds
@@ -137,8 +133,6 @@ export default function TVScreen() {
           
           // Update drawn numbers set
           setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-        } else {
-          console.log("[TV-POLL] No change detected");
         }
 
         // Update event state
@@ -152,7 +146,7 @@ export default function TVScreen() {
       } catch (error) {
         console.error("[TV-POLL] Polling error:", error);
       }
-    }, 1500); // Poll every 1.5 seconds
+    }, 1500);
 
     return () => {
       console.log("[TV-POLL] Cleaning up polling");
@@ -211,7 +205,6 @@ export default function TVScreen() {
     gain.connect(ctx.destination);
     
     if (type === 'start') {
-      // High pitch double beep
       osc.frequency.setValueAtTime(880, ctx.currentTime);
       osc.frequency.setValueAtTime(1760, ctx.currentTime + 0.1);
       gain.gain.setValueAtTime(0.1, ctx.currentTime);
@@ -219,14 +212,12 @@ export default function TVScreen() {
       osc.start();
       osc.stop(ctx.currentTime + 0.5);
     } else if (type === 'tick') {
-      // Short tick
       osc.frequency.setValueAtTime(440, ctx.currentTime);
       gain.gain.setValueAtTime(0.1, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
       osc.start();
       osc.stop(ctx.currentTime + 0.1);
     } else if (type === 'end') {
-      // Low finish tone
       osc.frequency.setValueAtTime(220, ctx.currentTime);
       gain.gain.setValueAtTime(0.2, ctx.currentTime);
       gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 1);
@@ -265,47 +256,59 @@ export default function TVScreen() {
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
-      <div className="min-h-screen bg-black text-white overflow-hidden relative">
-        {/* Debug Info */}
-        <div className="fixed top-2 right-2 text-xs text-white bg-black/70 px-3 py-2 rounded font-mono z-50 space-y-1 border border-white/20">
-          <div>event: {event.id.slice(0, 8)}</div>
-          <div>drawn#: {event.current_drawn_number || 0}</div>
-          <div>count: {drawnNumbers.size} / 90</div>
-          <div>status: {event.status}</div>
-          <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
-            sub: {subscriptionStatus}
-          </div>
-          <div className={`font-bold ${pollingActive ? "text-green-400" : "text-gray-400"}`}>
-            poll: {pollingActive ? "active" : "inactive"}
-          </div>
-        </div>
-
-        {/* Background Elements */}
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-black opacity-50" />
-        
-        <div className="relative z-10 container mx-auto px-4 py-8 h-screen flex flex-col">
-          {/* Header */}
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-4xl font-bold text-white/80">{event.name}</h1>
-            <div className="text-2xl font-mono text-purple-300">
-              PITALICA SKITALICA
-            </div>
-          </div>
-
-          {/* Winner Display */}
-          {event.winner_ticket_id ? (
-            <div className="flex-1 flex flex-col items-center justify-center animate-bounce-slow">
-              <Trophy className="w-64 h-64 text-yellow-400 mb-8 drop-shadow-[0_0_30px_rgba(250,204,21,0.5)]" />
-              <h2 className="text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-400 to-yellow-300 mb-8">
-                WE HAVE A WINNER!
-              </h2>
-              <div className="bg-white text-black px-12 py-6 rounded-2xl">
-                <p className="text-3xl text-gray-600 mb-2">Winning Ticket</p>
-                <p className="text-6xl font-black">{event.winner_ticket_id.split('-')[0] || "WINNER"}</p>
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-8">
+        <div className="container mx-auto max-w-7xl">
+          
+          {/* WINNER SCREEN - Show when winner exists AND game is finished */}
+          {event?.winner_ticket_id && event.status === "finished" && (
+            <div className="fixed inset-0 bg-gradient-to-br from-yellow-400 via-orange-500 to-red-500 flex items-center justify-center z-50 animate-pulse">
+              <div className="text-center">
+                <Trophy className="w-48 h-48 text-white mx-auto mb-8 animate-bounce" />
+                <h1 className="text-9xl font-black text-white mb-6 drop-shadow-2xl">
+                  POBJEDNIK!
+                </h1>
+                <div className="bg-white/20 backdrop-blur-sm rounded-3xl p-12 border-8 border-white">
+                  <p className="text-6xl font-black text-white mb-4">Ulaznica:</p>
+                  <p className="text-8xl font-black text-white">
+                    {event.winner_ticket_id}
+                  </p>
+                </div>
+                <p className="text-4xl text-white mt-12 font-bold">
+                  🎉 Čestitamo! 🎉
+                </p>
               </div>
             </div>
-          ) : (
-            /* Game Display with Board */
+          )}
+
+          {/* WINNER BANNER - Show during continue mode (Active + Winner exists) */}
+          {event?.winner_ticket_id && event.status === "active" && (
+            <Card className="mb-6 border-4 border-yellow-500 bg-yellow-50">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-center gap-4">
+                  <Trophy className="w-12 h-12 text-yellow-600" />
+                  <div className="text-center">
+                    <p className="text-4xl font-black text-yellow-600">POBJEDNIK: {event.winner_ticket_id}</p>
+                    <p className="text-xl text-yellow-700">Igra se nastavlja za zabavu...</p>
+                  </div>
+                  <Trophy className="w-12 h-12 text-yellow-600" />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Background Elements */}
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-black opacity-50" />
+          
+          <div className="relative z-10 container mx-auto px-4 py-8 h-screen flex flex-col">
+            {/* Header */}
+            <div className="flex justify-between items-center mb-8">
+              <h1 className="text-4xl font-bold text-white/80">{event.name}</h1>
+              <div className="text-2xl font-mono text-purple-300">
+                PITALICA SKITALICA
+              </div>
+            </div>
+
+            {/* Game Board Display */}
             <div className="flex-1 flex gap-8">
               {/* Left: Current Question */}
               <div className="flex-1 flex flex-col justify-center">
@@ -376,13 +379,13 @@ export default function TVScreen() {
                               : isDrawn 
                                 ? 'bg-green-500 text-white shadow-[0_0_10px_rgba(34,197,94,0.5)]' 
                                 : 'bg-white/10 text-white/60 hover:bg-white/20'
-                            }
-                          `}
-                        >
-                          {num}
-                        </div>
-                      );
-                    })}
+                          }
+                        `}
+                      >
+                        {num}
+                      </div>
+                    );
+                  })}
                   </div>
                   <div className="mt-4 text-center text-sm text-white/40">
                     {drawnNumbers.size} / 90 drawn
@@ -390,13 +393,13 @@ export default function TVScreen() {
                 </div>
               </div>
             </div>
-          )}
 
-          {/* Footer Stats */}
-          <div className="mt-8 grid grid-cols-3 gap-8 text-center text-white/40 text-xl font-bold">
-            <div>90 Numbers Total</div>
-            <div>15 to Win</div>
-            <div>Good Luck!</div>
+            {/* Footer Stats */}
+            <div className="mt-8 grid grid-cols-3 gap-8 text-center text-white/40 text-xl font-bold">
+              <div>90 Numbers Total</div>
+              <div>15 to Win</div>
+              <div>Good Luck!</div>
+            </div>
           </div>
         </div>
       </div>
