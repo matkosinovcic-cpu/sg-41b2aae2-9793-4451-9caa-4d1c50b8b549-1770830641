@@ -21,11 +21,14 @@ export interface TicketStats {
   ticket_serial: string;
   correct: number;
   answered: number;
+  total: number;
+  percentage: number;
 }
 
 export interface SessionStats {
   total_correct: number;
   total_answered: number;
+  total_questions: number;
   ticket_stats: TicketStats[];
 }
 
@@ -138,6 +141,46 @@ export const answerService = {
   },
 
   /**
+   * Mark unanswered question as wrong (for timeout handling)
+   */
+  async markUnansweredAsWrong(
+    sessionId: string,
+    eventId: string,
+    questionNumber: number
+  ): Promise<PlayerAnswer | null> {
+    // Check if already answered
+    const { data: existingAnswer } = await supabase
+      .from("player_answers")
+      .select("*")
+      .eq("session_id", sessionId)
+      .eq("question_number", questionNumber)
+      .single();
+
+    if (existingAnswer) {
+      return null; // Already answered, skip
+    }
+
+    // Insert as wrong answer with null answer
+    const { data, error } = await supabase
+      .from("player_answers")
+      .insert({
+        session_id: sessionId,
+        event_id: eventId,
+        question_number: questionNumber,
+        answer_yesno: "NO", // Default value for unanswered
+        is_correct: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Failed to mark unanswered question:", error);
+      return null;
+    }
+    return data as PlayerAnswer;
+  },
+
+  /**
    * Get all answers for a session
    */
   async getSessionAnswers(sessionId: string): Promise<PlayerAnswer[]> {
@@ -153,6 +196,7 @@ export const answerService = {
 
   /**
    * Calculate statistics for a player session
+   * CRITICAL: Always calculate out of 15 questions per ticket
    */
   async getSessionStats(
     sessionId: string,
@@ -162,6 +206,9 @@ export const answerService = {
 
     const totalCorrect = answers.filter((a) => a.is_correct).length;
     const totalAnswered = answers.length;
+    
+    // Total questions = sum of all ticket questions (each ticket has exactly 15)
+    const totalQuestions = tickets.length * 15;
 
     const ticketStats: TicketStats[] = tickets.map((ticket) => {
       const ticketQuestionNumbers = ticket.ticket_questions.map((tq) => tq.question_number);
@@ -172,17 +219,24 @@ export const answerService = {
 
       const correct = ticketAnswers.filter((a) => a.is_correct).length;
       const answered = ticketAnswers.length;
+      
+      // CRITICAL: Each ticket ALWAYS has exactly 15 questions
+      const total = 15;
+      const percentage = Math.round((correct / total) * 100);
 
       return {
         ticket_serial: ticket.serial_number,
         correct,
         answered,
+        total,
+        percentage,
       };
     });
 
     return {
       total_correct: totalCorrect,
       total_answered: totalAnswered,
+      total_questions: totalQuestions,
       ticket_stats: ticketStats,
     };
   },
@@ -203,6 +257,7 @@ export const answerService = {
 
   /**
    * Get statistics for all tickets in an event (for admin view)
+   * CRITICAL: Always calculate out of 15 questions per ticket
    */
   async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
     const { data: tickets, error: ticketsError } = await supabase
@@ -232,6 +287,8 @@ export const answerService = {
         ticket_serial: t.serial_number,
         correct: 0,
         answered: 0,
+        total: 15,
+        percentage: 0,
       }));
     }
 
@@ -252,11 +309,17 @@ export const answerService = {
 
       const correct = ticketAnswers.filter((a: any) => a.is_correct).length;
       const answered = ticketAnswers.length;
+      
+      // CRITICAL: Each ticket ALWAYS has exactly 15 questions
+      const total = 15;
+      const percentage = Math.round((correct / total) * 100);
 
       return {
         ticket_serial: ticket.serial_number,
         correct,
         answered,
+        total,
+        percentage,
       };
     });
 

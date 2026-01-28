@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, X, CheckCircle, XCircle } from "lucide-react";
+import { Trophy, X, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface TicketData {
@@ -82,12 +82,12 @@ export default function PlayerScreen() {
     }
   }, []);
 
-  // Load statistics when session and tickets are ready
+  // Load statistics when session and tickets are ready AND event is finished
   useEffect(() => {
-    if (session && tickets.length > 0) {
+    if (session && tickets.length > 0 && event?.status === "finished") {
       loadStats();
     }
-  }, [session?.id, tickets.length]);
+  }, [session?.id, tickets.length, event?.status]);
 
   // Real-time subscriptions
   useEffect(() => {
@@ -104,6 +104,11 @@ export default function PlayerScreen() {
       if (updatedEvent.current_question_number) {
         loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
       }
+      
+      // Load stats when event finishes
+      if (updatedEvent.status === "finished" && session && tickets.length > 0) {
+        loadStats();
+      }
     });
 
     const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
@@ -118,8 +123,8 @@ export default function PlayerScreen() {
       }
     });
 
-    // Subscribe to answers for real-time stats updates
-    const answersSubscription = session 
+    // Subscribe to answers for stats updates (only when finished)
+    const answersSubscription = session && event.status === "finished"
       ? answerService.subscribeToEventAnswers(event.id, () => {
           loadStats();
         })
@@ -130,7 +135,7 @@ export default function PlayerScreen() {
       ticketsSubscription.unsubscribe();
       if (answersSubscription) answersSubscription.unsubscribe();
     };
-  }, [event?.id, ticket?.id, session?.id]);
+  }, [event?.id, ticket?.id, session?.id, event?.status]);
 
   // Polling fallback
   useEffect(() => {
@@ -149,17 +154,25 @@ export default function PlayerScreen() {
             await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
           }
         }
+        
+        // Check if event finished
+        if (updatedEvent.status === "finished" && event.status === "active") {
+          setEvent(updatedEvent);
+          if (session && tickets.length > 0) {
+            await loadStats();
+          }
+        }
       } catch (error) {
         console.error("[Player-Poll] Error:", error);
       }
     }, 1500);
 
     return () => clearInterval(pollInterval);
-  }, [event?.id, event?.status, event?.current_drawn_number]);
+  }, [event?.id, event?.status, event?.current_drawn_number, session?.id, tickets.length]);
 
-  // Timer countdown
+  // Timer countdown with timeout handling
   useEffect(() => {
-    if (!event?.question_open_until) {
+    if (!event?.question_open_until || !session || !currentQuestion) {
       setTimeRemaining(0);
       return;
     }
@@ -169,10 +182,32 @@ export default function PlayerScreen() {
       const deadline = new Date(event.question_open_until).getTime();
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
       setTimeRemaining(remaining);
+      
+      // TIMEOUT HANDLING: Mark as wrong if time expires and not answered
+      if (remaining === 0 && !hasAnswered) {
+        handleTimeout();
+      }
     }, 100);
 
     return () => clearInterval(interval);
-  }, [event?.question_open_until]);
+  }, [event?.question_open_until, hasAnswered, session?.id, currentQuestion?.question_number]);
+
+  const handleTimeout = async () => {
+    if (!session || !currentQuestion || !event) return;
+    
+    console.log("[Player] Timeout - marking question as unanswered");
+    
+    try {
+      await answerService.markUnansweredAsWrong(
+        session.id,
+        event.id,
+        currentQuestion.question_number
+      );
+      setHasAnswered(true);
+    } catch (error) {
+      console.error("[Player] Failed to mark timeout:", error);
+    }
+  };
 
   const loadStats = async () => {
     if (!session || tickets.length === 0) return;
@@ -253,11 +288,6 @@ export default function PlayerScreen() {
 
       setSerialInput("");
       
-      // Reload stats with new ticket
-      if (session) {
-        await loadStats();
-      }
-      
       toast({
         title: "Success",
         description: "Ticket added successfully!",
@@ -298,11 +328,6 @@ export default function PlayerScreen() {
 
     const serials = newTickets.map(t => t.serial_number);
     localStorage.setItem("ticket_serials", JSON.stringify(serials));
-
-    // Reload stats
-    if (session) {
-      loadStats();
-    }
 
     toast({
       title: "Ticket Removed",
@@ -356,9 +381,6 @@ export default function PlayerScreen() {
       
       setHasAnswered(true);
       
-      // Reload stats immediately
-      await loadStats();
-      
       toast({
         title: "Odgovor poslan",
         description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}`,
@@ -380,8 +402,10 @@ export default function PlayerScreen() {
 
     const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
     
-    // Find stats for this ticket
-    const ticketStats = stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number);
+    // Find stats for this ticket (only show if event is finished)
+    const ticketStats = event?.status === "finished" 
+      ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
+      : null;
 
     return (
       <Card key={ticketData.id} className="relative bg-white/95 backdrop-blur-sm">
@@ -429,13 +453,23 @@ export default function PlayerScreen() {
             </div>
             {ticketStats && (
               <div className="text-xs font-semibold text-blue-600">
-                ✓ {ticketStats.correct} / {ticketStats.answered} točno
+                ✓ {ticketStats.correct} / {ticketStats.total} točno ({ticketStats.percentage}%)
               </div>
             )}
           </div>
         </CardContent>
       </Card>
     );
+  };
+
+  const getFinalMessage = () => {
+    if (!stats || stats.ticket_stats.length === 0) return "";
+    
+    const bestScore = Math.max(...stats.ticket_stats.map(ts => ts.correct));
+    
+    if (bestScore === 15) return "🎉 Čestitamo! Sve točno!";
+    if (bestScore >= 13) return "🌟 Odličan rezultat!";
+    return "👍 Hvala na sudjelovanju!";
   };
 
   // Join screen
@@ -485,12 +519,12 @@ export default function PlayerScreen() {
                 value={serialInput}
                 onChange={(e) => setSerialInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                disabled={tickets.length >= 4}
+                disabled={tickets.length >= 4 || event?.status === "finished"}
                 className="flex-1"
               />
               <Button
                 onClick={handleAddTicket}
-                disabled={tickets.length >= 4}
+                disabled={tickets.length >= 4 || event?.status === "finished"}
                 className="whitespace-nowrap"
               >
                 Dodaj ({tickets.length}/4)
@@ -506,25 +540,15 @@ export default function PlayerScreen() {
             </Button>
           </div>
 
-          {/* Overall Statistics */}
-          {stats && (
+          {/* Final Statistics - ONLY when event is finished */}
+          {event?.status === "finished" && stats && (
             <Card className="bg-white/95 backdrop-blur-sm mb-4">
-              <CardContent className="p-4">
-                <h3 className="text-lg font-bold text-center mb-2">Moja statistika</h3>
-                <div className="flex items-center justify-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle className="w-5 h-5 text-green-600" />
-                    <span className="text-2xl font-black text-green-600">
-                      {stats.total_correct}
-                    </span>
-                  </div>
-                  <span className="text-2xl font-bold text-gray-400">/</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl font-black text-gray-600">
-                      {stats.total_answered}
-                    </span>
-                    <span className="text-sm text-gray-500">ukupno</span>
-                  </div>
+              <CardContent className="p-6 text-center space-y-3">
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
+                  {getFinalMessage()}
+                </h2>
+                <div className="text-2xl font-bold text-gray-700">
+                  Ukupno točno: {stats.total_correct} / {stats.total_questions}
                 </div>
               </CardContent>
             </Card>
@@ -535,7 +559,7 @@ export default function PlayerScreen() {
             {tickets.map(ticketData => renderTicketGrid(ticketData))}
           </div>
 
-          {/* Current Question */}
+          {/* Current Question - ONLY during active game */}
           {event?.status === "active" && currentQuestion && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 space-y-4">
@@ -606,7 +630,7 @@ export default function PlayerScreen() {
           )}
 
           {/* Event not active */}
-          {event?.status !== "active" && (
+          {event?.status !== "active" && event?.status !== "finished" && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 text-center">
                 <p className="text-xl font-semibold text-gray-600">

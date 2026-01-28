@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy, CheckCircle, XCircle } from "lucide-react";
+import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy, CheckCircle } from "lucide-react";
 
 export default function AdminPanel() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -502,14 +502,17 @@ export default function AdminPanel() {
                                   </span>
                                   <div className="flex items-center gap-2">
                                     <span className="text-2xl font-black text-gray-600">
-                                      {stat.answered}
+                                      {stat.total}
                                     </span>
                                   </div>
                                 </div>
-                                <div className="text-center mt-2 text-sm text-gray-600">
-                                  {stat.answered > 0
-                                    ? `${Math.round((stat.correct / stat.answered) * 100)}% točno`
-                                    : "Nema odgovora"}
+                                <div className="text-center mt-2 space-y-1">
+                                  <div className="text-sm text-gray-600">
+                                    {stat.answered} / {stat.total} odgovoreno
+                                  </div>
+                                  <div className="text-lg font-bold text-blue-600">
+                                    {stat.percentage}% točno
+                                  </div>
                                 </div>
                               </CardContent>
                             </Card>
