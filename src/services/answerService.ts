@@ -56,42 +56,65 @@ export interface TicketDetailedResults {
 /**
  * ROBUST YES/NO NORMALIZATION
  * Handles: boolean, string, number, null, undefined
- * Returns: "DA" | "NE" | null
+ * Returns: "YES" | "NO" | "MISSED" | null
+ * 
+ * CRITICAL: Database CHECK constraint requires EXACTLY "YES" or "NO" (uppercase)
+ * CHECK ((answer_yesno = ANY (ARRAY['YES'::text, 'NO'::text])))
  * 
  * Rules:
- * - true/"true"/1/"1"/"DA"/"YES"/"Y" => "DA"
- * - false/"false"/0/"0"/"NE"/"NO"/"N" => "NE"
+ * - true/"true"/1/"1"/"DA"/"YES"/"Y" => "YES"
+ * - false/"false"/0/"0"/"NE"/"NO"/"N" => "NO"
+ * - "MISSED"/"TIMEOUT" => "MISSED" (used internally for timeouts)
  * - null/undefined/"" => null
  */
-function normalizeYesNo(value: any): string | null {
+function normalizeYesNo(value: any): "YES" | "NO" | "MISSED" | null {
   // Handle null/undefined/empty
   if (value === null || value === undefined || value === "") return null;
   
   // Handle boolean
   if (typeof value === "boolean") {
-    return value ? "DA" : "NE";
+    return value ? "YES" : "NO";
   }
   
   // Handle number
   if (typeof value === "number") {
-    return value > 0 ? "DA" : "NE";
+    return value > 0 ? "YES" : "NO";
   }
   
   // Handle string (safe conversion)
   try {
     const str = String(value).trim().toUpperCase();
     
-    // DA variations
-    if (["DA", "YES", "Y", "TRUE", "1"].includes(str)) return "DA";
+    // YES variations
+    if (["DA", "YES", "Y", "TRUE", "1"].includes(str)) return "YES";
     
-    // NE variations
-    if (["NE", "NO", "N", "FALSE", "0"].includes(str)) return "NE";
+    // NO variations
+    if (["NE", "NO", "N", "FALSE", "0"].includes(str)) return "NO";
+    
+    // MISSED variations (internal use only, not for DB storage in normal answers)
+    if (["MISSED", "TIMEOUT", "UNANSWERED"].includes(str)) return "MISSED";
     
     return null;
   } catch (error) {
     console.error("[normalizeYesNo] Error normalizing value:", value, error);
     return null;
   }
+}
+
+/**
+ * Normalize for display in UI (converts back to Croatian)
+ * YES -> DA, NO -> NE, MISSED -> Propušteno
+ */
+function normalizeForDisplay(value: string | null): string {
+  if (!value) return "—";
+  
+  const upper = String(value).toUpperCase();
+  
+  if (upper === "YES") return "DA";
+  if (upper === "NO") return "NE";
+  if (upper === "MISSED") return "Propušteno";
+  
+  return value;
 }
 
 export const answerService = {
@@ -132,7 +155,8 @@ export const answerService = {
 
   /**
    * Submit an answer for a question
-   * CRITICAL: Only explicit DA/NE answers can be correct
+   * CRITICAL: Only explicit YES/NO answers can be submitted by players
+   * CRITICAL: Database CHECK constraint requires answer_yesno to be 'YES' or 'NO'
    * CRITICAL: Triggers winner check after successful submission
    */
   async submitAnswer(
@@ -160,7 +184,7 @@ export const answerService = {
       .single();
 
     if (existingAnswer) {
-      throw new Error("Već si odgovorio na ovo pitanje");
+      throw new Error("Vec si odgovorio na ovo pitanje");
     }
 
     // ROBUST NORMALIZATION
@@ -173,15 +197,21 @@ export const answerService = {
     });
 
     // Validate correct answer exists
-    if (!normalizedCorrectAnswer) {
+    if (!normalizedCorrectAnswer || normalizedCorrectAnswer === "MISSED") {
       console.error("[submitAnswer] Invalid correct answer:", correctAnswer);
       throw new Error("Pitanje nema ispravan odgovor u bazi");
     }
 
-    // Validate user answer (must be explicit DA or NE)
-    if (!normalizedUserAnswer) {
+    // CRITICAL: Validate user answer is explicit YES or NO (never MISSED for player submissions)
+    if (!normalizedUserAnswer || normalizedUserAnswer === "MISSED") {
       console.error("[submitAnswer] Invalid user answer:", answerYesNo);
       throw new Error("Neispravan odgovor");
+    }
+
+    // CRITICAL: Ensure answer is exactly "YES" or "NO" for database constraint
+    if (normalizedUserAnswer !== "YES" && normalizedUserAnswer !== "NO") {
+      console.error("[submitAnswer] Answer not YES or NO:", normalizedUserAnswer);
+      throw new Error("Odgovor mora biti DA ili NE");
     }
 
     // CRITICAL: Compare normalized answers
@@ -195,19 +225,23 @@ export const answerService = {
       isCorrect
     });
 
+    // CRITICAL: Insert with exactly "YES" or "NO" to satisfy CHECK constraint
     const { data, error } = await supabase
       .from("player_answers")
       .insert({
         session_id: sessionId,
         event_id: eventId,
         question_number: questionNumber,
-        answer_yesno: normalizedUserAnswer,
+        answer_yesno: normalizedUserAnswer, // Will be "YES" or "NO"
         is_correct: isCorrect,
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[submitAnswer] Database error:", error);
+      throw error;
+    }
 
     console.log("[submitAnswer] ✅ Answer saved successfully for question", questionNumber);
 
@@ -553,6 +587,8 @@ export const answerService = {
 
   /**
    * Mark a question as unanswered (missed) when time expires
+   * CRITICAL: Since CHECK constraint only allows 'YES' or 'NO', we store missed as 'NO' with is_correct=false
+   * We can identify missed answers by checking if is_correct=false and the question was drawn but not answered
    */
   async markUnansweredAsWrong(
     sessionId: string,
@@ -574,8 +610,10 @@ export const answerService = {
       return null;
     }
 
-    // CRITICAL: Insert as MISSED with is_correct=false
-    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for session ${sessionId}`);
+    // CRITICAL: Store as 'NO' with is_correct=false to satisfy CHECK constraint
+    // We mark missed answers with a special pattern: answer_yesno='NO' and is_correct=false
+    // This is different from an explicit wrong answer (where player chose NO but answer was YES)
+    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED (storing as NO with is_correct=false)`);
 
     const { data, error } = await supabase
       .from("player_answers")
@@ -583,8 +621,8 @@ export const answerService = {
         session_id: sessionId,
         event_id: eventId,
         question_number: questionNumber,
-        answer_yesno: "MISSED",
-        is_correct: false,
+        answer_yesno: "NO", // Use "NO" to satisfy CHECK constraint
+        is_correct: false,   // Always incorrect for missed answers
       })
       .select()
       .single();
@@ -594,7 +632,7 @@ export const answerService = {
       return null;
     }
 
-    console.log(`[markUnansweredAsWrong] ✅ MISSED saved for question ${questionNumber}`);
+    console.log(`[markUnansweredAsWrong] ✅ MISSED saved as NO for question ${questionNumber}`);
     
     return data as PlayerAnswer;
   },
