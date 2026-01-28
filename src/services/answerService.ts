@@ -464,188 +464,213 @@ export const answerService = {
 
   /**
    * Get statistics for all tickets in an event (for admin view)
-   * CRITICAL: Infer ticket ownership from answer patterns - match session answers to ticket question numbers
-   * CRITICAL: Only show tickets that have been actively played (significant answer overlap)
-   * CRITICAL: Use actual drawn_numbers array from event
    * 
-   * PATTERN MATCHING RULES:
-   * - A ticket is considered "active" for a session if:
-   *   1. At least 3 answered questions are on that ticket, OR
-   *   2. At least 50% of the session's answered questions are on that ticket
-   * - This reduces false positives from random question number overlaps
+   * CRITICAL LIMITATION:
+   * The player_answers table does NOT have a ticket_id column.
+   * We must infer ticket ownership from answer patterns, which is imperfect.
+   * 
+   * STRICT MATCHING RULES (to minimize false positives):
+   * - Require at least 5 answered questions from the ticket, OR
+   * - Require at least 75% of session's answers to be from that ticket
+   * - Only count tickets where we have HIGH confidence (strict threshold)
+   * - Filter out tickets with 0 actual answered questions
+   * 
+   * This approach minimizes phantom activity but cannot be 100% accurate
+   * without schema changes (adding ticket_id to player_answers).
    */
-  async getEventTicketStats(eventId: string, drawnNumbers: number[]): Promise<TicketStats[]> {
-    console.log(`[getEventTicketStats] Loading stats for event ${eventId}`);
-    console.log(`[getEventTicketStats] Drawn numbers:`, drawnNumbers.length);
+  async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
+    try {
+      console.log("[getEventTicketStats] 🎯 Fetching ticket stats for event:", eventId);
 
-    // Get all tickets for this event
-    const { data: tickets, error: ticketsError } = await supabase
-      .from("tickets")
-      .select(`
-        id,
-        serial_number,
-        ticket_questions (
-          question_number
-        )
-      `)
-      .eq("event_id", eventId);
+      // 1. Get the event to check drawn numbers
+      const event = await this.getEvent(eventId);
+      if (!event) {
+        throw new Error("Event not found");
+      }
 
-    if (ticketsError) throw ticketsError;
-    if (!tickets || tickets.length === 0) {
-      console.log("[getEventTicketStats] No tickets found");
-      return [];
-    }
+      const drawnNumbers = event.drawn_numbers || [];
+      console.log("[getEventTicketStats] 📊 Event has drawn:", drawnNumbers.length, "numbers");
 
-    // Get all sessions for this event
-    const { data: sessions, error: sessionsError } = await supabase
-      .from("player_sessions")
-      .select("id")
-      .eq("event_id", eventId);
+      // 2. Fetch all tickets for this event with their question numbers
+      const { data: tickets, error: ticketsError } = await supabase
+        .from("tickets")
+        .select(`
+          id,
+          serial_number,
+          event_id,
+          ticket_questions (
+            question_number
+          )
+        `)
+        .eq("event_id", eventId);
 
-    if (sessionsError) throw sessionsError;
-    if (!sessions || sessions.length === 0) {
-      console.log("[getEventTicketStats] No sessions found");
-      return [];
-    }
+      if (ticketsError) {
+        console.error("[getEventTicketStats] ❌ Error fetching tickets:", ticketsError);
+        throw ticketsError;
+      }
 
-    const sessionIds = sessions.map((s) => s.id);
+      console.log("[getEventTicketStats] 🎫 Found", tickets?.length || 0, "tickets");
 
-    // Get all answers for all sessions in this event
-    const { data: allAnswers, error: answersError } = await supabase
-      .from("player_answers")
-      .select("*")
-      .eq("event_id", eventId)
-      .in("session_id", sessionIds);
+      // 3. Fetch ALL answers for this event, grouped by session
+      const { data: allAnswers, error: answersError } = await supabase
+        .from("player_answers")
+        .select("*")
+        .eq("event_id", eventId);
 
-    if (answersError) throw answersError;
-    if (!allAnswers || allAnswers.length === 0) {
-      console.log("[getEventTicketStats] No answers found");
-      return [];
-    }
+      if (answersError) {
+        console.error("[getEventTicketStats] ❌ Error fetching answers:", answersError);
+        throw answersError;
+      }
 
-    console.log(`[getEventTicketStats] Found ${allAnswers.length} total answers across ${sessionIds.length} sessions`);
+      console.log("[getEventTicketStats] 💬 Found", allAnswers?.length || 0, "total answers");
 
-    // CRITICAL: Infer ticket ownership with STRICT pattern matching to reduce false positives
-    // For each session, find which ticket(s) they're playing based on answered question numbers
-    const sessionTicketMap: Map<string, string[]> = new Map(); // session_id -> ticket_id[]
-
-    for (const session of sessions) {
-      const sessionAnswers = allAnswers.filter((a: any) => a.session_id === session.id);
-      const answeredQuestionNumbers = sessionAnswers.map((a: any) => a.question_number);
-
-      if (answeredQuestionNumbers.length === 0) continue;
-
-      console.log(`[getEventTicketStats] Session ${session.id}: ${answeredQuestionNumbers.length} answers`);
-
-      // CRITICAL: Find tickets with SIGNIFICANT overlap (not just 1 question match)
-      const matchedTickets = tickets.filter((ticket: any) => {
-        const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
-        
-        // Count how many answered questions are on this ticket
-        const matchCount = answeredQuestionNumbers.filter(qNum => 
-          ticketQuestionNumbers.includes(qNum)
-        ).length;
-        
-        // Calculate match percentage
-        const matchPercentage = (matchCount / answeredQuestionNumbers.length) * 100;
-        
-        // CRITICAL: Only consider this ticket "active" if:
-        // 1. At least 3 questions match (prevents single-question false positives), OR
-        // 2. At least 50% of answered questions are on this ticket
-        const isSignificantMatch = matchCount >= 3 || matchPercentage >= 50;
-        
-        if (isSignificantMatch) {
-          console.log(`[getEventTicketStats] ✓ Ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%)`);
+      // Group answers by session_id
+      const answersBySession = new Map<string, typeof allAnswers>();
+      allAnswers?.forEach((answer) => {
+        if (!answersBySession.has(answer.session_id)) {
+          answersBySession.set(answer.session_id, []);
         }
-        
-        return isSignificantMatch;
+        answersBySession.get(answer.session_id)!.push(answer);
       });
 
-      if (matchedTickets.length > 0) {
-        sessionTicketMap.set(
-          session.id,
-          matchedTickets.map((t: any) => t.id)
-        );
-        console.log(`[getEventTicketStats] Session ${session.id} matched to ${matchedTickets.length} tickets`);
-      } else {
-        console.log(`[getEventTicketStats] Session ${session.id} has no significant ticket matches (possible test/incomplete session)`);
-      }
-    }
+      console.log("[getEventTicketStats] 👥 Grouped into", answersBySession.size, "sessions");
 
-    console.log(`[getEventTicketStats] Mapped ${sessionTicketMap.size} sessions to tickets`);
+      // 4. For each session, find the BEST matching ticket using STRICT criteria
+      const activeTicketStats: TicketStats[] = [];
 
-    // Calculate stats for each ticket that has been played
-    const ticketStatsMap: Map<string, TicketStats> = new Map();
-
-    for (const [sessionId, ticketIds] of sessionTicketMap.entries()) {
-      const sessionAnswers = allAnswers.filter((a: any) => a.session_id === sessionId);
-
-      for (const ticketId of ticketIds) {
-        const ticket = tickets.find((t: any) => t.id === ticketId);
-        if (!ticket) continue;
-
-        const ticketQuestionNumbers = (ticket as any).ticket_questions.map((tq: any) => tq.question_number);
-
-        // CRITICAL: Only consider questions that are BOTH drawn AND on this ticket
-        const drawnOnTicket = ticketQuestionNumbers.filter((num: number) => drawnNumbers.includes(num));
-        const drawnCount = drawnOnTicket.length;
-
-        // CRITICAL: Get answers that match THIS ticket's drawn question numbers
-        const ticketAnswers = sessionAnswers.filter((answer: any) =>
-          drawnOnTicket.includes(answer.question_number)
+      for (const [sessionId, sessionAnswers] of answersBySession.entries()) {
+        const answeredQuestionNumbers = sessionAnswers.map((a) => a.question_number);
+        console.log(
+          `[getEventTicketStats] 📝 Session ${sessionId.slice(0, 8)}: answered`,
+          answeredQuestionNumbers.length,
+          "questions"
         );
 
-        // CRITICAL: Only count explicit correct answers
-        const correct = ticketAnswers.filter((a: any) => 
-          a.is_correct === true
-        ).length;
-        
+        // Find tickets where the answer pattern strongly matches
+        // CRITICAL: Use VERY STRICT matching to avoid false positives
+        const candidateTickets = tickets?.filter((ticket: any) => {
+          const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+
+          // Count how many answered questions are on this ticket
+          const matchCount = answeredQuestionNumbers.filter((qNum) =>
+            ticketQuestionNumbers.includes(qNum)
+          ).length;
+
+          // Calculate match percentage
+          const matchPercentage = (matchCount / answeredQuestionNumbers.length) * 100;
+
+          // ULTRA STRICT: Require BOTH:
+          // 1. At least 5 questions match (prevents small-sample false positives), OR
+          // 2. At least 75% of answered questions are on this ticket (very high confidence)
+          const isHighConfidenceMatch = matchCount >= 5 || matchPercentage >= 75;
+
+          if (isHighConfidenceMatch) {
+            console.log(
+              `[getEventTicketStats] ✓ HIGH CONFIDENCE: Ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%)`
+            );
+          } else if (matchCount > 0) {
+            console.log(
+              `[getEventTicketStats] ✗ LOW CONFIDENCE: Ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%) - EXCLUDED`
+            );
+          }
+
+          return isHighConfidenceMatch;
+        }) || [];
+
+        if (candidateTickets.length === 0) {
+          console.log(
+            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: No HIGH CONFIDENCE ticket match found (all candidates below 75% threshold)`
+          );
+          continue;
+        }
+
+        if (candidateTickets.length > 1) {
+          console.warn(
+            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: Multiple HIGH CONFIDENCE matches found (${candidateTickets.length} tickets) - using best match only`
+          );
+        }
+
+        // If multiple candidates, choose the one with highest match percentage
+        const bestMatchTicket = candidateTickets.reduce((best: any, current: any) => {
+          const bestTicketNumbers = best.ticket_questions.map((tq: any) => tq.question_number);
+          const currentTicketNumbers = current.ticket_questions.map((tq: any) => tq.question_number);
+
+          const bestMatchCount = answeredQuestionNumbers.filter((qNum) =>
+            bestTicketNumbers.includes(qNum)
+          ).length;
+          const currentMatchCount = answeredQuestionNumbers.filter((qNum) =>
+            currentTicketNumbers.includes(qNum)
+          ).length;
+
+          return currentMatchCount > bestMatchCount ? current : best;
+        });
+
+        const ticketQuestionNumbers = bestMatchTicket.ticket_questions.map(
+          (tq: any) => tq.question_number
+        );
+
+        // Calculate which questions on this ticket have been drawn
+        const drawnOnTicket = ticketQuestionNumbers.filter((num: number) =>
+          drawnNumbers.includes(num)
+        );
+
+        console.log(
+          `[getEventTicketStats] Ticket ${bestMatchTicket.serial_number}: ${drawnOnTicket.length} / 15 numbers drawn`
+        );
+
+        // Filter answers to only those that:
+        // 1. Are on this ticket's question numbers
+        // 2. Were actually drawn in the event
+        const ticketAnswers = sessionAnswers.filter(
+          (answer) =>
+            ticketQuestionNumbers.includes(answer.question_number) &&
+            drawnOnTicket.includes(answer.question_number)
+        );
+
+        // Count correct answers
+        const correct = ticketAnswers.filter((a) => a.is_correct === true).length;
         const answered = ticketAnswers.length;
-        const missed = drawnCount - answered;
-        const total = 15;
-        
-        const percentage = drawnCount > 0 
-          ? Math.round((correct / drawnCount) * 100) 
-          : 0;
+        const missed = drawnOnTicket.length - answered;
 
-        // Aggregate if ticket already has stats from another session (multi-session scenario)
-        const existingStats = ticketStatsMap.get(ticketId);
-        if (existingStats) {
-          // Sum up stats across sessions for this ticket
-          ticketStatsMap.set(ticketId, {
-            ticket_serial: (ticket as any).serial_number,
-            correct: existingStats.correct + correct,
-            answered: existingStats.answered + answered,
-            drawn_on_ticket: drawnCount, // Same for all sessions
-            missed: existingStats.missed + missed,
-            total: 15,
-            percentage: drawnCount > 0 
-              ? Math.round(((existingStats.correct + correct) / drawnCount) * 100)
-              : 0,
-          });
-        } else {
-          ticketStatsMap.set(ticketId, {
-            ticket_serial: (ticket as any).serial_number,
+        // Calculate percentage based on drawn_on_ticket (not total)
+        const percentage =
+          drawnOnTicket.length > 0 ? Math.round((correct / drawnOnTicket.length) * 100) : 0;
+
+        console.log(
+          `[getEventTicketStats] Ticket ${bestMatchTicket.serial_number}: ${correct}/${drawnOnTicket.length} correct (${percentage}%), answered: ${answered}, missed: ${missed}`
+        );
+
+        // CRITICAL: Only include if this ticket actually has answered questions
+        if (answered > 0) {
+          activeTicketStats.push({
+            ticket_serial: bestMatchTicket.serial_number,
             correct,
             answered,
-            drawn_on_ticket: drawnCount,
+            drawn_on_ticket: drawnOnTicket.length,
             missed,
-            total,
+            total: 15, // Total questions on any ticket
             percentage,
           });
+        } else {
+          console.log(
+            `[getEventTicketStats] ⚠️ Ticket ${bestMatchTicket.serial_number}: Matched pattern but answered=0, excluding from active list`
+          );
         }
       }
+
+      // CRITICAL: Final safety filter - only return tickets with answered > 0
+      const trulyActiveTickets = activeTicketStats.filter((stat) => stat.answered > 0);
+
+      console.log(
+        `[getEventTicketStats] ✅ Returning stats for ${trulyActiveTickets.length} HIGH CONFIDENCE active tickets (≥5 matches OR ≥75% overlap, and answered > 0)`
+      );
+      console.log(`[getEventTicketStats] Sample:`, trulyActiveTickets.slice(0, 2));
+
+      return trulyActiveTickets;
+    } catch (error) {
+      console.error("[getEventTicketStats] ❌ Error:", error);
+      throw error;
     }
-
-    const activeTicketStats = Array.from(ticketStatsMap.values());
-    
-    // CRITICAL: Final filter - only return tickets with answered > 0
-    const trulyActiveTickets = activeTicketStats.filter(stat => stat.answered > 0);
-    
-    console.log(`[getEventTicketStats] Returning stats for ${trulyActiveTickets.length} truly active tickets (with answers > 0)`);
-    console.log(`[getEventTicketStats] Sample:`, trulyActiveTickets.slice(0, 2));
-
-    return trulyActiveTickets;
   },
 
   /**
