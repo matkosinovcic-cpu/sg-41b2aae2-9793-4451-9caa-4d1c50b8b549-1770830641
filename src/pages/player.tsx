@@ -220,10 +220,14 @@ export default function PlayerScreen() {
   };
 
   const loadStats = async () => {
-    if (!session || tickets.length === 0) return;
+    if (!session || tickets.length === 0 || !event) return;
     
     try {
-      const statsData = await answerService.getSessionStats(session.id, tickets);
+      const statsData = await answerService.getSessionStats(
+        session.id, 
+        tickets,
+        event.drawn_numbers || []
+      );
       setStats(statsData);
     } catch (error) {
       console.error("[Player] Failed to load stats:", error);
@@ -240,7 +244,8 @@ export default function PlayerScreen() {
         const details = await answerService.getTicketDetailedResults(
           session.id,
           ticket,
-          event.id
+          event.id,
+          event.drawn_numbers || []
         );
         resultsMap.set(ticket.serial_number, details);
       }
@@ -545,13 +550,13 @@ export default function PlayerScreen() {
                 <div
                   key={q.question_number}
                   className={`p-3 rounded-lg border-2 ${
-                    q.is_correct
+                    q.result === "Točno"
                       ? "bg-green-50 border-green-300"
                       : "bg-red-50 border-red-300"
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    {q.is_correct ? (
+                    {q.result === "Točno" ? (
                       <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
                     ) : (
                       <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -568,10 +573,16 @@ export default function PlayerScreen() {
                           Točan odgovor: <span className="text-blue-600">{q.correct_answer}</span>
                         </span>
                         <span className="font-semibold">
-                          Vaš odgovor: <span className={q.player_answer === "NO ANSWER" ? "text-gray-500" : "text-purple-600"}>
+                          Vaš odgovor: <span className={q.player_answer === "Nije odgovoreno" ? "text-gray-500" : "text-purple-600"}>
                             {q.player_answer}
                           </span>
                         </span>
+                      </div>
+                      <div className={`text-xs font-bold mt-1 ${
+                        q.result === "Točno" ? "text-green-600" : 
+                        q.result === "Propušteno" ? "text-orange-600" : "text-red-600"
+                      }`}>
+                        {q.result}
                       </div>
                     </div>
                   </div>

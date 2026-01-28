@@ -550,4 +550,52 @@ export const answerService = {
       )
       .subscribe();
   },
+
+  /**
+   * Mark a question as unanswered (missed) when time expires
+   */
+  async markUnansweredAsWrong(
+    sessionId: string,
+    eventId: string,
+    questionNumber: number
+  ): Promise<PlayerAnswer | null> {
+    console.log(`[markUnansweredAsWrong] Checking question ${questionNumber} for session ${sessionId}`);
+
+    // Check if already answered
+    const { data: existingAnswer } = await supabase
+      .from("player_answers")
+      .select("*")
+      .eq("session_id", sessionId)
+      .eq("question_number", questionNumber)
+      .single();
+
+    if (existingAnswer) {
+      console.log(`[markUnansweredAsWrong] Question ${questionNumber} already answered, skipping`);
+      return null;
+    }
+
+    // CRITICAL: Insert as MISSED with is_correct=false
+    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for session ${sessionId}`);
+
+    const { data, error } = await supabase
+      .from("player_answers")
+      .insert({
+        session_id: sessionId,
+        event_id: eventId,
+        question_number: questionNumber,
+        answer_yesno: "MISSED",
+        is_correct: false,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[markUnansweredAsWrong] Failed to mark unanswered question:", error);
+      return null;
+    }
+
+    console.log(`[markUnansweredAsWrong] ✅ MISSED saved for question ${questionNumber}`);
+    
+    return data as PlayerAnswer;
+  },
 };
