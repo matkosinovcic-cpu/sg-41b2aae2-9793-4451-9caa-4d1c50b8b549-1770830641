@@ -29,6 +29,24 @@ export interface SessionStats {
   ticket_stats: TicketStats[];
 }
 
+/**
+ * Normalize any value to standard YES/NO format
+ * Handles: strings (DA/NE/YES/NO), booleans, numbers, etc.
+ */
+function normalizeYesNo(value: any): string | null {
+  if (value === null || value === undefined) return null;
+  
+  const str = String(value).trim().toUpperCase();
+  
+  // YES variations
+  if (["DA", "YES", "Y", "TRUE", "1"].includes(str)) return "YES";
+  
+  // NO variations
+  if (["NE", "NO", "N", "FALSE", "0"].includes(str)) return "NO";
+  
+  return null;
+}
+
 export const answerService = {
   /**
    * Get or create a player session for the current device
@@ -73,7 +91,7 @@ export const answerService = {
     eventId: string,
     questionNumber: number,
     answerYesNo: string,
-    correctAnswer: string
+    correctAnswer: any
   ): Promise<PlayerAnswer> {
     const { data: existingAnswer } = await supabase
       .from("player_answers")
@@ -86,7 +104,22 @@ export const answerService = {
       throw new Error("Vec si odgovorio na ovo pitanje");
     }
 
-    const isCorrect = answerYesNo.toUpperCase() === correctAnswer.toUpperCase();
+    // Normalize both user answer and correct answer
+    const normalizedUserAnswer = normalizeYesNo(answerYesNo);
+    const normalizedCorrectAnswer = normalizeYesNo(correctAnswer);
+
+    // Validate correct answer exists
+    if (!normalizedCorrectAnswer) {
+      throw new Error("Pitanje nema ispravan odgovor u bazi");
+    }
+
+    // Validate user answer
+    if (!normalizedUserAnswer) {
+      throw new Error("Neispravan odgovor");
+    }
+
+    // Compare normalized answers
+    const isCorrect = normalizedUserAnswer === normalizedCorrectAnswer;
 
     const { data, error } = await supabase
       .from("player_answers")
@@ -94,7 +127,7 @@ export const answerService = {
         session_id: sessionId,
         event_id: eventId,
         question_number: questionNumber,
-        answer_yesno: answerYesNo,
+        answer_yesno: normalizedUserAnswer,
         is_correct: isCorrect,
       })
       .select()
