@@ -12,6 +12,7 @@ export default function TVScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
+  const [pollingActive, setPollingActive] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastQuestionNumberRef = useRef<number | null>(null);
 
