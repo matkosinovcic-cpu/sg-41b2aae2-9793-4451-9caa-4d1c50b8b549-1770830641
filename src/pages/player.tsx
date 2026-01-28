@@ -569,13 +569,13 @@ export default function PlayerScreen() {
               <>
                 <div className="text-center mb-2 space-y-1">
                   <div className="text-lg font-bold text-blue-600">
-                    ✓ {ticketStats.correct} / {ticketStats.drawn_on_ticket} točno ({ticketStats.percentage}%)
+                    ✓ {ticketStats.correct} / {ticketStats.drawnOnTicket} točno ({ticketStats.accuracy}%)
                   </div>
                   <div className="text-sm text-gray-600">
-                    Izvučeno na ovoj ulaznici: {ticketStats.drawn_on_ticket} / {ticketStats.total}
+                    Izvučeno na ovoj ulaznici: {ticketStats.drawnOnTicket} / {ticketData.ticket_questions.length}
                   </div>
                   <div className="text-xs text-gray-500">
-                    Odgovoreno: {ticketStats.answered} / {ticketStats.drawn_on_ticket}
+                    Odgovoreno: {ticketStats.answered} / {ticketStats.drawnOnTicket}
                   </div>
                   {ticketStats.missed > 0 && (
                     <div className="text-xs text-red-600">
