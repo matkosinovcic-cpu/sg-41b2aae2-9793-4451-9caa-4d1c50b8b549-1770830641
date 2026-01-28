@@ -464,15 +464,8 @@ export default function PlayerScreen() {
 
     try {
       // Calculate correctness locally using normalization
-      const dbCorrectAnswer = currentQuestion.questions?.correct_answer;
-      
-      const normalizedCorrect = normalizeAnswer(dbCorrectAnswer);
-      const normalizedPlayer = normalizeAnswer(answerValue);
-      
-      const isCorrect = 
-        normalizedCorrect !== null && 
-        normalizedPlayer !== null && 
-        normalizedCorrect === normalizedPlayer;
+      // NOTE: Service now recalculates this securely, but we keep local for UI feedback if needed
+      // Actually, we should just let service do it.
       
       // CRITICAL: Submit answer for ALL tracked tickets
       for (const ticket of tickets) {
@@ -481,7 +474,6 @@ export default function PlayerScreen() {
           event.id,
           currentQuestion.question_number,
           answerValue, // Pass boolean directly
-          isCorrect,   // Pass calculated boolean
           ticket.serial_number // Pass exact ticket identifier
         );
       }

@@ -333,7 +333,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      check_winner_tickets: {
+        Args: { p_event_id: string }
+        Returns: {
+          ticket_id: string
+          ticket_serial: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
