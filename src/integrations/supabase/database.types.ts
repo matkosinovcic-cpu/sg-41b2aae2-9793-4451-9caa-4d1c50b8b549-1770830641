@@ -125,6 +125,80 @@ export type Database = {
         }
         Relationships: []
       }
+      player_answers: {
+        Row: {
+          answer_yesno: string
+          created_at: string | null
+          event_id: string
+          id: string
+          is_correct: boolean
+          question_number: number
+          session_id: string
+        }
+        Insert: {
+          answer_yesno: string
+          created_at?: string | null
+          event_id: string
+          id?: string
+          is_correct: boolean
+          question_number: number
+          session_id: string
+        }
+        Update: {
+          answer_yesno?: string
+          created_at?: string | null
+          event_id?: string
+          id?: string
+          is_correct?: boolean
+          question_number?: number
+          session_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "player_answers_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "player_answers_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "player_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      player_sessions: {
+        Row: {
+          created_at: string | null
+          event_id: string
+          id: string
+          session_token: string
+        }
+        Insert: {
+          created_at?: string | null
+          event_id: string
+          id?: string
+          session_token: string
+        }
+        Update: {
+          created_at?: string | null
+          event_id?: string
+          id?: string
+          session_token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "player_sessions_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null

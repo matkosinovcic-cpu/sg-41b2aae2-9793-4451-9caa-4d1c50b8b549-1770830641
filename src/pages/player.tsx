@@ -1,11 +1,12 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect } from "react";
 import { eventService, Event } from "@/services/eventService";
+import { answerService, PlayerSession, SessionStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, X } from "lucide-react";
+import { Trophy, X, CheckCircle, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface TicketData {
@@ -26,6 +27,8 @@ export default function PlayerScreen() {
   const [answer, setAnswer] = useState<boolean | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [hasAnswered, setHasAnswered] = useState(false);
+  const [session, setSession] = useState<PlayerSession | null>(null);
+  const [stats, setStats] = useState<SessionStats | null>(null);
   const { toast } = useToast();
 
   // Load tickets from localStorage on mount
@@ -43,6 +46,11 @@ export default function PlayerScreen() {
           setEvent(eventData);
           setDrawnNumbers(new Set(eventData.drawn_numbers || []));
           
+          // Initialize session
+          answerService.getOrCreateSession(storedEventId).then(sessionData => {
+            setSession(sessionData);
+          });
+          
           // Load all tickets
           Promise.all(
             serials.map(serial => 
@@ -55,10 +63,9 @@ export default function PlayerScreen() {
             const validTickets = loadedTickets.filter(t => t !== null) as TicketData[];
             if (validTickets.length > 0) {
               setTickets(validTickets);
-              setTicket(validTickets[0]); // Keep first as primary for backward compat
+              setTicket(validTickets[0]);
               console.log("[Player] Restored tickets:", validTickets.length);
             } else {
-              // Clear invalid data
               localStorage.removeItem("ticket_serials");
               localStorage.removeItem("event_id");
             }
@@ -74,6 +81,13 @@ export default function PlayerScreen() {
       }
     }
   }, []);
+
+  // Load statistics when session and tickets are ready
+  useEffect(() => {
+    if (session && tickets.length > 0) {
+      loadStats();
+    }
+  }, [session?.id, tickets.length]);
 
   // Real-time subscriptions
   useEffect(() => {
@@ -104,11 +118,19 @@ export default function PlayerScreen() {
       }
     });
 
+    // Subscribe to answers for real-time stats updates
+    const answersSubscription = session 
+      ? answerService.subscribeToEventAnswers(event.id, () => {
+          loadStats();
+        })
+      : null;
+
     return () => {
       eventSubscription.unsubscribe();
       ticketsSubscription.unsubscribe();
+      if (answersSubscription) answersSubscription.unsubscribe();
     };
-  }, [event?.id, ticket?.id]);
+  }, [event?.id, ticket?.id, session?.id]);
 
   // Polling fallback
   useEffect(() => {
@@ -152,6 +174,17 @@ export default function PlayerScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until]);
 
+  const loadStats = async () => {
+    if (!session || tickets.length === 0) return;
+    
+    try {
+      const statsData = await answerService.getSessionStats(session.id, tickets);
+      setStats(statsData);
+    } catch (error) {
+      console.error("[Player] Failed to load stats:", error);
+    }
+  };
+
   const handleAddTicket = async () => {
     if (!serialInput.trim()) {
       toast({
@@ -162,7 +195,6 @@ export default function PlayerScreen() {
       return;
     }
 
-    // Check if already added
     if (tickets.some(t => t.serial_number === serialInput)) {
       toast({
         title: "Duplicate",
@@ -172,7 +204,6 @@ export default function PlayerScreen() {
       return;
     }
 
-    // Limit to 4 tickets
     if (tickets.length >= 4) {
       toast({
         title: "Limit Reached",
@@ -185,7 +216,6 @@ export default function PlayerScreen() {
     try {
       const ticketData = await eventService.getTicketBySerial(serialInput);
       
-      // Check if adding to existing event
       if (event && ticketData.event_id !== event.id) {
         toast({
           title: "Error",
@@ -195,11 +225,14 @@ export default function PlayerScreen() {
         return;
       }
 
-      // Load event if first ticket
       if (!event) {
         const eventData = await eventService.getEvent(ticketData.event_id);
         setEvent(eventData);
         setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+        
+        // Initialize session
+        const sessionData = await answerService.getOrCreateSession(eventData.id);
+        setSession(sessionData);
         
         if (eventData.current_question_number) {
           await loadCurrentQuestion(eventData.id, eventData.current_question_number);
@@ -208,20 +241,22 @@ export default function PlayerScreen() {
         localStorage.setItem("event_id", eventData.id);
       }
 
-      // Add ticket to array
       const newTickets = [...tickets, ticketData];
       setTickets(newTickets);
       
-      // Set first ticket as primary
       if (!ticket) {
         setTicket(ticketData);
       }
 
-      // Save to localStorage
       const serials = newTickets.map(t => t.serial_number);
       localStorage.setItem("ticket_serials", JSON.stringify(serials));
 
       setSerialInput("");
+      
+      // Reload stats with new ticket
+      if (session) {
+        await loadStats();
+      }
       
       toast({
         title: "Success",
@@ -240,6 +275,8 @@ export default function PlayerScreen() {
     setTickets([]);
     setTicket(null);
     setEvent(null);
+    setSession(null);
+    setStats(null);
     localStorage.removeItem("ticket_serials");
     localStorage.removeItem("ticket_serial");
     localStorage.removeItem("event_id");
@@ -255,14 +292,17 @@ export default function PlayerScreen() {
       return;
     }
 
-    // Update primary ticket if removed
     if (ticket?.id === ticketId) {
       setTicket(newTickets[0]);
     }
 
-    // Update localStorage
     const serials = newTickets.map(t => t.serial_number);
     localStorage.setItem("ticket_serials", JSON.stringify(serials));
+
+    // Reload stats
+    if (session) {
+      loadStats();
+    }
 
     toast({
       title: "Ticket Removed",
@@ -274,8 +314,23 @@ export default function PlayerScreen() {
     try {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       setCurrentQuestion(data);
-      setHasAnswered(false);
-      setAnswer(null);
+      
+      // Check if already answered
+      if (session) {
+        const answers = await answerService.getSessionAnswers(session.id);
+        const alreadyAnswered = answers.some(a => a.question_number === questionNumber);
+        setHasAnswered(alreadyAnswered);
+        
+        if (alreadyAnswered) {
+          const existingAnswer = answers.find(a => a.question_number === questionNumber);
+          setAnswer(existingAnswer?.answer === "YES");
+        } else {
+          setAnswer(null);
+        }
+      } else {
+        setHasAnswered(false);
+        setAnswer(null);
+      }
     } catch (error) {
       console.error("[Player] Failed to load question:", error);
       setCurrentQuestion(null);
@@ -283,25 +338,36 @@ export default function PlayerScreen() {
   };
 
   const handleSubmitAnswer = async (answerValue: boolean) => {
-    if (!ticket || !currentQuestion || hasAnswered) return;
+    if (!session || !currentQuestion || hasAnswered || !event) return;
 
     setAnswer(answerValue);
 
     try {
-      await eventService.submitAnswer(
-        ticket.id,
+      const correctAnswer = currentQuestion.questions?.correct_answer;
+      const answerYesNo = answerValue ? "YES" : "NO";
+      
+      await answerService.submitAnswer(
+        session.id,
+        event.id,
         currentQuestion.question_number,
-        answerValue
+        answerYesNo,
+        correctAnswer
       );
+      
       setHasAnswered(true);
+      
+      // Reload stats immediately
+      await loadStats();
+      
       toast({
-        title: "Answer Submitted",
-        description: `You answered: ${answerValue ? "YES" : "NO"}`,
+        title: "Odgovor poslan",
+        description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}`,
       });
     } catch (error: any) {
+      setAnswer(null);
       toast({
-        title: "Error",
-        description: error.message || "Failed to submit answer",
+        title: "Greška",
+        description: error.message || "Vec si odgovorio na ovo pitanje",
         variant: "destructive"
       });
     }
@@ -312,8 +378,10 @@ export default function PlayerScreen() {
       .map(tq => tq.question_number)
       .sort((a, b) => a - b);
 
-    // Count how many of this ticket's numbers have been drawn
     const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
+    
+    // Find stats for this ticket
+    const ticketStats = stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number);
 
     return (
       <Card key={ticketData.id} className="relative bg-white/95 backdrop-blur-sm">
@@ -322,7 +390,7 @@ export default function PlayerScreen() {
           className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 z-10"
         >
           <X className="w-4 h-4" />
-        </button>
+        button>
 
         <CardContent className="p-4">
           <div className="text-center mb-3">
@@ -355,15 +423,22 @@ export default function PlayerScreen() {
             })}
           </div>
 
-          <div className="text-center mt-3 text-sm font-semibold text-gray-600">
-            {drawnCount} / 15 drawn
+          <div className="text-center mt-3 space-y-1">
+            <div className="text-sm font-semibold text-gray-600">
+              {drawnCount} / 15 izvučeno
+            </div>
+            {ticketStats && (
+              <div className="text-xs font-semibold text-blue-600">
+                ✓ {ticketStats.correct} / {ticketStats.answered} točno
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
     );
   };
 
-  // Join screen (no tickets loaded)
+  // Join screen
   if (tickets.length === 0) {
     return (
       <>
@@ -373,13 +448,13 @@ export default function PlayerScreen() {
             <CardContent className="pt-6 space-y-4">
               <div className="text-center mb-6">
                 <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
-                  JOIN GAME
+                  PRIDRUŽI SE IGRI
                 </h1>
-                <p className="text-gray-600">Enter your ticket serial number</p>
+                <p className="text-gray-600">Unesi serijski broj ulaznice</p>
               </div>
 
               <Input
-                placeholder="Enter ticket serial number"
+                placeholder="Unesi serijski broj"
                 value={serialInput}
                 onChange={(e) => setSerialInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
@@ -387,7 +462,7 @@ export default function PlayerScreen() {
               />
 
               <Button onClick={handleAddTicket} className="w-full" size="lg">
-                Join Game
+                Pridruži se igri
               </Button>
             </CardContent>
           </Card>
@@ -402,11 +477,11 @@ export default function PlayerScreen() {
       <SEO title="Player - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 p-4">
         <div className="container mx-auto max-w-4xl">
-          {/* Header with add ticket controls */}
+          {/* Header */}
           <div className="mb-4 space-y-2">
             <div className="flex gap-2">
               <Input
-                placeholder="Enter another ticket serial"
+                placeholder="Dodaj još jednu ulaznicu"
                 value={serialInput}
                 onChange={(e) => setSerialInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
@@ -418,7 +493,7 @@ export default function PlayerScreen() {
                 disabled={tickets.length >= 4}
                 className="whitespace-nowrap"
               >
-                Add Ticket ({tickets.length}/4)
+                Dodaj ({tickets.length}/4)
               </Button>
             </div>
             <Button
@@ -427,22 +502,46 @@ export default function PlayerScreen() {
               className="w-full"
               size="sm"
             >
-              Clear All
+              Obriši sve
             </Button>
           </div>
+
+          {/* Overall Statistics */}
+          {stats && (
+            <Card className="bg-white/95 backdrop-blur-sm mb-4">
+              <CardContent className="p-4">
+                <h3 className="text-lg font-bold text-center mb-2">Moja statistika</h3>
+                <div className="flex items-center justify-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                    <span className="text-2xl font-black text-green-600">
+                      {stats.total_correct}
+                    </span>
+                  </div>
+                  <span className="text-2xl font-bold text-gray-400">/</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl font-black text-gray-600">
+                      {stats.total_answered}
+                    </span>
+                    <span className="text-sm text-gray-500">ukupno</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Tickets Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             {tickets.map(ticketData => renderTicketGrid(ticketData))}
           </div>
 
-          {/* Current Question Display (shared for all tickets) */}
+          {/* Current Question */}
           {event?.status === "active" && currentQuestion && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 space-y-4">
                 <div className="text-center">
                   <Badge className="bg-blue-600 text-white text-lg px-4 py-1 mb-3">
-                    Question #{currentQuestion.question_number}
+                    Pitanje #{currentQuestion.question_number}
                   </Badge>
                   <h2 className="text-2xl font-bold mb-4">
                     {currentQuestion.questions?.text}
@@ -469,26 +568,26 @@ export default function PlayerScreen() {
                         disabled={hasAnswered}
                         className="h-20 text-2xl font-black bg-green-600 hover:bg-green-700"
                       >
-                        YES
+                        DA
                       </Button>
                       <Button
                         onClick={() => handleSubmitAnswer(false)}
                         disabled={hasAnswered}
                         className="h-20 text-2xl font-black bg-red-600 hover:bg-red-700"
                       >
-                        NO
+                        NE
                       </Button>
                     </div>
 
                     {hasAnswered && (
                       <div className="text-center text-lg font-semibold text-green-600">
-                        Answer submitted: {answer ? "YES" : "NO"}
+                        Odgovoreno: {answer ? "DA" : "NE"}
                       </div>
                     )}
                   </>
                 ) : (
                   <div className="bg-gray-100 rounded-lg p-4 text-center">
-                    <p className="text-lg font-semibold text-gray-600">Time's up!</p>
+                    <p className="text-lg font-semibold text-gray-600">Vrijeme je isteklo!</p>
                   </div>
                 )}
               </CardContent>
@@ -500,7 +599,7 @@ export default function PlayerScreen() {
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 text-center">
                 <p className="text-xl font-semibold text-gray-600">
-                  Waiting for next question...
+                  Čekamo sljedeće pitanje...
                 </p>
               </CardContent>
             </Card>
@@ -511,7 +610,7 @@ export default function PlayerScreen() {
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 text-center">
                 <p className="text-xl font-semibold text-gray-600">
-                  Event has not started yet
+                  Igra još nije počela
                 </p>
               </CardContent>
             </Card>
