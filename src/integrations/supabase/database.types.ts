@@ -137,6 +137,7 @@ export type Database = {
           is_correct: boolean
           question_number: number
           session_id: string
+          ticket_id: string | null
         }
         Insert: {
           answer_yesno: string
@@ -146,6 +147,7 @@ export type Database = {
           is_correct: boolean
           question_number: number
           session_id: string
+          ticket_id?: string | null
         }
         Update: {
           answer_yesno?: string
@@ -155,6 +157,7 @@ export type Database = {
           is_correct?: boolean
           question_number?: number
           session_id?: string
+          ticket_id?: string | null
         }
         Relationships: [
           {

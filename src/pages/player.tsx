@@ -207,13 +207,17 @@ export default function PlayerScreen() {
     });
     
     try {
-      await answerService.markUnansweredAsWrong(
-        session.id,
-        event.id,
-        currentQuestion.question_number
-      );
+      // CRITICAL: Mark as missed for ALL tracked tickets
+      for (const ticket of tickets) {
+        await answerService.markUnansweredAsWrong(
+          session.id,
+          event.id,
+          currentQuestion.question_number,
+          ticket.serial_number // NEW: Pass exact ticket identifier
+        );
+      }
       setHasAnswered(true);
-      console.log("[Player] ✅ Timeout recorded as MISSED");
+      console.log("[Player] ✅ Timeout recorded as MISSED for all tickets");
     } catch (error) {
       console.error("[Player] ❌ Failed to mark timeout:", error);
     }
@@ -426,17 +430,21 @@ export default function PlayerScreen() {
       const correctAnswer = currentQuestion.questions?.correct_answer;
       const answerYesNo = answerValue ? "YES" : "NO";
       
-      await answerService.submitAnswer(
-        session.id,
-        event.id,
-        currentQuestion.question_number,
-        answerYesNo,
-        correctAnswer
-      );
+      // CRITICAL: Submit answer for ALL tracked tickets
+      for (const ticket of tickets) {
+        await answerService.submitAnswer(
+          session.id,
+          event.id,
+          currentQuestion.question_number,
+          answerYesNo,
+          correctAnswer,
+          ticket.serial_number // NEW: Pass exact ticket identifier
+        );
+      }
       
       setHasAnswered(true);
       
-      console.log("[Player] ✅ Answer submitted successfully");
+      console.log("[Player] ✅ Answer submitted successfully for all tickets");
       
       toast({
         title: "Odgovor poslan",

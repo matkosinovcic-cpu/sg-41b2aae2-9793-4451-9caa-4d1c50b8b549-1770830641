@@ -157,13 +157,15 @@ export const answerService = {
    * CRITICAL: Only explicit YES/NO answers can be submitted by players
    * CRITICAL: Database CHECK constraint requires answer_yesno to be 'YES' or 'NO'
    * CRITICAL: Triggers winner check after successful submission
+   * CRITICAL: Now includes ticket_id for 100% reliable stats tracking
    */
   async submitAnswer(
     sessionId: string,
     eventId: string,
     questionNumber: number,
     answerYesNo: string,
-    correctAnswer: any
+    correctAnswer: any,
+    ticketId: string // NEW: Required ticket identifier
   ): Promise<PlayerAnswer> {
     console.log("[submitAnswer] Starting submission:", {
       sessionId,
@@ -171,8 +173,27 @@ export const answerService = {
       questionNumber,
       answerYesNo,
       correctAnswer,
-      correctAnswerType: typeof correctAnswer
+      correctAnswerType: typeof correctAnswer,
+      ticketId // NEW: Log ticket_id
     });
+
+    // CRITICAL: Validate ticket_id is provided
+    if (!ticketId || ticketId.trim() === "") {
+      throw new Error("ticket_id je obavezan za slanje odgovora");
+    }
+
+    // CRITICAL: Validate ticket exists in database for this event
+    const { data: ticketExists, error: ticketError } = await supabase
+      .from("tickets")
+      .select("id")
+      .eq("serial_number", ticketId)
+      .eq("event_id", eventId)
+      .single();
+
+    if (ticketError || !ticketExists) {
+      console.error("[submitAnswer] Ticket validation failed:", ticketError);
+      throw new Error(`Ulaznica ${ticketId} ne postoji za ovaj event`);
+    }
 
     // Check for duplicate
     const { data: existingAnswer } = await supabase
@@ -180,10 +201,10 @@ export const answerService = {
       .select("*")
       .eq("session_id", sessionId)
       .eq("question_number", questionNumber)
-      .single();
+      .eq("ticket_id", ticketId); // CRITICAL: Check per ticket
 
-    if (existingAnswer) {
-      throw new Error("Vec si odgovorio na ovo pitanje");
+    if (existingAnswer && existingAnswer.length > 0) {
+      throw new Error("Vec si odgovorio na ovo pitanje za ovu ulaznicu");
     }
 
     // ROBUST NORMALIZATION
@@ -192,7 +213,8 @@ export const answerService = {
 
     console.log("[submitAnswer] Normalized values:", {
       userAnswer: normalizedUserAnswer,
-      correctAnswer: normalizedCorrectAnswer
+      correctAnswer: normalizedCorrectAnswer,
+      ticketId
     });
 
     // Validate correct answer exists
@@ -221,10 +243,11 @@ export const answerService = {
       questionNumber,
       userAnswer: normalizedUserAnswer,
       correctAnswer: normalizedCorrectAnswer,
-      isCorrect
+      isCorrect,
+      ticketId // NEW: Log ticket_id
     });
 
-    // CRITICAL: Insert with exactly "YES" or "NO" to satisfy CHECK constraint
+    // CRITICAL: Insert with ticket_id for 100% reliable tracking
     const { data, error } = await supabase
       .from("player_answers")
       .insert({
@@ -233,6 +256,7 @@ export const answerService = {
         question_number: questionNumber,
         answer_yesno: normalizedUserAnswer, // Will be "YES" or "NO"
         is_correct: isCorrect,
+        ticket_id: ticketId, // NEW: Store exact ticket identifier
       })
       .select()
       .single();
@@ -242,7 +266,7 @@ export const answerService = {
       throw error;
     }
 
-    console.log("[submitAnswer] ✅ Answer saved successfully for question", questionNumber);
+    console.log("[submitAnswer] ✅ Answer saved successfully for question", questionNumber, "ticket", ticketId);
 
     // CRITICAL: Check for winner after each answer
     try {
@@ -1003,32 +1027,38 @@ export const answerService = {
   /**
    * Mark a question as unanswered (missed) when time expires
    * CRITICAL: Since CHECK constraint only allows 'YES' or 'NO', we store missed as 'NO' with is_correct=false
+   * CRITICAL: Now includes ticket_id for 100% reliable stats tracking
    * We can identify missed answers by checking if is_correct=false and the question was drawn but not answered
    */
   async markUnansweredAsWrong(
     sessionId: string,
     eventId: string,
-    questionNumber: number
+    questionNumber: number,
+    ticketId: string // NEW: Required ticket identifier
   ): Promise<PlayerAnswer | null> {
-    console.log(`[markUnansweredAsWrong] Checking question ${questionNumber} for session ${sessionId}`);
+    console.log(`[markUnansweredAsWrong] Checking question ${questionNumber} for session ${sessionId} ticket ${ticketId}`);
 
-    // Check if already answered
+    // CRITICAL: Validate ticket_id is provided
+    if (!ticketId || ticketId.trim() === "") {
+      console.error("[markUnansweredAsWrong] ticket_id is required");
+      return null;
+    }
+
+    // Check if already answered for this ticket
     const { data: existingAnswer } = await supabase
       .from("player_answers")
       .select("*")
       .eq("session_id", sessionId)
       .eq("question_number", questionNumber)
-      .single();
+      .eq("ticket_id", ticketId); // CRITICAL: Check per ticket
 
-    if (existingAnswer) {
-      console.log(`[markUnansweredAsWrong] Question ${questionNumber} already answered, skipping`);
+    if (existingAnswer && existingAnswer.length > 0) {
+      console.log(`[markUnansweredAsWrong] Question ${questionNumber} already answered for ticket ${ticketId}, skipping`);
       return null;
     }
 
-    // CRITICAL: Store as 'NO' with is_correct=false to satisfy CHECK constraint
-    // We mark missed answers with a special pattern: answer_yesno='NO' and is_correct=false
-    // This is different from an explicit wrong answer (where player chose NO but answer was YES)
-    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED (storing as NO with is_correct=false)`);
+    // CRITICAL: Store as 'NO' with is_correct=false to satisfy CHECK constraint and include ticket_id
+    console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for ticket ${ticketId}`);
 
     const { data, error } = await supabase
       .from("player_answers")
@@ -1038,6 +1068,7 @@ export const answerService = {
         question_number: questionNumber,
         answer_yesno: "NO", // Use "NO" to satisfy CHECK constraint
         is_correct: false,   // Always incorrect for missed answers
+        ticket_id: ticketId, // NEW: Store exact ticket identifier
       })
       .select()
       .single();
@@ -1047,7 +1078,7 @@ export const answerService = {
       return null;
     }
 
-    console.log(`[markUnansweredAsWrong] ✅ MISSED saved as NO for question ${questionNumber}`);
+    console.log(`[markUnansweredAsWrong] ✅ MISSED saved for question ${questionNumber} ticket ${ticketId}`);
     
     return data as PlayerAnswer;
   },
