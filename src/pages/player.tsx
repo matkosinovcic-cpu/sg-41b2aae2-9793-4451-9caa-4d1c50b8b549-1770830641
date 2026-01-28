@@ -390,7 +390,7 @@ export default function PlayerScreen() {
           className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 z-10"
         >
           <X className="w-4 h-4" />
-        button>
+        </button>
 
         <CardContent className="p-4">
           <div className="text-center mb-3">
