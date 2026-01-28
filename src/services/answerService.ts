@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { eventService } from "./eventService";
 
 export interface PlayerSession {
   id: string;
@@ -88,6 +89,7 @@ export const answerService = {
 
   /**
    * Submit an answer for a question
+   * CRITICAL: Triggers winner check after successful submission
    */
   async submitAnswer(
     sessionId: string,
@@ -137,6 +139,15 @@ export const answerService = {
       .single();
 
     if (error) throw error;
+
+    // CRITICAL: Check for winner after each answer
+    try {
+      await eventService.checkForWinner(eventId);
+    } catch (winnerError) {
+      console.error("Winner check failed:", winnerError);
+      // Don't throw - answer was recorded successfully
+    }
+
     return data as PlayerAnswer;
   },
 

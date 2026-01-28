@@ -19,6 +19,10 @@ export default function AdminPanel() {
   const [newEventName, setNewEventName] = useState("");
   const [ticketCount, setTicketCount] = useState(10);
   const [loading, setLoading] = useState(false);
+  
+  // CRITICAL: Continue mode state - resets to false for each event
+  const [continueAfterWinner, setContinueAfterWinner] = useState<Record<string, boolean>>({});
+  
   const { toast } = useToast();
 
   useEffect(() => {
@@ -99,9 +103,13 @@ export default function AdminPanel() {
 
     setLoading(true);
     try {
-      await eventService.createEvent(newEventName);
+      const newEvent = await eventService.createEvent(newEventName);
       setNewEventName("");
       await loadEvents();
+      
+      // CRITICAL: Ensure continue mode is OFF for new event
+      setContinueAfterWinner(prev => ({ ...prev, [newEvent.id]: false }));
+      
       toast({
         title: "Success",
         description: "Event created successfully",
@@ -166,6 +174,10 @@ export default function AdminPanel() {
     setLoading(true);
     try {
       await eventService.startEvent(eventId);
+      
+      // CRITICAL: Reset continue mode to OFF when starting event
+      setContinueAfterWinner(prev => ({ ...prev, [eventId]: false }));
+      
       await loadEvents();
       toast({
         title: "Success",
@@ -183,6 +195,18 @@ export default function AdminPanel() {
   };
 
   const handleDrawNextQuestion = async (eventId: string) => {
+    const event = events.find(e => e.id === eventId);
+    
+    // CRITICAL: Block draw if winner exists and continue mode is OFF
+    if (event?.winner_ticket_id && !continueAfterWinner[eventId]) {
+      toast({
+        title: "Winner Found",
+        description: "Winner exists. Click 'Continue After Winner' to keep drawing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setLoading(true);
     try {
       await eventService.drawNextQuestion(eventId);
@@ -226,6 +250,14 @@ export default function AdminPanel() {
     }
   };
 
+  const handleContinueAfterWinner = (eventId: string) => {
+    setContinueAfterWinner(prev => ({ ...prev, [eventId]: true }));
+    toast({
+      title: "Continue Mode Enabled",
+      description: "Drawing will continue until 90. Winner remains locked.",
+    });
+  };
+
   const getStatusBadge = (status: string) => {
     const colors = {
       draft: "bg-gray-500",
@@ -238,6 +270,12 @@ export default function AdminPanel() {
         {status.toUpperCase()}
       </Badge>
     );
+  };
+
+  const getWinnerSerial = (winnerId: string | null) => {
+    if (!winnerId) return null;
+    const winnerTicket = tickets.find(t => t.id === winnerId);
+    return winnerTicket?.serial_number || winnerId;
   };
 
   return (
@@ -296,7 +334,7 @@ export default function AdminPanel() {
                                 <div className="flex items-center gap-2 bg-yellow-100 px-3 py-1 rounded">
                                   <Trophy className="w-5 h-5 text-yellow-600" />
                                   <span className="font-bold text-yellow-600">
-                                    Winner Found!
+                                    WINNER: {getWinnerSerial(event.winner_ticket_id)}
                                   </span>
                                 </div>
                               )}
@@ -384,8 +422,7 @@ export default function AdminPanel() {
                                   onClick={() => handleDrawNextQuestion(event.id)}
                                   disabled={
                                     loading ||
-                                    (event.drawn_numbers?.length || 0) >= 90 ||
-                                    !!event.winner_ticket_id
+                                    (event.drawn_numbers?.length || 0) >= 90
                                   }
                                   variant="default"
                                   size="sm"
@@ -393,6 +430,20 @@ export default function AdminPanel() {
                                   <SkipForward className="w-4 h-4 mr-2" />
                                   Izvuci sljedeće pitanje
                                 </Button>
+                                
+                                {event.winner_ticket_id && !continueAfterWinner[event.id] && (
+                                  <Button
+                                    onClick={() => handleContinueAfterWinner(event.id)}
+                                    disabled={loading}
+                                    variant="secondary"
+                                    size="sm"
+                                    className="bg-yellow-500 hover:bg-yellow-600 text-white"
+                                  >
+                                    <Trophy className="w-4 h-4 mr-2" />
+                                    Continue After Winner
+                                  </Button>
+                                )}
+                                
                                 <Button
                                   onClick={() => handlePauseEvent(event.id)}
                                   disabled={loading}
@@ -581,7 +632,7 @@ export default function AdminPanel() {
                                 {eq.questions?.text}
                               </span>
                               <Badge variant="outline">
-                                {eq.questions?.correct_answer}
+                                {eq.questions?.correct_answer ? "DA" : "NE"}
                               </Badge>
                             </div>
                           </div>

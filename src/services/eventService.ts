@@ -234,7 +234,8 @@ export const eventService = {
       .update({ 
         status: "active",
         drawn_numbers: [],
-        current_drawn_number: null
+        current_drawn_number: null,
+        winner_ticket_id: null
       })
       .eq("id", eventId);
     
@@ -356,7 +357,11 @@ export const eventService = {
     return data;
   },
 
-  async checkForWinner(eventId: string) {
+  /**
+   * Check if any ticket has reached 15/15 correct answers and mark as winner
+   * CRITICAL: Only marks the FIRST winner, never changes winner once set
+   */
+  async checkForWinner(eventId: string): Promise<{ winnerFound: boolean; winnerSerial?: string } | null> {
     const { data: event } = await supabase
       .from("events")
       .select("*")
@@ -365,25 +370,58 @@ export const eventService = {
 
     if (!event) return null;
 
-    const drawnNumbers = new Set(event.drawn_numbers || []);
+    // If winner already exists, don't check again (winner is locked)
+    if (event.winner_ticket_id) {
+      return { winnerFound: true, winnerSerial: undefined };
+    }
 
+    // Get all tickets with their questions
     const { data: tickets } = await supabase
       .from("tickets")
-      .select("*, ticket_questions(*)")
+      .select("id, serial_number, ticket_questions(question_number)")
       .eq("event_id", eventId);
 
-    if (!tickets) return null;
+    if (!tickets || tickets.length === 0) return null;
 
+    // Get all player answers for this event
+    const { data: sessions } = await supabase
+      .from("player_sessions")
+      .select("id")
+      .eq("event_id", eventId);
+
+    if (!sessions || sessions.length === 0) return null;
+
+    const sessionIds = sessions.map(s => s.id);
+
+    const { data: answers } = await supabase
+      .from("player_answers")
+      .select("*")
+      .eq("event_id", eventId)
+      .in("session_id", sessionIds);
+
+    if (!answers || answers.length === 0) return null;
+
+    // Check each ticket for 15/15 correct
     for (const ticket of tickets) {
-      const ticketNumbers = ticket.ticket_questions.map((tq: TicketQuestion) => tq.question_number);
-      const allDrawn = ticketNumbers.every(num => drawnNumbers.has(num));
+      const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+      
+      // Get answers for this ticket's questions
+      const ticketAnswers = answers.filter((a: any) =>
+        ticketQuestionNumbers.includes(a.question_number)
+      );
 
-      if (allDrawn) {
+      // Count correct answers
+      const correctCount = ticketAnswers.filter((a: any) => a.is_correct).length;
+
+      // WINNER: 15 out of 15 correct
+      if (correctCount === 15) {
+        // Mark ticket as winner
         await supabase
           .from("tickets")
           .update({ is_winner: true })
           .eq("id", ticket.id);
 
+        // Mark event as finished with winner
         await supabase
           .from("events")
           .update({ 
@@ -392,11 +430,11 @@ export const eventService = {
           })
           .eq("id", eventId);
 
-        return ticket;
+        return { winnerFound: true, winnerSerial: ticket.serial_number };
       }
     }
 
-    return null;
+    return { winnerFound: false };
   },
 
   subscribeToEvent(eventId: string, callback: (payload: any) => void) {
