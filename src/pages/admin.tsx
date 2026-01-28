@@ -34,7 +34,7 @@ export default function AdminPanel() {
       loadEventDetails(selectedEvent.id);
       // CRITICAL: Only load stats when event is finished
       if (selectedEvent.status === "finished") {
-        loadTicketStats(selectedEvent.id, selectedEvent.drawn_numbers || []);
+        loadTicketStats(selectedEvent.id);
       }
     }
   }, [selectedEvent?.id, selectedEvent?.status]);
@@ -47,24 +47,24 @@ export default function AdminPanel() {
 
     const subscription = answerService.subscribeToEventAnswers(selectedEvent.id, () => {
       console.log("[Admin] Answer update detected, reloading stats");
-      loadTicketStats(selectedEvent.id, selectedEvent.drawn_numbers || []);
+      loadTicketStats(selectedEvent.id);
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [selectedEvent?.id, selectedEvent?.status, selectedEvent?.drawn_numbers]);
+  }, [selectedEvent?.id, selectedEvent?.status]);
 
   // CRITICAL: Only poll stats when event is finished
   useEffect(() => {
     if (!selectedEvent || selectedEvent.status !== "finished") return;
 
     const pollInterval = setInterval(() => {
-      loadTicketStats(selectedEvent.id, selectedEvent.drawn_numbers || []);
+      loadTicketStats(selectedEvent.id);
     }, 3000);
 
     return () => clearInterval(pollInterval);
-  }, [selectedEvent?.id, selectedEvent?.status, selectedEvent?.drawn_numbers]);
+  }, [selectedEvent?.id, selectedEvent?.status]);
 
   const loadEvents = async () => {
     try {
@@ -88,10 +88,10 @@ export default function AdminPanel() {
     }
   };
 
-  const loadTicketStats = async (eventId: string, drawnNumbers: number[]) => {
+  const loadTicketStats = async (eventId: string) => {
     try {
       console.log("[Admin] Loading ticket stats for event:", eventId);
-      const stats = await answerService.getEventTicketStats(eventId, drawnNumbers);
+      const stats = await answerService.getEventTicketStats(eventId);
       console.log("[Admin] ✅ Loaded stats for", stats.length, "active tickets");
       setTicketStats(stats);
     } catch (error) {
