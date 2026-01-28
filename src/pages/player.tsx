@@ -9,7 +9,8 @@ import { useToast } from "@/hooks/use-toast";
 
 export default function PlayerScreen() {
   const [serialNumber, setSerialNumber] = useState("");
-  const [ticket, setTicket] = useState<any>(null);
+  const [ticket, setTicket] = useState<any>(null); // Keep for backward compat/single ref
+  const [tickets, setTickets] = useState<any[]>([]); // New multi-ticket state
   const [event, setEvent] = useState<any>(null);
   const [currentQuestion, setCurrentQuestion] = useState<any>(null);
   const [currentQuestionNumber, setCurrentQuestionNumber] = useState<number>(0);
@@ -23,53 +24,77 @@ export default function PlayerScreen() {
 
   // Load from localStorage on mount
   useEffect(() => {
-    const storedSerial = localStorage.getItem("ticket_serial");
-    const storedEventId = localStorage.getItem("event_id");
+    const loadStoredTickets = async () => {
+      const storedEventId = localStorage.getItem("event_id");
+      const storedSerialsJSON = localStorage.getItem("ticket_serials");
+      const storedSingleSerial = localStorage.getItem("ticket_serial");
 
-    if (storedSerial && storedEventId) {
-      console.log("[PLAYER] Auto-rejoining with stored ticket:", storedSerial);
-      autoRejoin(storedSerial, storedEventId);
-    }
+      if (!storedEventId) return;
+
+      let serialsToLoad: string[] = [];
+
+      if (storedSerialsJSON) {
+        try {
+          serialsToLoad = JSON.parse(storedSerialsJSON);
+        } catch (e) {
+          console.error("Failed to parse ticket_serials", e);
+        }
+      } else if (storedSingleSerial) {
+        serialsToLoad = [storedSingleSerial];
+      }
+
+      if (serialsToLoad.length > 0) {
+        console.log("[PLAYER] Auto-rejoining with tickets:", serialsToLoad);
+        
+        try {
+          // Load event first
+          const eventData = await eventService.getEvent(storedEventId);
+          setEvent(eventData);
+          setCurrentQuestionNumber(eventData.current_question_number || 0);
+          lastQuestionNumberRef.current = eventData.current_question_number;
+
+          // Load all tickets
+          const loadedTickets = [];
+          for (const serial of serialsToLoad) {
+            try {
+              const ticketData = await eventService.getTicketBySerial(serial);
+              if (ticketData.event_id === storedEventId) {
+                loadedTickets.push(ticketData);
+              }
+            } catch (err) {
+              console.error(`Failed to load ticket ${serial}`, err);
+            }
+          }
+
+          if (loadedTickets.length > 0) {
+            setTickets(loadedTickets);
+            setTicket(loadedTickets[0]); // Set primary ticket
+            
+            // Load current question if one exists
+            if (eventData.current_question_number) {
+              await loadCurrentQuestion(storedEventId, eventData.current_question_number);
+            }
+          } else {
+            // No valid tickets found
+            localStorage.removeItem("ticket_serials");
+            localStorage.removeItem("ticket_serial");
+            localStorage.removeItem("event_id");
+          }
+        } catch (error) {
+          console.error("[PLAYER] Auto-rejoin failed:", error);
+        }
+      }
+    };
+
+    loadStoredTickets();
   }, []);
 
-  const autoRejoin = async (serial: string, eventId: string) => {
-    try {
-      const ticketData = await eventService.getTicketBySerial(serial);
-      if (ticketData.event_id === eventId) {
-        setTicket(ticketData);
-        const eventData = await eventService.getEvent(eventId);
-        setEvent(eventData);
-        setCurrentQuestionNumber(eventData.current_question_number || 0);
-        lastQuestionNumberRef.current = eventData.current_question_number;
-        
-        // Load current question if one exists
-        if (eventData.current_question_number) {
-          await loadCurrentQuestion(eventId, eventData.current_question_number);
-        }
-      } else {
-        // Invalid data, clear storage
-        localStorage.removeItem("ticket_serial");
-        localStorage.removeItem("event_id");
-      }
-    } catch (error) {
-      console.error("[PLAYER] Auto-rejoin failed:", error);
-      // Invalid ticket, clear storage
-      localStorage.removeItem("ticket_serial");
-      localStorage.removeItem("event_id");
-    }
-  };
-
-  // Real-time subscriptions
+  // Update subscriptions to handle multiple tickets
   useEffect(() => {
     if (!event?.id) {
-      console.log("[PLAYER] No event ID, skipping subscription");
       setSubscriptionStatus("disconnected");
       return;
     }
-
-    console.log("[PLAYER] Setting up subscription for event:", event.id);
-    console.log("[PLAYER] Current question number:", event.current_question_number);
-    console.log("[PLAYER] Listening to: events.current_question_number");
 
     // Subscribe to event changes
     const eventSubscription = eventService.subscribeToEvent(event.id, async (payload) => {
@@ -96,15 +121,10 @@ export default function PlayerScreen() {
       console.log("[PLAYER] Question changed?", questionChanged);
       
       if (questionChanged && updatedEvent.current_question_number) {
-        console.log(`[PLAYER] ✅ Question CHANGED from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
         lastQuestionNumberRef.current = updatedEvent.current_question_number;
-        setCurrentQuestionNumber(updatedEvent.current_question_number); // ← TRIGGER RE-RENDER
-        setAnswered(false); // Reset answered state for new question
-        console.log("[PLAYER] Loading new question...");
+        setCurrentQuestionNumber(updatedEvent.current_question_number);
+        setAnswered(false);
         await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
-        console.log("[PLAYER] Question loaded successfully");
-      } else {
-        console.log("[PLAYER] No question change detected, updating event state only");
       }
       
       setEvent(updatedEvent);
@@ -113,9 +133,14 @@ export default function PlayerScreen() {
 
     // Subscribe to ticket changes (for winner status)
     const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
-      console.log("[PLAYER] Ticket update received:", payload);
-      if (payload.new && payload.new.id === ticket?.id) {
-        setTicket(payload.new);
+      if (payload.new) {
+        setTickets(prevTickets => 
+          prevTickets.map(t => t.id === payload.new.id ? payload.new : t)
+        );
+        // Also update primary ticket if it matches
+        if (ticket?.id === payload.new.id) {
+          setTicket(payload.new);
+        }
       }
     });
 
@@ -125,17 +150,94 @@ export default function PlayerScreen() {
 
     // Load current question on mount if one exists
     if (event.current_question_number) {
-      console.log("[PLAYER] Loading initial question on mount:", event.current_question_number);
       loadCurrentQuestion(event.id, event.current_question_number);
     }
 
     return () => {
-      console.log("[PLAYER] Cleaning up subscriptions");
       eventSubscription.unsubscribe();
       ticketsSubscription.unsubscribe();
       setSubscriptionStatus("disconnected");
     };
-  }, [event?.id, ticket?.id]);
+  }, [event?.id, ticket?.id]); // Note: dependency on ticket.id might trigger re-subs, consider removing if stable
+
+  // Handlers for multi-ticket management
+  const handleAddTicket = async () => {
+    if (!serialNumber.trim()) return;
+    if (tickets.length >= 4) {
+      toast({ title: "Limit Reached", description: "You can only track up to 4 tickets.", variant: "destructive" });
+      return;
+    }
+
+    // Check if already added
+    if (tickets.some(t => t.serial_number === serialNumber.trim())) {
+      toast({ title: "Duplicate", description: "This ticket is already added.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      const ticketData = await eventService.getTicketBySerial(serialNumber);
+      
+      // Verify event match
+      if (event && ticketData.event_id !== event.id) {
+        toast({ title: "Error", description: "This ticket belongs to a different event.", variant: "destructive" });
+        return;
+      }
+
+      // If this is the first ticket (joining)
+      if (!event) {
+        const eventData = await eventService.getEvent(ticketData.event_id);
+        setEvent(eventData);
+        setCurrentQuestionNumber(eventData.current_question_number || 0);
+        lastQuestionNumberRef.current = eventData.current_question_number;
+        localStorage.setItem("event_id", ticketData.event_id);
+        
+        if (eventData.current_question_number) {
+          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
+        }
+      }
+
+      const newTickets = [...tickets, ticketData];
+      setTickets(newTickets);
+      setTicket(newTickets[0]); // Ensure primary ticket is set
+      setSerialNumber(""); // Clear input
+      
+      // Update persistence
+      localStorage.setItem("ticket_serials", JSON.stringify(newTickets.map(t => t.serial_number)));
+      localStorage.setItem("ticket_serial", newTickets[0].serial_number); // Backward compat
+
+      toast({ title: "Success", description: "Ticket added successfully!" });
+    } catch (error) {
+      toast({ title: "Error", description: "Invalid ticket serial number", variant: "destructive" });
+    }
+  };
+
+  const handleRemoveTicket = (ticketId: string) => {
+    const newTickets = tickets.filter(t => t.id !== ticketId);
+    setTickets(newTickets);
+    
+    if (newTickets.length === 0) {
+      handleClearTickets();
+    } else {
+      setTicket(newTickets[0]);
+      localStorage.setItem("ticket_serials", JSON.stringify(newTickets.map(t => t.serial_number)));
+      localStorage.setItem("ticket_serial", newTickets[0].serial_number);
+    }
+  };
+
+  const handleClearTickets = () => {
+    setTickets([]);
+    setTicket(null);
+    setEvent(null);
+    localStorage.removeItem("ticket_serials");
+    localStorage.removeItem("ticket_serial");
+    localStorage.removeItem("event_id");
+    window.location.reload(); // Clean state reset
+  };
+
+  // Update original handleJoin to use handleAddTicket logic logic or redirect
+  const handleJoin = async () => {
+    await handleAddTicket();
+  };
 
   // Timer countdown
   useEffect(() => {
@@ -225,46 +327,6 @@ export default function PlayerScreen() {
     } catch (error) {
       console.error("[PLAYER] Failed to load question:", error);
       setCurrentQuestion(null);
-    }
-  };
-
-  const handleJoin = async () => {
-    if (!serialNumber.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a ticket serial number",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    try {
-      const ticketData = await eventService.getTicketBySerial(serialNumber);
-      setTicket(ticketData);
-      const eventData = await eventService.getEvent(ticketData.event_id);
-      setEvent(eventData);
-      setCurrentQuestionNumber(eventData.current_question_number || 0);
-      lastQuestionNumberRef.current = eventData.current_question_number;
-      
-      // Persist to localStorage
-      localStorage.setItem("ticket_serial", serialNumber);
-      localStorage.setItem("event_id", ticketData.event_id);
-      
-      // Load current question if one exists
-      if (eventData.current_question_number) {
-        await loadCurrentQuestion(eventData.id, eventData.current_question_number);
-      }
-      
-      toast({
-        title: "Success",
-        description: "Joined successfully!"
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Invalid ticket serial number",
-        variant: "destructive"
-      });
     }
   };
 
