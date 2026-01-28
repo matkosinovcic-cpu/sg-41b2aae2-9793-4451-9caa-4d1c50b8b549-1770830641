@@ -59,8 +59,8 @@ export default function AdminPanel() {
         const updated = data.find(e => e.id === selectedEvent.id);
         if (updated) {
           setSelectedEvent(updated);
-          if (updated.current_question_number) {
-            loadCurrentQuestion(updated.id, updated.current_question_number);
+          if (updated.current_drawn_number) {
+            loadCurrentQuestion(updated.id, updated.current_drawn_number);
           }
         }
       }
@@ -211,7 +211,7 @@ export default function AdminPanel() {
       loadEvents();
       toast({
         title: "Success",
-        description: "Event started"
+        description: "Event started - drawn numbers reset"
       });
     } catch (error) {
       toast({
@@ -229,8 +229,8 @@ export default function AdminPanel() {
       const result = await eventService.drawNextQuestion(selectedEvent.id);
       loadEvents();
       toast({
-        title: "Question Drawn",
-        description: `Question ${result.question.question_number}`
+        title: "Number Drawn",
+        description: `Random number: ${result.drawnNumber}`
       });
 
       setTimeout(async () => {
@@ -262,6 +262,9 @@ export default function AdminPanel() {
     };
     return <Badge className={colors[status as keyof typeof colors]}>{status.toUpperCase()}</Badge>;
   };
+
+  const drawnCount = selectedEvent?.drawn_numbers?.length || 0;
+  const allDrawn = drawnCount >= 90;
 
   return (
     <>
@@ -368,7 +371,7 @@ export default function AdminPanel() {
                           <div>
                             <h3 className="font-bold text-lg">{event.name}</h3>
                             <p className="text-sm text-gray-600">
-                              Current Question: {event.current_question_number || "None"}
+                              Drawn: {event.drawn_numbers?.length || 0} / 90
                             </p>
                           </div>
                           {getStatusBadge(event.status)}
@@ -389,16 +392,22 @@ export default function AdminPanel() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-3 gap-4">
                         <div className="p-4 bg-purple-50 rounded-lg text-center">
-                          <p className="text-sm text-gray-600">Current Question</p>
+                          <p className="text-sm text-gray-600">Current Number</p>
                           <p className="text-3xl font-bold text-purple-600">
-                            {selectedEvent.current_question_number || "-"}
+                            {selectedEvent.current_drawn_number || "-"}
                           </p>
                         </div>
                         <div className="p-4 bg-pink-50 rounded-lg text-center">
-                          <p className="text-sm text-gray-600">Status</p>
+                          <p className="text-sm text-gray-600">Drawn Count</p>
                           <p className="text-3xl font-bold text-pink-600">
+                            {drawnCount} / 90
+                          </p>
+                        </div>
+                        <div className="p-4 bg-indigo-50 rounded-lg text-center">
+                          <p className="text-sm text-gray-600">Status</p>
+                          <p className="text-3xl font-bold text-indigo-600">
                             {selectedEvent.status}
                           </p>
                         </div>
@@ -417,10 +426,10 @@ export default function AdminPanel() {
                     <Card className="bg-gradient-to-r from-blue-500 to-purple-600 text-white">
                       <CardHeader>
                         <CardTitle className="text-white text-center text-3xl">
-                          Question #{currentDrawnQuestion.question_number} Drawn
+                          Number #{currentDrawnQuestion.question_number} Drawn
                         </CardTitle>
                         <p className="text-white/90 text-center text-lg">
-                          Draw Index: {currentDrawnQuestion.question_number} / 90
+                          Total Drawn: {drawnCount} / 90
                         </p>
                       </CardHeader>
                       <CardContent>
@@ -517,10 +526,17 @@ export default function AdminPanel() {
                         onClick={handleDrawNextQuestion}
                         className="w-full bg-blue-600 hover:bg-blue-700"
                         size="lg"
-                        disabled={selectedEvent.status !== "active"}
+                        disabled={selectedEvent.status !== "active" || allDrawn}
                       >
-                        <SkipForward className="mr-2" /> Draw Next Question
+                        <SkipForward className="mr-2" /> 
+                        {allDrawn ? "All Numbers Drawn" : "Draw Next Number (Random)"}
                       </Button>
+                      
+                      {allDrawn && selectedEvent.status === "active" && (
+                        <div className="p-4 bg-yellow-100 border border-yellow-400 rounded-lg text-center">
+                          <p className="text-yellow-800 font-bold">All 90 numbers have been drawn!</p>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 </>

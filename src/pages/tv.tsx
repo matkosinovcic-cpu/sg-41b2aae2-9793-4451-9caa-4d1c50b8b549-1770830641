@@ -15,7 +15,7 @@ export default function TVScreen() {
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
   const [pollingActive, setPollingActive] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const lastQuestionNumberRef = useRef<number | null>(null);
+  const lastDrawnNumberRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadEvents();
@@ -54,14 +54,17 @@ export default function TVScreen() {
       console.log("[TV] Real-time event update received:", payload);
       const updatedEvent = payload.new;
       
-      // Check if question number changed
-      const questionChanged = updatedEvent.current_question_number !== lastQuestionNumberRef.current;
+      // Check if drawn number changed
+      const numberChanged = updatedEvent.current_drawn_number !== lastDrawnNumberRef.current;
       
-      if (questionChanged && updatedEvent.current_question_number) {
-        console.log(`[TV] Question changed from ${lastQuestionNumberRef.current} to ${updatedEvent.current_question_number}`);
+      if (numberChanged && updatedEvent.current_drawn_number) {
+        console.log(`[TV] Number changed from ${lastDrawnNumberRef.current} to ${updatedEvent.current_drawn_number}`);
         playBeep('start');
-        lastQuestionNumberRef.current = updatedEvent.current_question_number;
-        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+        lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
+        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
+        
+        // Update drawn numbers set
+        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
       }
       
       setEvent(updatedEvent);
@@ -119,18 +122,21 @@ export default function TVScreen() {
         console.log("[TV-POLL] Fetching event state...");
         const updatedEvent = await eventService.getEvent(selectedEventId);
         
-        // Check if question number changed
-        const questionChanged = updatedEvent.current_question_number !== event.current_question_number;
+        // Check if drawn number changed
+        const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
         
-        if (questionChanged && updatedEvent.current_question_number) {
-          console.log(`[TV-POLL] ✅ Question changed: ${event.current_question_number} → ${updatedEvent.current_question_number}`);
+        if (numberChanged && updatedEvent.current_drawn_number) {
+          console.log(`[TV-POLL] ✅ Number changed: ${event.current_drawn_number} → ${updatedEvent.current_drawn_number}`);
           
-          // Play sound for question change
+          // Play sound for number change
           playBeep('start');
           
           // Update ref and load new question
-          lastQuestionNumberRef.current = updatedEvent.current_question_number;
-          await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
+          lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
+          await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
+          
+          // Update drawn numbers set
+          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
         } else {
           console.log("[TV-POLL] No change detected");
         }
@@ -153,7 +159,7 @@ export default function TVScreen() {
       clearInterval(pollInterval);
       setPollingActive(false);
     };
-  }, [selectedEventId, event?.id, event?.status, event?.current_question_number]);
+  }, [selectedEventId, event?.id, event?.status, event?.current_drawn_number]);
 
   const loadEvents = async () => {
     try {
@@ -168,21 +174,14 @@ export default function TVScreen() {
     try {
       const data = await eventService.getEvent(selectedEventId);
       setEvent(data);
-      lastQuestionNumberRef.current = data.current_question_number;
+      lastDrawnNumberRef.current = data.current_drawn_number;
       
-      // Load all drawn questions for the board
-      if (data.id) {
-        const drawnQuestions = await eventService.getEventQuestions(data.id);
-        const drawnNumbersList = drawnQuestions
-          .filter((eq: EventQuestion) => eq.question_number <= (data.current_question_number || 0))
-          .map((eq: EventQuestion) => eq.question_number)
-          .filter((num: number) => num > 0);
-        setDrawnNumbers(new Set(drawnNumbersList));
-      }
+      // Load drawn numbers from event
+      setDrawnNumbers(new Set(data.drawn_numbers || []));
       
       // Load current question if one exists
-      if (data.current_question_number) {
-        await loadCurrentQuestion(data.id, data.current_question_number);
+      if (data.current_drawn_number) {
+        await loadCurrentQuestion(data.id, data.current_drawn_number);
       }
     } catch (error) {
       console.error("[TV] Failed to load event:", error);
@@ -195,11 +194,6 @@ export default function TVScreen() {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[TV] Question loaded:", data);
       setCurrentQuestion(data);
-      
-      // Add the newly drawn number to the board
-      if (data.question_number) {
-        setDrawnNumbers(prev => new Set([...prev, data.question_number]));
-      }
     } catch (error) {
       console.error("[TV] Failed to load question:", error);
       setCurrentQuestion(null);
@@ -275,7 +269,8 @@ export default function TVScreen() {
         {/* Debug Info */}
         <div className="fixed top-2 right-2 text-xs text-white bg-black/70 px-3 py-2 rounded font-mono z-50 space-y-1 border border-white/20">
           <div>event: {event.id.slice(0, 8)}</div>
-          <div>q: {event.current_question_number || 0}</div>
+          <div>drawn#: {event.current_drawn_number || 0}</div>
+          <div>count: {drawnNumbers.size} / 90</div>
           <div>status: {event.status}</div>
           <div className={`font-bold ${subscriptionStatus === "connected" ? "text-green-400" : "text-red-400"}`}>
             sub: {subscriptionStatus}
@@ -355,7 +350,7 @@ export default function TVScreen() {
                   <div className="text-center space-y-6">
                     <Gamepad2 className="w-32 h-32 text-purple-500 mx-auto animate-pulse" />
                     <h2 className="text-5xl font-bold text-white/50">
-                      Waiting for next question...
+                      Waiting for next number...
                     </h2>
                   </div>
                 )}
@@ -368,7 +363,7 @@ export default function TVScreen() {
                   <div className="grid grid-cols-10 gap-2">
                     {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
                       const isDrawn = drawnNumbers.has(num);
-                      const isCurrent = currentQuestion?.question_number === num;
+                      const isCurrent = event.current_drawn_number === num;
                       
                       return (
                         <div
@@ -399,7 +394,7 @@ export default function TVScreen() {
 
           {/* Footer Stats */}
           <div className="mt-8 grid grid-cols-3 gap-8 text-center text-white/40 text-xl font-bold">
-            <div>90 Questions Total</div>
+            <div>90 Numbers Total</div>
             <div>15 to Win</div>
             <div>Good Luck!</div>
           </div>

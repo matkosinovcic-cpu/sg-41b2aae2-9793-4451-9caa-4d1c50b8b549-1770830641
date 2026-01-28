@@ -11,6 +11,8 @@ export interface Event {
   name: string;
   status: "draft" | "active" | "paused" | "finished";
   current_question_number: number | null;
+  current_drawn_number: number | null;
+  drawn_numbers: number[];
   question_open_until: string | null;
   winner_ticket_id: string | null;
   created_at: string;
@@ -71,7 +73,12 @@ export const eventService = {
   async createEvent(name: string) {
     const { data, error } = await supabase
       .from("events")
-      .insert({ name, status: "draft" })
+      .insert({ 
+        name, 
+        status: "draft",
+        drawn_numbers: [],
+        current_drawn_number: null
+      })
       .select()
       .single();
     
@@ -221,10 +228,14 @@ export const eventService = {
     
     if (deactivateError) throw deactivateError;
 
-    // Then activate the selected event
+    // Then activate the selected event and reset drawn numbers
     const { error } = await supabase
       .from("events")
-      .update({ status: "active" })
+      .update({ 
+        status: "active",
+        drawn_numbers: [],
+        current_drawn_number: null
+      })
       .eq("id", eventId);
     
     if (error) throw error;
@@ -239,38 +250,63 @@ export const eventService = {
 
     if (!event) throw new Error("Event not found");
 
-    // Get next undrawn question by question_number order (which is pre-randomized)
-    const { data: undrawnQuestions } = await supabase
+    const drawnNumbers = event.drawn_numbers || [];
+    
+    // Check if all 90 numbers are drawn
+    if (drawnNumbers.length >= 90) {
+      throw new Error("All numbers drawn");
+    }
+
+    // Find all numbers from 1-90 that haven't been drawn yet
+    const availableNumbers = [];
+    for (let i = 1; i <= 90; i++) {
+      if (!drawnNumbers.includes(i)) {
+        availableNumbers.push(i);
+      }
+    }
+
+    if (availableNumbers.length === 0) {
+      throw new Error("No more numbers available");
+    }
+
+    // Randomly select one number from available numbers
+    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
+    const drawnNumber = availableNumbers[randomIndex];
+
+    // Get the question for this number
+    const { data: questionData } = await supabase
       .from("event_questions")
       .select("*, questions(*)")
       .eq("event_id", eventId)
-      .eq("drawn", false)
-      .order("question_number", { ascending: true })
-      .limit(1);
+      .eq("question_number", drawnNumber)
+      .single();
 
-    if (!undrawnQuestions || undrawnQuestions.length === 0) {
-      throw new Error("No more questions available");
+    if (!questionData) {
+      throw new Error("Question not found for drawn number");
     }
 
-    const nextQuestion = undrawnQuestions[0];
     const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
 
     // Mark question as drawn
     await supabase
       .from("event_questions")
       .update({ drawn: true, drawn_at: new Date().toISOString() })
-      .eq("id", nextQuestion.id);
+      .eq("id", questionData.id);
 
-    // Update event with current question
+    // Update drawn numbers list and current drawn number
+    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+
     await supabase
       .from("events")
       .update({
-        current_question_number: nextQuestion.question_number,
+        drawn_numbers: updatedDrawnNumbers,
+        current_drawn_number: drawnNumber,
+        current_question_number: drawnNumber,
         question_open_until: questionOpenUntil
       })
       .eq("id", eventId);
 
-    return { question: nextQuestion, questionOpenUntil };
+    return { question: questionData, questionOpenUntil, drawnNumber };
   },
 
   async submitAnswer(ticketId: string, questionNumber: number, answer: boolean) {
@@ -312,22 +348,22 @@ export const eventService = {
   },
 
   async checkForWinner(eventId: string) {
+    const { data: event } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+
+    if (!event) return null;
+
+    const drawnNumbers = new Set(event.drawn_numbers || []);
+
     const { data: tickets } = await supabase
       .from("tickets")
       .select("*, ticket_questions(*)")
       .eq("event_id", eventId);
 
     if (!tickets) return null;
-
-    const { data: drawnQuestions } = await supabase
-      .from("event_questions")
-      .select("question_number")
-      .eq("event_id", eventId)
-      .eq("drawn", true);
-
-    if (!drawnQuestions) return null;
-
-    const drawnNumbers = new Set(drawnQuestions.map(q => q.question_number));
 
     for (const ticket of tickets) {
       const ticketNumbers = ticket.ticket_questions.map((tq: TicketQuestion) => tq.question_number);

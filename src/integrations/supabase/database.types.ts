@@ -92,7 +92,9 @@ export type Database = {
       events: {
         Row: {
           created_at: string | null
+          current_drawn_number: number | null
           current_question_number: number | null
+          drawn_numbers: number[] | null
           id: string
           name: string
           question_open_until: string | null
@@ -101,7 +103,9 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          current_drawn_number?: number | null
           current_question_number?: number | null
+          drawn_numbers?: number[] | null
           id?: string
           name: string
           question_open_until?: string | null
@@ -110,7 +114,9 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          current_drawn_number?: number | null
           current_question_number?: number | null
+          drawn_numbers?: number[] | null
           id?: string
           name?: string
           question_open_until?: string | null
