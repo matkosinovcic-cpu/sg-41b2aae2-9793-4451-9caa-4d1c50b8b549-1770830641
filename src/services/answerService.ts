@@ -464,6 +464,281 @@ export const answerService = {
 
   /**
    * Get statistics for all tickets in an event (for admin view)
+   * REUSES THE SAME LOGIC AS PLAYER STATS to ensure consistency
+   * 
+   * This function:
+   * 1. Fetches ALL tickets for the event
+   * 2. Fetches ALL answers for the event
+   * 3. For each ticket, applies the SAME per-ticket stats logic as player view
+   * 4. Returns stats ONLY for tickets with answered > 0
+   */
+  async getEventTicketStatsV2(eventId: string): Promise<{
+    stats: TicketStats[];
+    debug: {
+      eventId: string;
+      totalAnswers: number;
+      totalTickets: number;
+      drawnNumbers: number[];
+    };
+  }> {
+    try {
+      console.log("[getEventTicketStatsV2] 🎯 Fetching ticket stats for event:", eventId);
+
+      // 1. Get the event to check drawn numbers
+      const { data: event, error: eventError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("id", eventId)
+        .single();
+
+      if (eventError) {
+        console.error("[getEventTicketStatsV2] ❌ Error fetching event:", eventError);
+        throw eventError;
+      }
+
+      if (!event) {
+        throw new Error("Event not found");
+      }
+
+      const drawnNumbers = event.drawn_numbers || [];
+      console.log("[getEventTicketStatsV2] 📊 Event has drawn:", drawnNumbers.length, "numbers");
+
+      // 2. Fetch ALL tickets for this event with their question numbers
+      const { data: tickets, error: ticketsError } = await supabase
+        .from("tickets")
+        .select(`
+          id,
+          serial_number,
+          event_id,
+          is_winner,
+          ticket_questions (
+            question_number
+          )
+        `)
+        .eq("event_id", eventId);
+
+      if (ticketsError) {
+        console.error("[getEventTicketStatsV2] ❌ Error fetching tickets:", ticketsError);
+        throw ticketsError;
+      }
+
+      console.log("[getEventTicketStatsV2] 🎫 Found", tickets?.length || 0, "tickets");
+
+      // 3. Fetch ALL answers for this event
+      const { data: allAnswers, error: answersError } = await supabase
+        .from("player_answers")
+        .select("*")
+        .eq("event_id", eventId);
+
+      if (answersError) {
+        console.error("[getEventTicketStatsV2] ❌ Error fetching answers:", answersError);
+        throw answersError;
+      }
+
+      console.log("[getEventTicketStatsV2] 💬 Found", allAnswers?.length || 0, "total answers");
+
+      // CRITICAL: If no answers exist, return empty stats immediately
+      if (!allAnswers || allAnswers.length === 0) {
+        console.log("[getEventTicketStatsV2] ⚠️ No answers found for this event");
+        return {
+          stats: [],
+          debug: {
+            eventId,
+            totalAnswers: 0,
+            totalTickets: tickets?.length || 0,
+            drawnNumbers,
+          },
+        };
+      }
+
+      // 4. Group answers by session_id
+      const answersBySession = new Map<string, typeof allAnswers>();
+      allAnswers.forEach((answer) => {
+        if (!answersBySession.has(answer.session_id)) {
+          answersBySession.set(answer.session_id, []);
+        }
+        answersBySession.get(answer.session_id)!.push(answer);
+      });
+
+      console.log("[getEventTicketStatsV2] 👥 Grouped into", answersBySession.size, "sessions");
+
+      // 5. For each session, find matching tickets and compute stats using PLAYER LOGIC
+      const ticketStatsMap = new Map<string, TicketStats>();
+
+      for (const [sessionId, sessionAnswers] of answersBySession.entries()) {
+        const answeredQuestionNumbers = sessionAnswers.map((a) => a.question_number);
+        console.log(
+          `[getEventTicketStatsV2] 📝 Session ${sessionId.slice(0, 8)}: answered`,
+          answeredQuestionNumbers.length,
+          "questions"
+        );
+
+        // Find tickets that match this session's answer pattern
+        const candidateTickets = tickets?.filter((ticket: any) => {
+          const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+
+          // Count how many answered questions are on this ticket
+          const matchCount = answeredQuestionNumbers.filter((qNum) =>
+            ticketQuestionNumbers.includes(qNum)
+          ).length;
+
+          // Calculate match percentage
+          const matchPercentage =
+            answeredQuestionNumbers.length > 0
+              ? (matchCount / answeredQuestionNumbers.length) * 100
+              : 0;
+
+          // CRITICAL: Use SAME matching logic as before
+          // Require EITHER ≥3 matches OR ≥75% overlap
+          const isStrictMatch = matchCount >= 3 || matchPercentage >= 75;
+
+          // ALWAYS include winner ticket
+          const isWinnerTicket = ticket.is_winner === true || ticket.id === event.winner_ticket_id;
+
+          const shouldInclude = isStrictMatch || isWinnerTicket;
+
+          if (shouldInclude) {
+            console.log(
+              `[getEventTicketStatsV2] ✓ Matched ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} (${matchPercentage.toFixed(0)}%)${isWinnerTicket ? " 🏆 WINNER" : ""}`
+            );
+          }
+
+          return shouldInclude;
+        }) || [];
+
+        if (candidateTickets.length === 0) {
+          console.log(
+            `[getEventTicketStatsV2] ⚠️ Session ${sessionId.slice(0, 8)}: No matching ticket found`
+          );
+          continue;
+        }
+
+        // If multiple candidates, choose best match
+        const bestMatchTicket =
+          candidateTickets.length === 1
+            ? candidateTickets[0]
+            : candidateTickets.reduce((best: any, current: any) => {
+                const bestTicketNumbers = best.ticket_questions.map((tq: any) => tq.question_number);
+                const currentTicketNumbers = current.ticket_questions.map(
+                  (tq: any) => tq.question_number
+                );
+
+                const bestMatchCount = answeredQuestionNumbers.filter((qNum) =>
+                  bestTicketNumbers.includes(qNum)
+                ).length;
+                const currentMatchCount = answeredQuestionNumbers.filter((qNum) =>
+                  currentTicketNumbers.includes(qNum)
+                ).length;
+
+                return currentMatchCount > bestMatchCount ? current : best;
+              });
+
+        // CRITICAL: Apply EXACT SAME PER-TICKET LOGIC as player stats
+        const ticketQuestionNumbers = bestMatchTicket.ticket_questions.map(
+          (tq: any) => tq.question_number
+        );
+
+        // Calculate which questions on this ticket have been drawn
+        const drawnOnTicket = ticketQuestionNumbers.filter((num: number) =>
+          drawnNumbers.includes(num)
+        );
+
+        // Filter answers to only those that:
+        // 1. Are on this ticket's question numbers
+        // 2. Were actually drawn in the event
+        const ticketAnswers = sessionAnswers.filter(
+          (answer) =>
+            ticketQuestionNumbers.includes(answer.question_number) &&
+            drawnOnTicket.includes(answer.question_number)
+        );
+
+        // Count correct answers
+        const correct = ticketAnswers.filter((a) => a.is_correct === true).length;
+        const answered = ticketAnswers.length;
+        const missed = drawnOnTicket.length - answered;
+
+        // Calculate percentage based on drawn_on_ticket (same as player)
+        const percentage =
+          drawnOnTicket.length > 0 ? Math.round((correct / drawnOnTicket.length) * 100) : 0;
+
+        console.log(
+          `[getEventTicketStatsV2] 📈 Ticket ${bestMatchTicket.serial_number}: ${correct}/${drawnOnTicket.length} correct (${percentage}%), answered: ${answered}, missed: ${missed}`
+        );
+
+        // CRITICAL: Only include if this ticket actually has answered questions
+        if (answered > 0) {
+          // If this ticket already has stats from another session, merge them
+          const existingStats = ticketStatsMap.get(bestMatchTicket.serial_number);
+          if (existingStats) {
+            console.log(
+              `[getEventTicketStatsV2] ⚠️ Ticket ${bestMatchTicket.serial_number} matched by multiple sessions - using better stats`
+            );
+            // Keep the stats with more answered questions
+            if (answered > existingStats.answered) {
+              ticketStatsMap.set(bestMatchTicket.serial_number, {
+                ticket_serial: bestMatchTicket.serial_number,
+                correct,
+                answered,
+                drawn_on_ticket: drawnOnTicket.length,
+                missed,
+                total: 15,
+                percentage,
+              });
+            }
+          } else {
+            ticketStatsMap.set(bestMatchTicket.serial_number, {
+              ticket_serial: bestMatchTicket.serial_number,
+              correct,
+              answered,
+              drawn_on_ticket: drawnOnTicket.length,
+              missed,
+              total: 15,
+              percentage,
+            });
+          }
+        } else {
+          console.log(
+            `[getEventTicketStatsV2] ⚠️ Ticket ${bestMatchTicket.serial_number}: Matched pattern but answered=0, excluding`
+          );
+        }
+      }
+
+      // Convert map to array
+      const statsArray = Array.from(ticketStatsMap.values());
+
+      console.log(
+        `[getEventTicketStatsV2] ✅ Returning stats for ${statsArray.length} active tickets`
+      );
+
+      if (statsArray.length > 0) {
+        console.log(
+          `[getEventTicketStatsV2] 📋 Sample:`,
+          statsArray.slice(0, 2).map((t) => ({
+            serial: t.ticket_serial,
+            correct: t.correct,
+            drawn: t.drawn_on_ticket,
+            answered: t.answered,
+          }))
+        );
+      }
+
+      return {
+        stats: statsArray,
+        debug: {
+          eventId,
+          totalAnswers: allAnswers.length,
+          totalTickets: tickets?.length || 0,
+          drawnNumbers,
+        },
+      };
+    } catch (error) {
+      console.error("[getEventTicketStatsV2] ❌ Error:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get statistics for all tickets in an event (for admin view)
    * 
    * CRITICAL LIMITATION:
    * The player_answers table does NOT have a ticket_id column.

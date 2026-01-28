@@ -16,6 +16,12 @@ export default function AdminPanel() {
   const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  const [statsDebug, setStatsDebug] = useState<{
+    eventId: string;
+    totalAnswers: number;
+    totalTickets: number;
+    drawnNumbers: number[];
+  } | null>(null);
   const [newEventName, setNewEventName] = useState("");
   const [ticketCount, setTicketCount] = useState(10);
   const [loading, setLoading] = useState(false);
@@ -29,10 +35,12 @@ export default function AdminPanel() {
     loadEvents();
   }, []);
 
+  // Load event details when selected
   useEffect(() => {
     if (selectedEvent) {
       loadEventDetails(selectedEvent.id);
-      // CRITICAL: Only load stats when event is finished
+      
+      // Load ticket stats if event is finished
       if (selectedEvent.status === "finished") {
         loadTicketStats(selectedEvent.id);
       }
@@ -90,10 +98,11 @@ export default function AdminPanel() {
 
   const loadTicketStats = async (eventId: string) => {
     try {
-      console.log("[Admin] Loading ticket stats for event:", eventId);
-      const stats = await answerService.getEventTicketStats(eventId);
-      console.log("[Admin] ✅ Loaded stats for", stats.length, "active tickets");
-      setTicketStats(stats);
+      const result = await answerService.getEventTicketStatsV2(eventId);
+      setTicketStats(result.stats);
+      setStatsDebug(result.debug);
+      console.log("[Admin] ✅ Loaded ticket stats:", result.stats.length, "active tickets");
+      console.log("[Admin] 🔍 Debug info:", result.debug);
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
     }
@@ -608,6 +617,85 @@ export default function AdminPanel() {
                       </CardContent>
                     </Card>
                   )}
+
+                  {/* Player Statistics */}
+                  <Card>
+                    <CardContent className="pt-6">
+                      <h3 className="text-xl font-bold mb-4">📊 Statistika igrača</h3>
+                      
+                      {/* DEBUG UI - Shows actual data being fetched */}
+                      {statsDebug && (
+                        <div className="mb-4 p-4 bg-gray-100 rounded-lg border-2 border-blue-500">
+                          <div className="text-sm font-mono space-y-1">
+                            <div><strong>🔍 DEBUG INFO:</strong></div>
+                            <div>Event ID: {statsDebug.eventId}</div>
+                            <div>Total Answers in DB: <strong className="text-blue-600">{statsDebug.totalAnswers}</strong></div>
+                            <div>Total Tickets: {statsDebug.totalTickets}</div>
+                            <div>Drawn Numbers: {statsDebug.drawnNumbers.length}</div>
+                            <div>Active Tickets (with answers): <strong className="text-green-600">{ticketStats.length}</strong></div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* FIXED: Check totalAnswers from debug, not ticketStats.length */}
+                      {statsDebug && statsDebug.totalAnswers === 0 ? (
+                        <p className="text-gray-500">Nema odgovora. Nitko nije igrao.</p>
+                      ) : ticketStats.length === 0 ? (
+                        <p className="text-gray-500">Učitavanje statistike...</p>
+                      ) : (
+                        <>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Prikazano: {ticketStats.length} aktivnih ulaznica
+                          </p>
+                          <div className="space-y-3">
+                            {ticketStats.map((stat) => (
+                              <div
+                                key={stat.ticket_serial}
+                                className="p-4 bg-gray-50 rounded-lg border"
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <Badge className="bg-purple-600 text-white">
+                                    {stat.ticket_serial}
+                                  </Badge>
+                                  <span className="text-lg font-bold text-blue-600">
+                                    ✓ {stat.correct} / {stat.drawn_on_ticket}
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-sm">
+                                  <div>
+                                    <span className="text-gray-600">Izvučeno na ulaznici:</span>
+                                    <span className="ml-2 font-semibold">
+                                      {stat.drawn_on_ticket} / {stat.total}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Odgovoreno:</span>
+                                    <span className="ml-2 font-semibold">
+                                      {stat.answered} / {stat.drawn_on_ticket}
+                                    </span>
+                                  </div>
+                                  {stat.missed > 0 && (
+                                    <div>
+                                      <span className="text-gray-600">Propušteno:</span>
+                                      <span className="ml-2 font-semibold text-red-600">
+                                        {stat.missed}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div>
+                                    <span className="text-gray-600">Točnost:</span>
+                                    <span className="ml-2 font-semibold text-green-600">
+                                      {stat.percentage}%
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
 
                   <Card className="bg-white/95 backdrop-blur-sm">
                     <CardHeader>
