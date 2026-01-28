@@ -344,52 +344,102 @@ export default function PlayerScreen() {
           </div>
         </div>
 
-        <div className="container mx-auto max-w-2xl space-y-4">
+        <div className="container mx-auto max-w-6xl space-y-4">
+          {/* Ticket Controls */}
           <Card className="bg-white/95 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-center">
-                <div className="text-sm text-gray-600">Ticket</div>
-                <div className="text-2xl font-black">{ticket.serial_number}</div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {/* Display only the ticket's 15 numbers in 3x5 grid */}
-              <div className="grid grid-cols-5 gap-3">
-                {ticket.ticket_questions
-                  ?.map((tq: any) => tq.question_number)
-                  .sort((a: number, b: number) => a - b)
-                  .map((num: number) => {
-                    const isDrawn = currentQuestionNumber && num <= currentQuestionNumber;
-                    return (
-                      <div
-                        key={num}
-                        className={`aspect-square flex items-center justify-center rounded-lg font-black text-3xl transition-all shadow-md ${
-                          isDrawn
-                            ? "bg-gradient-to-br from-green-500 to-green-600 text-white scale-105 shadow-lg"
-                            : "bg-gradient-to-br from-purple-500 to-purple-600 text-white hover:scale-105"
-                        }`}
-                      >
-                        {num}
-                      </div>
-                    );
-                  })}
-              </div>
-              <div className="mt-4 text-center text-sm text-gray-600">
-                Your ticket has 15 numbers
+            <CardContent className="py-4">
+              <div className="flex items-center gap-4">
+                <div className="flex-1 flex items-center gap-2">
+                  <Input
+                    placeholder="Enter another ticket serial"
+                    value={serialNumber}
+                    onChange={(e) => setSerialNumber(e.target.value)}
+                    onKeyPress={(e) => e.key === "Enter" && handleAddTicket()}
+                    className="text-sm"
+                    disabled={tickets.length >= 4}
+                  />
+                  <Button 
+                    onClick={handleAddTicket} 
+                    disabled={tickets.length >= 4 || !serialNumber.trim()}
+                    size="sm"
+                  >
+                    Add Ticket ({tickets.length}/4)
+                  </Button>
+                </div>
+                <Button 
+                  onClick={handleClearTickets} 
+                  variant="destructive" 
+                  size="sm"
+                >
+                  Clear All
+                </Button>
               </div>
             </CardContent>
           </Card>
 
-          {ticket.is_winner && (
-            <Card className="bg-gradient-to-r from-yellow-400 to-orange-500">
-              <CardContent className="py-8 text-center">
-                <Trophy className="w-24 h-24 text-white mx-auto mb-4" />
-                <h2 className="text-4xl font-black text-white mb-2">WINNER!</h2>
-                <p className="text-white text-xl">Congratulations! You won!</p>
-              </CardContent>
-            </Card>
-          )}
+          {/* Multi-Ticket Grid (2x2 layout for up to 4 tickets) */}
+          <div className={`grid gap-4 ${tickets.length === 1 ? 'grid-cols-1 max-w-2xl mx-auto' : 'grid-cols-1 sm:grid-cols-2'}`}>
+            {tickets.map((ticket) => (
+              <Card key={ticket.id} className="bg-white/95 backdrop-blur-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-center">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-gray-600">Ticket</div>
+                      <Button
+                        onClick={() => handleRemoveTicket(ticket.id)}
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 text-gray-400 hover:text-red-600"
+                      >
+                        ×
+                      </Button>
+                    </div>
+                    <div className={`font-black ${tickets.length === 1 ? 'text-2xl' : 'text-lg'}`}>
+                      {ticket.serial_number}
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {/* Ticket 3x5 grid */}
+                  <div className={`grid grid-cols-5 ${tickets.length === 1 ? 'gap-3' : 'gap-2'}`}>
+                    {ticket.ticket_questions
+                      ?.map((tq: any) => tq.question_number)
+                      .sort((a: number, b: number) => a - b)
+                      .map((num: number) => {
+                        const isDrawn = currentQuestionNumber && num <= currentQuestionNumber;
+                        return (
+                          <div
+                            key={num}
+                            className={`aspect-square flex items-center justify-center rounded-lg font-black transition-all shadow-md ${
+                              tickets.length === 1 ? 'text-3xl' : 'text-xl'
+                            } ${
+                              isDrawn
+                                ? "bg-gradient-to-br from-green-500 to-green-600 text-white scale-105 shadow-lg"
+                                : "bg-gradient-to-br from-purple-500 to-purple-600 text-white hover:scale-105"
+                            }`}
+                          >
+                            {num}
+                          </div>
+                        );
+                      })}
+                  </div>
+                  <div className={`mt-3 text-center ${tickets.length === 1 ? 'text-sm' : 'text-xs'} text-gray-600`}>
+                    {ticket.ticket_questions?.filter((tq: any) => currentQuestionNumber && tq.question_number <= currentQuestionNumber).length || 0} / 15 drawn
+                  </div>
+                  
+                  {/* Winner indicator for this ticket */}
+                  {ticket.is_winner && (
+                    <div className="mt-3 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-lg p-3 text-center">
+                      <Trophy className={`${tickets.length === 1 ? 'w-12 h-12' : 'w-8 h-8'} text-white mx-auto mb-1`} />
+                      <p className={`${tickets.length === 1 ? 'text-xl' : 'text-sm'} font-black text-white`}>WINNER!</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
 
+          {/* Current Question (shown once for all tickets) */}
           {currentQuestion && event?.status === "active" && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardHeader>
