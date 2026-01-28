@@ -18,21 +18,36 @@ export default function TVScreen() {
   const lastDrawnNumberRef = useRef<number | null>(null);
 
   useEffect(() => {
-    loadEvents();
-    
     // Initialize AudioContext with error handling
     try {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      console.log("[TV] ✅ AudioContext initialized");
     } catch (error) {
-      console.warn("[TV] AudioContext initialization failed:", error);
+      console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
     }
-    
-    // Load from localStorage
-    const storedEventId = localStorage.getItem("tv_event_id");
-    if (storedEventId) {
-      console.log("[TV] Auto-selecting stored event:", storedEventId);
-      setSelectedEventId(storedEventId);
-    }
+
+    // Load available events
+    const initializeTV = async () => {
+      try {
+        console.log("[TV] 🚀 Initializing TV display...");
+        await loadEvents();
+        console.log("[TV] ✅ Events loaded successfully");
+        
+        // Auto-select stored event if available
+        const storedEventId = localStorage.getItem("tv_event_id");
+        if (storedEventId) {
+          console.log("[TV] 📌 Auto-selecting stored event:", storedEventId);
+          setSelectedEventId(storedEventId);
+        } else {
+          console.log("[TV] ℹ️ No stored event, user must select");
+        }
+      } catch (error) {
+        console.error("[TV] ❌ Initialization failed:", error);
+        setLoadingError("Failed to initialize TV display. Please refresh the page.");
+      }
+    };
+
+    initializeTV();
   }, []);
 
   // Save selected event to localStorage
@@ -50,8 +65,20 @@ export default function TVScreen() {
 
     console.log("[TV] Setting up subscription for event:", selectedEventId);
 
-    // Initial load
-    loadEventData();
+    // Define async initialization function
+    const initializeEventView = async () => {
+      try {
+        // Initial load - MUST complete before subscription
+        await loadEventData();
+        console.log("[TV] ✅ Initial data loaded, subscription will handle updates");
+      } catch (error) {
+        console.error("[TV] ❌ Failed to initialize event view:", error);
+        // Error already handled by loadEventData
+      }
+    };
+
+    // Start initialization
+    initializeEventView();
 
     // Subscribe to event changes
     const eventSubscription = eventService.subscribeToEvent(selectedEventId, async (payload) => {
@@ -180,7 +207,8 @@ export default function TVScreen() {
 
   const loadEventData = async () => {
     if (!selectedEventId) {
-      console.warn("[TV] loadEventData called without selectedEventId");
+      console.warn("[TV] ⚠️ loadEventData called without selectedEventId");
+      setLoadingError("No event selected");
       return;
     }
 
@@ -223,8 +251,15 @@ export default function TVScreen() {
         stack: error instanceof Error ? error.stack : undefined,
         selectedEventId,
       });
-      setLoadingError("Failed to load event data. Please try selecting another event.");
+      
+      // CRITICAL: Clear the error after showing it briefly, then allow retry
+      setLoadingError(`Failed to load event: ${error instanceof Error ? error.message : 'Unknown error'}. Event ID: ${selectedEventId}`);
       setEvent(null);
+      
+      // Optional: Auto-clear error after 5 seconds to allow retry
+      setTimeout(() => {
+        console.log("[TV] 🔄 Clearing error, user can retry");
+      }, 5000);
     }
   };
 
@@ -285,16 +320,52 @@ export default function TVScreen() {
   if (loadingError) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center p-4">
-        <Card className="w-full max-w-md border-red-500">
+        <Card className="w-full max-w-2xl border-red-500 border-2">
           <CardContent className="pt-6">
-            <h1 className="text-2xl font-bold mb-4 text-center text-red-500">Error</h1>
-            <p className="text-center mb-4">{loadingError}</p>
-            <button 
-              onClick={() => window.location.reload()} 
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-            >
-              Reload Page
-            </button>
+            <h1 className="text-3xl font-bold mb-4 text-center text-red-500">⚠️ TV Display Error</h1>
+            <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
+              <p className="text-center text-red-800 font-mono text-sm whitespace-pre-wrap">
+                {loadingError}
+              </p>
+            </div>
+            <div className="space-y-3">
+              <button 
+                onClick={() => {
+                  setLoadingError(null);
+                  setSelectedEventId("");
+                  localStorage.removeItem("tv_event_id");
+                }} 
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded font-semibold"
+              >
+                ← Back to Event Selection
+              </button>
+              <button 
+                onClick={() => {
+                  setLoadingError(null);
+                  if (selectedEventId) {
+                    loadEventData();
+                  }
+                }} 
+                className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded font-semibold"
+              >
+                🔄 Retry Loading Event
+              </button>
+              <button 
+                onClick={() => window.location.reload()} 
+                className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-3 rounded font-semibold"
+              >
+                ♻️ Reload Page
+              </button>
+            </div>
+            <div className="mt-4 p-3 bg-gray-100 rounded text-xs text-gray-600">
+              <p className="font-semibold mb-1">Troubleshooting:</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Check that the event exists in Admin panel</li>
+                <li>Verify Supabase connection is active</li>
+                <li>Check browser console for detailed error logs</li>
+                <li>Try selecting a different event</li>
+              </ul>
+            </div>
           </CardContent>
         </Card>
       </div>
