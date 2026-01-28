@@ -195,18 +195,6 @@ export const answerService = {
       throw new Error(`Ulaznica ${ticketId} ne postoji za ovaj event`);
     }
 
-    // Check for duplicate
-    const { data: existingAnswer } = await supabase
-      .from("player_answers")
-      .select("*")
-      .eq("session_id", sessionId)
-      .eq("question_number", questionNumber)
-      .eq("ticket_id", ticketId); // CRITICAL: Check per ticket
-
-    if (existingAnswer && existingAnswer.length > 0) {
-      throw new Error("Vec si odgovorio na ovo pitanje za ovu ulaznicu");
-    }
-
     // ROBUST NORMALIZATION
     const normalizedUserAnswer = normalizeYesNo(answerYesNo);
     const normalizedCorrectAnswer = normalizeYesNo(correctAnswer);
@@ -247,17 +235,24 @@ export const answerService = {
       ticketId // NEW: Log ticket_id
     });
 
-    // CRITICAL: Insert with ticket_id for 100% reliable tracking
+    // CRITICAL: Use UPSERT to handle re-answers
+    // INSERT ... ON CONFLICT (event_id, ticket_id, question_number) DO UPDATE
     const { data, error } = await supabase
       .from("player_answers")
-      .insert({
-        session_id: sessionId,
-        event_id: eventId,
-        question_number: questionNumber,
-        answer_yesno: normalizedUserAnswer, // Will be "YES" or "NO"
-        is_correct: isCorrect,
-        ticket_id: ticketId, // NEW: Store exact ticket identifier
-      })
+      .upsert(
+        {
+          session_id: sessionId,
+          event_id: eventId,
+          question_number: questionNumber,
+          answer_yesno: normalizedUserAnswer, // Will be "YES" or "NO"
+          is_correct: isCorrect,
+          ticket_id: ticketId, // NEW: Store exact ticket identifier
+        },
+        {
+          onConflict: "event_id,ticket_id,question_number",
+          ignoreDuplicates: false, // Update if conflict
+        }
+      )
       .select()
       .single();
 
@@ -971,32 +966,26 @@ export const answerService = {
       return null;
     }
 
-    // Check if already answered for this ticket
-    const { data: existingAnswer } = await supabase
-      .from("player_answers")
-      .select("*")
-      .eq("session_id", sessionId)
-      .eq("question_number", questionNumber)
-      .eq("ticket_id", ticketId); // CRITICAL: Check per ticket
-
-    if (existingAnswer && existingAnswer.length > 0) {
-      console.log(`[markUnansweredAsWrong] Question ${questionNumber} already answered for ticket ${ticketId}, skipping`);
-      return null;
-    }
-
-    // CRITICAL: Store as 'NO' with is_correct=false to satisfy CHECK constraint and include ticket_id
+    // CRITICAL: Use UPSERT - if already answered, don't overwrite; if not answered, insert as MISSED
+    // We use ON CONFLICT DO NOTHING to preserve existing answers
     console.log(`[markUnansweredAsWrong] Marking question ${questionNumber} as MISSED for ticket ${ticketId}`);
 
     const { data, error } = await supabase
       .from("player_answers")
-      .insert({
-        session_id: sessionId,
-        event_id: eventId,
-        question_number: questionNumber,
-        answer_yesno: "NO", // Use "NO" to satisfy CHECK constraint
-        is_correct: false,   // Always incorrect for missed answers
-        ticket_id: ticketId, // NEW: Store exact ticket identifier
-      })
+      .upsert(
+        {
+          session_id: sessionId,
+          event_id: eventId,
+          question_number: questionNumber,
+          answer_yesno: "NO", // Use "NO" to satisfy CHECK constraint
+          is_correct: false,   // Always incorrect for missed answers
+          ticket_id: ticketId, // NEW: Store exact ticket identifier
+        },
+        {
+          onConflict: "event_id,ticket_id,question_number",
+          ignoreDuplicates: true, // Don't overwrite if already answered
+        }
+      )
       .select()
       .single();
 

@@ -108,14 +108,14 @@ export default function AdminPanel() {
       setStatsDebug(result.debug);
 
       // Count legacy answers (ticket_id IS NULL)
-      const { data: legacyAnswers, error: legacyError } = await supabase
+      const { count: legacyCount, error: legacyError } = await supabase
         .from("player_answers")
-        .select("id", { count: "exact", head: true })
+        .select("*", { count: "exact", head: true })
         .eq("event_id", eventId)
         .is("ticket_id", null);
 
       if (!legacyError) {
-        setLegacyAnswersCount(legacyAnswers || 0);
+        setLegacyAnswersCount(legacyCount || 0);
       }
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
