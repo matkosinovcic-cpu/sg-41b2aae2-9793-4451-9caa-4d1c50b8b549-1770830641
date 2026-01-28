@@ -572,7 +572,7 @@ export default function PlayerScreen() {
                     ✓ {ticketStats.correct} / {ticketStats.drawnOnTicket} točno ({ticketStats.accuracy}%)
                   </div>
                   <div className="text-sm text-gray-600">
-                    Izvučeno na ovoj ulaznici: {ticketStats.drawnOnTicket} / {ticketData.ticket_questions.length}
+                    Izvučeno na ovoj ulaznici: {ticketStats.drawnOnTicket}
                   </div>
                   <div className="text-xs text-gray-500">
                     Odgovoreno: {ticketStats.answered} / {ticketStats.drawnOnTicket}

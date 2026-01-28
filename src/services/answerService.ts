@@ -96,7 +96,7 @@ export const answerService = {
 
   /**
    * Submit an answer for a question
-   * UPSERT ensures idempotency using UNIQUE constraint (event_id, ticket_id, question_number)
+   * IDEMPOTENT: Uses UPSERT with unique constraint (event_id, ticket_id, question_number)
    */
   async submitAnswer(
     sessionId: string,
@@ -130,7 +130,7 @@ export const answerService = {
     // Step 2: Convert boolean to YES/NO
     const answerYesNo = answerValue ? "YES" : "NO";
 
-    // Step 3: UPSERT with proper conflict target
+    // Step 3: IDEMPOTENT UPSERT with proper conflict target
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -140,8 +140,8 @@ export const answerService = {
           question_number: questionNumber,
           question_id: eventQuestion.question_id,
           answer_yesno: answerYesNo,
-          is_correct: isCorrect,
           ticket_id: ticketSerial,
+          is_correct: isCorrect,
         },
         {
           onConflict: "event_id,ticket_id,question_number",
@@ -188,14 +188,12 @@ export const answerService = {
 
   /**
    * Get player statistics for a specific session and ticket
-   * TWO-PHASE FETCH: Avoids PGRST200 schema cache issues
-   * 
-   * Stats calculation:
-   * - drawnOnTicket = questions on this ticket that were drawn
-   * - answered = unique questions the player answered
+   * NUMBERS-ONLY LOGIC:
+   * - drawn = questions on ticket that were drawn in event
+   * - answered = unique questions player answered
    * - correct = answers matching correct_answer
-   * - missed = drawnOnTicket - answered
-   * - accuracy = (correct / answered) * 100
+   * - missed = drawn - answered
+   * - accuracy = (correct / drawn) * 100
    */
   async getSessionStats(
     sessionId: string,
@@ -208,28 +206,7 @@ export const answerService = {
       ticketSerial,
     });
 
-    // Step 1: Get player answers (no join)
-    const { data: answers, error: answersError } = await supabase
-      .from("player_answers")
-      .select("question_id, question_number, answer_yesno")
-      .eq("session_id", sessionId)
-      .eq("event_id", eventId)
-      .eq("ticket_id", ticketSerial);
-
-    if (answersError) {
-      console.error("[answerService] Failed to load answers:", answersError);
-      return {
-        correct: 0,
-        answered: 0,
-        missed: 0,
-        drawnOnTicket: 0,
-        accuracy: 0,
-      };
-    }
-
-    const playerAnswers = answers || [];
-
-    // Step 2: Get event data
+    // Step 1: Get event drawn numbers
     const { data: event } = await supabase
       .from("events")
       .select("drawn_numbers")
@@ -238,7 +215,7 @@ export const answerService = {
 
     const drawnNumbers = new Set(event?.drawn_numbers || []);
 
-    // Step 3: Get ticket questions
+    // Step 2: Get ticket questions
     const { data: ticket } = await supabase
       .from("tickets")
       .select("id, ticket_questions(question_number)")
@@ -247,21 +224,34 @@ export const answerService = {
 
     const ticketQuestions =
       ticket?.ticket_questions?.map((tq: any) => tq.question_number) || [];
+    
+    // Calculate drawn on this ticket
     const drawnOnTicket = ticketQuestions.filter((qn: number) =>
       drawnNumbers.has(qn)
-    );
+    ).length;
 
-    // Step 4: Get correct answers for answered questions
+    // Step 3: Get player answers (TWO-PHASE FETCH - no joins)
+    const { data: answers } = await supabase
+      .from("player_answers")
+      .select("question_id, question_number, answer_yesno")
+      .eq("session_id", sessionId)
+      .eq("event_id", eventId)
+      .eq("ticket_id", ticketSerial);
+
+    const playerAnswers = answers || [];
+
+    // If no answers, return zeros
     if (playerAnswers.length === 0) {
       return {
         correct: 0,
         answered: 0,
-        missed: Math.max(0, drawnOnTicket.length),
-        drawnOnTicket: drawnOnTicket.length,
+        missed: drawnOnTicket,
+        drawnOnTicket,
         accuracy: 0,
       };
     }
 
+    // Step 4: Get correct answers for answered questions
     const questionIds = playerAnswers.map((a) => a.question_id);
     const { data: questions } = await supabase
       .from("questions")
@@ -272,7 +262,7 @@ export const answerService = {
       (questions || []).map((q: any) => [q.id, q.correct_answer])
     );
 
-    // Step 5: Calculate stats
+    // Step 5: Calculate stats with NUMBERS-ONLY logic
     let correct = 0;
     const uniqueAnswered = new Set<number>();
 
@@ -294,14 +284,16 @@ export const answerService = {
     });
 
     const answered = uniqueAnswered.size;
-    const missed = Math.max(0, drawnOnTicket.length - answered);
-    const accuracy = answered > 0 ? Math.round((correct / answered) * 100) : 0;
+    const missed = Math.max(0, drawnOnTicket - answered);
+    
+    // CRITICAL FIX: accuracy based on DRAWN, not answered
+    const accuracy = drawnOnTicket > 0 ? Math.round((correct / drawnOnTicket) * 100) : 0;
 
     console.log("[answerService] ✅ Stats calculated:", {
       correct,
       answered,
       missed,
-      drawnOnTicket: drawnOnTicket.length,
+      drawnOnTicket,
       accuracy,
     });
 
@@ -309,7 +301,7 @@ export const answerService = {
       correct,
       answered,
       missed,
-      drawnOnTicket: drawnOnTicket.length,
+      drawnOnTicket,
       accuracy,
     };
   },
@@ -454,8 +446,9 @@ export const answerService = {
   },
 
   /**
-   * Get statistics for all tickets in an event (admin view)
-   * MUST MATCH player view exactly
+   * Get statistics for ALL tickets in an event (admin + TV view)
+   * MUST MATCH player view exactly (same logic)
+   * VISIBILITY: Shows ALL tickets, even with no answers
    */
   async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
     console.log("[answerService] Loading event stats for:", eventId);
@@ -469,7 +462,7 @@ export const answerService = {
 
     const drawnNumbers = new Set(event?.drawn_numbers || []);
 
-    // Step 2: Get all tickets
+    // Step 2: Get ALL tickets for event
     const { data: tickets } = await supabase
       .from("tickets")
       .select("serial_number, ticket_questions(question_number)")
@@ -479,7 +472,7 @@ export const answerService = {
       return [];
     }
 
-    // Step 3: Get all player answers (no join)
+    // Step 3: Get ALL player answers for event (TWO-PHASE FETCH)
     const { data: answers } = await supabase
       .from("player_answers")
       .select("ticket_id, question_id, question_number, answer_yesno")
@@ -487,21 +480,26 @@ export const answerService = {
 
     const playerAnswers = answers || [];
 
-    // Step 4: Get correct answers for all answered questions
+    // Step 4: Get correct answers for answered questions
     const questionIds = [...new Set(playerAnswers.map((a: any) => a.question_id))];
-    const { data: questions } = await supabase
-      .from("questions")
-      .select("id, correct_answer")
-      .in("id", questionIds);
+    
+    let correctAnswerMap = new Map();
+    if (questionIds.length > 0) {
+      const { data: questions } = await supabase
+        .from("questions")
+        .select("id, correct_answer")
+        .in("id", questionIds);
 
-    const correctAnswerMap = new Map(
-      (questions || []).map((q: any) => [q.id, q.correct_answer])
-    );
+      correctAnswerMap = new Map(
+        (questions || []).map((q: any) => [q.id, q.correct_answer])
+      );
+    }
 
-    // Step 5: Calculate stats per ticket
+    // Step 5: Calculate stats per ticket (SAME LOGIC AS PLAYER)
     const stats: TicketStats[] = tickets.map((ticket: any) => {
       const ticketNumbers =
         ticket.ticket_questions?.map((tq: any) => tq.question_number) || [];
+      
       const drawnOnTicket = ticketNumbers.filter((qn: number) =>
         drawnNumbers.has(qn)
       ).length;
@@ -531,8 +529,11 @@ export const answerService = {
       });
 
       const missed = Math.max(0, drawnOnTicket - uniqueAnswered);
-      const percentage =
-        uniqueAnswered > 0 ? Math.round((correct / uniqueAnswered) * 100) : 0;
+      
+      // CRITICAL FIX: percentage based on DRAWN, not answered
+      const percentage = drawnOnTicket > 0 
+        ? Math.round((correct / drawnOnTicket) * 100) 
+        : 0;
 
       return {
         ticket_serial: ticket.serial_number,

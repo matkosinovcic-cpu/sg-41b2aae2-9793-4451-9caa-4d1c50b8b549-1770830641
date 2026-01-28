@@ -97,19 +97,8 @@ export default function AdminPanel() {
   const loadTicketStats = async (eventId: string) => {
     try {
       const result = await answerService.getEventTicketStats(eventId);
-      console.log("[Admin] ✅ Loaded ticket stats:", result.length, "active tickets");
+      console.log("[Admin] ✅ Loaded ticket stats:", result.length, "tickets");
       setTicketStats(result);
-      
-      // Count legacy answers (ticket_id IS NULL)
-      const { count: legacyCount, error: legacyError } = await supabase
-        .from("player_answers")
-        .select("*", { count: "exact", head: true })
-        .eq("event_id", eventId)
-        .is("ticket_id", null);
-
-      if (!legacyError) {
-        setLegacyAnswersCount(legacyCount || 0);
-      }
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
     }
@@ -557,17 +546,52 @@ export default function AdminPanel() {
                   {/* CRITICAL: Only show stats when game is finished */}
                   {selectedEvent.status === "finished" && ticketStats.length > 0 && (
                     <>
-                      {/* Debug Info - skriveno po defaultu, aktiviraj samo za troubleshooting */}
-                      {false && statsDebug && (
-                        <div className="mb-4 p-3 bg-gray-100 border rounded text-xs font-mono text-gray-600">
-                          <div className="font-semibold mb-1">🔍 DEBUG INFO:</div>
-                          <div>Event ID: <strong>{statsDebug.eventId}</strong></div>
-                          <div>Total Answers in DB: <strong>{statsDebug.totalAnswers}</strong></div>
-                          <div>Total Tickets: <strong>{statsDebug.totalTickets}</strong></div>
-                          <div>Drawn Numbers: <strong>{statsDebug.drawnNumbers.length}</strong></div>
-                          <div>Active Tickets (with answers): <strong>{ticketStats.length}</strong></div>
-                        </div>
-                      )}
+                      {/* Stats Overview */}
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Ukupno odigranih listića
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">{ticketStats.length}</div>
+                          </CardContent>
+                        </Card>
+                        
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Aktivni igrači
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {ticketStats.filter(s => s.answered > 0).length}
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Ukupna točnost
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {ticketStats.length > 0
+                                ? Math.round(
+                                    (ticketStats.reduce((sum, s) => sum + s.correct, 0) /
+                                      Math.max(1, ticketStats.reduce((sum, s) => sum + s.answered, 0))) *
+                                      100
+                                  )
+                                : 0}
+                              %
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
 
                       {/* Legacy Data Warning */}
                       {legacyAnswersCount > 0 && (
@@ -591,6 +615,7 @@ export default function AdminPanel() {
                         </div>
                       )}
 
+                      {/* CRITICAL: Final Statistics - ONLY when event is finished */}
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {ticketStats.map((stat) => (
                           <Card key={stat.ticket_serial}>
@@ -631,7 +656,7 @@ export default function AdminPanel() {
                                 </div>
 
                                 <div className="text-xs text-gray-500 mt-2 pt-2 border-t">
-                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket} / {stat.drawn_on_ticket}
+                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket}
                                 </div>
                               </div>
                             </CardContent>
@@ -643,9 +668,7 @@ export default function AdminPanel() {
 
                   {selectedEvent.status === "finished" && ticketStats.length === 0 && (
                     <p className="text-center text-gray-500">
-                      {statsDebug && statsDebug.totalAnswers === 0
-                        ? "Nema odgovora. Nitko nije igrao."
-                        : "Učitavanje statistike..."}
+                      Nema odgovora. Nitko nije igrao.
                     </p>
                   )}
 
