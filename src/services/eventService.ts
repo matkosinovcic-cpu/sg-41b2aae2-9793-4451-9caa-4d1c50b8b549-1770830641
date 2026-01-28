@@ -412,5 +412,16 @@ export const eventService = {
     
     if (error) throw error;
     return data as EventQuestion;
+  },
+
+  async getEventQuestions(eventId: string) {
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("*, questions(*)")
+      .eq("event_id", eventId)
+      .order("question_number", { ascending: true });
+    
+    if (error) throw error;
+    return data as EventQuestion[];
   }
 };

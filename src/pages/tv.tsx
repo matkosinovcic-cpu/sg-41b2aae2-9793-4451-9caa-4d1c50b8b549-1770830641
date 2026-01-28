@@ -10,6 +10,7 @@ export default function TVScreen() {
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
+  const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [subscriptionStatus, setSubscriptionStatus] = useState<"disconnected" | "connected">("disconnected");
   const [pollingActive, setPollingActive] = useState(false);
@@ -169,6 +170,16 @@ export default function TVScreen() {
       setEvent(data);
       lastQuestionNumberRef.current = data.current_question_number;
       
+      // Load all drawn questions for the board
+      if (data.id) {
+        const drawnQuestions = await eventService.getEventQuestions(data.id);
+        const drawnNumbersList = drawnQuestions
+          .filter((eq: EventQuestion) => eq.question_number <= (data.current_question_number || 0))
+          .map((eq: EventQuestion) => eq.question_number)
+          .filter((num: number) => num > 0);
+        setDrawnNumbers(new Set(drawnNumbersList));
+      }
+      
       // Load current question if one exists
       if (data.current_question_number) {
         await loadCurrentQuestion(data.id, data.current_question_number);
@@ -184,6 +195,11 @@ export default function TVScreen() {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[TV] Question loaded:", data);
       setCurrentQuestion(data);
+      
+      // Add the newly drawn number to the board
+      if (data.question_number) {
+        setDrawnNumbers(prev => new Set([...prev, data.question_number]));
+      }
     } catch (error) {
       console.error("[TV] Failed to load question:", error);
       setCurrentQuestion(null);
@@ -294,55 +310,90 @@ export default function TVScreen() {
               </div>
             </div>
           ) : (
-            /* Game Display */
-            <div className="flex-1 flex flex-col justify-center">
-              {currentQuestion ? (
-                <div className="grid grid-cols-12 gap-12 items-center">
-                  {/* Question Number */}
-                  <div className="col-span-3">
-                    <div className="aspect-square rounded-full bg-purple-600 flex items-center justify-center border-8 border-purple-400 shadow-[0_0_50px_rgba(147,51,234,0.5)]">
-                      <span className="text-9xl font-black">{currentQuestion.question_number}</span>
+            /* Game Display with Board */
+            <div className="flex-1 flex gap-8">
+              {/* Left: Current Question */}
+              <div className="flex-1 flex flex-col justify-center">
+                {currentQuestion ? (
+                  <div className="space-y-6">
+                    {/* Question Number Circle */}
+                    <div className="flex justify-center mb-6">
+                      <div className="w-48 h-48 rounded-full bg-purple-600 flex items-center justify-center border-8 border-purple-400 shadow-[0_0_50px_rgba(147,51,234,0.5)]">
+                        <span className="text-8xl font-black">{currentQuestion.question_number}</span>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Question Text */}
-                  <div className="col-span-9 space-y-8">
-                    <div className="bg-white/10 backdrop-blur-md rounded-3xl p-12 border border-white/20">
-                      <h2 className="text-6xl font-bold leading-tight text-shadow">
+                    {/* Question Text */}
+                    <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 border border-white/20">
+                      <h2 className="text-5xl font-bold leading-tight text-shadow text-center">
                         {currentQuestion.questions?.text}
                       </h2>
                     </div>
 
                     {/* Timer */}
                     {timeRemaining > 0 ? (
-                      <div className="flex items-center gap-6">
-                        <Clock className="w-16 h-16 text-green-400 animate-pulse" />
-                        <div className="h-8 flex-1 bg-gray-800 rounded-full overflow-hidden">
+                      <div className="flex items-center gap-4">
+                        <Clock className="w-12 h-12 text-green-400 animate-pulse" />
+                        <div className="h-6 flex-1 bg-gray-800 rounded-full overflow-hidden">
                           <div 
                             className="h-full bg-gradient-to-r from-green-500 to-green-300 transition-all duration-100 ease-linear"
                             style={{ width: `${(timeRemaining / 10) * 100}%` }}
                           />
                         </div>
-                        <span className="text-6xl font-black font-mono text-green-400 min-w-[3ch]">
+                        <span className="text-5xl font-black font-mono text-green-400 min-w-[2ch]">
                           {timeRemaining}
                         </span>
                       </div>
-                    ) : (
-                      <div className="bg-red-500/20 border border-red-500/50 rounded-2xl p-6 text-center">
-                        <p className="text-4xl font-bold text-red-400">TIME'S UP</p>
+                    ) : currentQuestion ? (
+                      <div className="bg-red-500/20 border border-red-500/50 rounded-2xl p-4 text-center">
+                        <p className="text-3xl font-bold text-red-400">TIME'S UP</p>
                       </div>
-                    )}
+                    ) : null}
+                  </div>
+                ) : (
+                  /* Waiting State */
+                  <div className="text-center space-y-6">
+                    <Gamepad2 className="w-32 h-32 text-purple-500 mx-auto animate-pulse" />
+                    <h2 className="text-5xl font-bold text-white/50">
+                      Waiting for next question...
+                    </h2>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Full 1-90 Number Board */}
+              <div className="w-[500px] flex flex-col">
+                <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                  <h3 className="text-2xl font-bold text-center mb-4 text-purple-300">TOMBOLA BOARD</h3>
+                  <div className="grid grid-cols-10 gap-2">
+                    {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
+                      const isDrawn = drawnNumbers.has(num);
+                      const isCurrent = currentQuestion?.question_number === num;
+                      
+                      return (
+                        <div
+                          key={num}
+                          className={`
+                            aspect-square flex items-center justify-center rounded-lg font-bold text-lg
+                            transition-all duration-300
+                            ${isCurrent 
+                              ? 'bg-yellow-400 text-black scale-110 shadow-[0_0_20px_rgba(250,204,21,0.8)] animate-pulse' 
+                              : isDrawn 
+                                ? 'bg-green-500 text-white shadow-[0_0_10px_rgba(34,197,94,0.5)]' 
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                            }
+                          `}
+                        >
+                          {num}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-4 text-center text-sm text-white/40">
+                    {drawnNumbers.size} / 90 drawn
                   </div>
                 </div>
-              ) : (
-                /* Waiting State */
-                <div className="text-center space-y-8">
-                  <Gamepad2 className="w-48 h-48 text-purple-500 mx-auto animate-pulse" />
-                  <h2 className="text-6xl font-bold text-white/50">
-                    Waiting for next question...
-                  </h2>
-                </div>
-              )}
+              </div>
             </div>
           )}
 
