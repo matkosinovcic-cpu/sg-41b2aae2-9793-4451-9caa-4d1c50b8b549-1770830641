@@ -470,8 +470,9 @@ export const answerService = {
    * We must infer ticket ownership from answer patterns, which is imperfect.
    * 
    * STRICT MATCHING RULES (to minimize false positives):
-   * - Require at least 5 answered questions from the ticket, OR
+   * - Require at least 3 answered questions from the ticket, OR
    * - Require at least 75% of session's answers to be from that ticket
+   * - ALWAYS include winner tickets (marked with is_winner = true)
    * - Only count tickets where we have HIGH confidence (strict threshold)
    * - Filter out tickets with 0 actual answered questions
    * 
@@ -482,14 +483,16 @@ export const answerService = {
     try {
       console.log("[getEventTicketStats] 🎯 Fetching ticket stats for event:", eventId);
 
-      // 1. Get the event to check drawn numbers
+      // 1. Get the event to check drawn numbers and winner
       const event = await this.getEvent(eventId);
       if (!event) {
         throw new Error("Event not found");
       }
 
       const drawnNumbers = event.drawn_numbers || [];
+      const winnerTicketId = event.winner_ticket_id;
       console.log("[getEventTicketStats] 📊 Event has drawn:", drawnNumbers.length, "numbers");
+      console.log("[getEventTicketStats] 🏆 Winner ticket ID:", winnerTicketId || "None");
 
       // 2. Fetch all tickets for this event with their question numbers
       const { data: tickets, error: ticketsError } = await supabase
@@ -498,6 +501,7 @@ export const answerService = {
           id,
           serial_number,
           event_id,
+          is_winner,
           ticket_questions (
             question_number
           )
@@ -524,6 +528,12 @@ export const answerService = {
 
       console.log("[getEventTicketStats] 💬 Found", allAnswers?.length || 0, "total answers");
 
+      // CRITICAL: If no answers exist, return empty array immediately
+      if (!allAnswers || allAnswers.length === 0) {
+        console.log("[getEventTicketStats] ⚠️ No answers found for this event");
+        return [];
+      }
+
       // Group answers by session_id
       const answersBySession = new Map<string, typeof allAnswers>();
       allAnswers?.forEach((answer) => {
@@ -543,11 +553,13 @@ export const answerService = {
         console.log(
           `[getEventTicketStats] 📝 Session ${sessionId.slice(0, 8)}: answered`,
           answeredQuestionNumbers.length,
-          "questions"
+          "questions:",
+          answeredQuestionNumbers.slice(0, 5),
+          answeredQuestionNumbers.length > 5 ? "..." : ""
         );
 
         // Find tickets where the answer pattern strongly matches
-        // CRITICAL: Use VERY STRICT matching to avoid false positives
+        // CRITICAL: Use STRICT matching to avoid false positives, BUT include winner always
         const candidateTickets = tickets?.filter((ticket: any) => {
           const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
 
@@ -557,14 +569,24 @@ export const answerService = {
           ).length;
 
           // Calculate match percentage
-          const matchPercentage = (matchCount / answeredQuestionNumbers.length) * 100;
+          const matchPercentage = answeredQuestionNumbers.length > 0 
+            ? (matchCount / answeredQuestionNumbers.length) * 100 
+            : 0;
 
-          // ULTRA STRICT: Require BOTH:
-          // 1. At least 5 questions match (prevents small-sample false positives), OR
-          // 2. At least 75% of answered questions are on this ticket (very high confidence)
-          const isHighConfidenceMatch = matchCount >= 5 || matchPercentage >= 75;
+          // CRITICAL: ALWAYS include winner ticket
+          const isWinnerTicket = ticket.is_winner === true || ticket.id === winnerTicketId;
 
-          if (isHighConfidenceMatch) {
+          // STRICT: Require EITHER:
+          // 1. At least 3 questions match (prevents single-question false positives), OR
+          // 2. At least 75% of answered questions are on this ticket (very high confidence), OR
+          // 3. This is the winner ticket (always include)
+          const isHighConfidenceMatch = matchCount >= 3 || matchPercentage >= 75 || isWinnerTicket;
+
+          if (isWinnerTicket && isHighConfidenceMatch) {
+            console.log(
+              `[getEventTicketStats] 🏆 WINNER TICKET: ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%)`
+            );
+          } else if (isHighConfidenceMatch) {
             console.log(
               `[getEventTicketStats] ✓ HIGH CONFIDENCE: Ticket ${ticket.serial_number}: ${matchCount}/${answeredQuestionNumbers.length} match (${matchPercentage.toFixed(0)}%)`
             );
@@ -579,14 +601,14 @@ export const answerService = {
 
         if (candidateTickets.length === 0) {
           console.log(
-            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: No HIGH CONFIDENCE ticket match found (all candidates below 75% threshold)`
+            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: No HIGH CONFIDENCE ticket match found`
           );
           continue;
         }
 
         if (candidateTickets.length > 1) {
           console.warn(
-            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: Multiple HIGH CONFIDENCE matches found (${candidateTickets.length} tickets) - using best match only`
+            `[getEventTicketStats] ⚠️ Session ${sessionId.slice(0, 8)}: Multiple HIGH CONFIDENCE matches found (${candidateTickets.length} tickets) - using best match`
           );
         }
 
@@ -615,7 +637,7 @@ export const answerService = {
         );
 
         console.log(
-          `[getEventTicketStats] Ticket ${bestMatchTicket.serial_number}: ${drawnOnTicket.length} / 15 numbers drawn`
+          `[getEventTicketStats] 📊 Ticket ${bestMatchTicket.serial_number}: ${drawnOnTicket.length} / 15 numbers drawn`
         );
 
         // Filter answers to only those that:
@@ -637,7 +659,7 @@ export const answerService = {
           drawnOnTicket.length > 0 ? Math.round((correct / drawnOnTicket.length) * 100) : 0;
 
         console.log(
-          `[getEventTicketStats] Ticket ${bestMatchTicket.serial_number}: ${correct}/${drawnOnTicket.length} correct (${percentage}%), answered: ${answered}, missed: ${missed}`
+          `[getEventTicketStats] 📈 Ticket ${bestMatchTicket.serial_number}: ${correct}/${drawnOnTicket.length} correct (${percentage}%), answered: ${answered}, missed: ${missed}`
         );
 
         // CRITICAL: Only include if this ticket actually has answered questions
@@ -662,9 +684,17 @@ export const answerService = {
       const trulyActiveTickets = activeTicketStats.filter((stat) => stat.answered > 0);
 
       console.log(
-        `[getEventTicketStats] ✅ Returning stats for ${trulyActiveTickets.length} HIGH CONFIDENCE active tickets (≥5 matches OR ≥75% overlap, and answered > 0)`
+        `[getEventTicketStats] ✅ Returning stats for ${trulyActiveTickets.length} active tickets (with answered > 0)`
       );
-      console.log(`[getEventTicketStats] Sample:`, trulyActiveTickets.slice(0, 2));
+      
+      if (trulyActiveTickets.length > 0) {
+        console.log(`[getEventTicketStats] 📋 Sample tickets:`, trulyActiveTickets.slice(0, 3).map(t => ({
+          serial: t.ticket_serial,
+          correct: t.correct,
+          drawn: t.drawn_on_ticket,
+          answered: t.answered
+        })));
+      }
 
       return trulyActiveTickets;
     } catch (error) {
