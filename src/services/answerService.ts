@@ -1,7 +1,13 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
+import { 
+  computeTicketStats, 
+  computeEventStats, 
+  getTicketDetailedResults as getDetailedResultsHelper,
+  type TicketStats
+} from "@/lib/statsHelper";
 
-type PlayerAnswer = Database["public"]["Tables"]["player_answers"]["Row"];
+export type PlayerAnswer = Database["public"]["Tables"]["player_answers"]["Row"];
 
 export interface PlayerSession {
   id: string;
@@ -227,188 +233,59 @@ export const answerService = {
   },
 
   /**
-   * Get session stats for a specific ticket (NUMBERS-ONLY logic)
+   * Get stats for a player session (specific ticket)
+   * Uses statsHelper for accurate, deduplicated stats
    */
   async getSessionStats(
     sessionId: string,
     eventId: string,
     ticketSerial: string
   ): Promise<SessionStats> {
-    // 1. Get answers for this ticket
-    const { data: answers } = await supabase
-      .from("player_answers")
-      .select("is_correct")
-      .eq("event_id", eventId)
-      .eq("ticket_id", ticketSerial);
-
-    const correct = answers?.filter(a => a.is_correct).length || 0;
-    const answered = answers?.length || 0;
-
-    // 2. Get drawn count for this ticket
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("ticket_questions(question_number)")
-      .eq("serial_number", ticketSerial)
-      .single();
-
-    const { data: event } = await supabase
-      .from("events")
-      .select("drawn_numbers")
-      .eq("id", eventId)
-      .single();
-
-    const drawnNumbers = new Set(event?.drawn_numbers || []);
+    const ticketStats = await computeTicketStats(eventId, ticketSerial);
     
-    // Count how many questions on this ticket have been drawn
-    const drawnOnTicket = ticket?.ticket_questions?.filter(tq => 
-      drawnNumbers.has(tq.question_number)
-    ).length || 0;
-
-    // 3. Calculate stats
-    const missed = Math.max(0, drawnOnTicket - answered);
-    
-    // Accuracy based on DRAWN count (not answered count)
-    const accuracy = drawnOnTicket > 0 
-      ? Math.min(100, Math.round((correct / drawnOnTicket) * 100))
-      : 0;
-
-    return { correct, answered, missed, drawnOnTicket, accuracy };
+    return {
+      correct: ticketStats.correctCount,
+      answered: ticketStats.answeredCount,
+      missed: ticketStats.missedCount,
+      drawnOnTicket: ticketStats.drawnCount,
+      accuracy: ticketStats.accuracyPercent,
+    };
   },
 
   /**
-   * Get aggregated stats for Admin/TV (NUMBERS-ONLY logic)
+   * Get stats for all active tickets in an event (Admin/TV view)
+   * Uses statsHelper for accurate, deduplicated stats
    */
-  async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
-    // 1. Get all answers
-    const { data: answers } = await supabase
-      .from("player_answers")
-      .select("ticket_id, is_correct")
-      .eq("event_id", eventId);
-
-    // Group by ticket
-    const statsByTicket = new Map<string, { correct: number; answered: number }>();
-    answers?.forEach(a => {
-      const current = statsByTicket.get(a.ticket_id) || { correct: 0, answered: 0 };
-      current.answered++;
-      if (a.is_correct) current.correct++;
-      statsByTicket.set(a.ticket_id, current);
-    });
-
-    // 2. Get all tickets and event drawn numbers
-    const { data: tickets } = await supabase
-      .from("tickets")
-      .select("serial_number, ticket_questions(question_number)")
-      .eq("event_id", eventId);
-
-    const { data: event } = await supabase
-      .from("events")
-      .select("drawn_numbers")
-      .eq("id", eventId)
-      .single();
-
-    const drawnNumbers = new Set(event?.drawn_numbers || []);
-
-    // 3. Build result
-    return (tickets || []).map(t => {
-      const drawnOnTicket = t.ticket_questions.filter(tq => 
-        drawnNumbers.has(tq.question_number)
-      ).length;
-
-      const stats = statsByTicket.get(t.serial_number) || { correct: 0, answered: 0 };
-      
-      const missed = Math.max(0, drawnOnTicket - stats.answered);
-      const percentage = drawnOnTicket > 0
-        ? Math.min(100, Math.round((stats.correct / drawnOnTicket) * 100))
-        : 0;
-
-      return {
-        ticket_serial: t.serial_number,
-        correct: stats.correct,
-        answered: stats.answered,
-        missed,
-        drawn_on_ticket: drawnOnTicket,
-        percentage
-      };
-    });
+  async getEventTicketStats(eventId: string): Promise<Array<{
+    ticket_serial: string;
+    correct: number;
+    answered: number;
+    drawnOnTicket: number;
+    accuracy: number;
+  }>> {
+    const eventStats = await computeEventStats(eventId);
+    
+    return eventStats.ticketStats.map(ts => ({
+      ticket_serial: ts.ticketSerial,
+      correct: ts.correctCount,
+      answered: ts.answeredCount,
+      drawnOnTicket: ts.drawnCount,
+      accuracy: ts.accuracyPercent,
+    }));
   },
 
   /**
-   * Get detailed per-question results for a ticket
+   * Get detailed question-by-question results for a ticket
+   * Uses statsHelper for accurate data
    */
   async getTicketDetailedResults(
-    sessionId: string, // Kept for interface compat, unused
-    ticket: any,
+    sessionId: string,
+    ticket: { serial_number: string; event_id: string },
     eventId: string,
     drawnNumbers: number[]
   ): Promise<TicketDetailedResults> {
-    const drawnSet = new Set(drawnNumbers);
-    const ticketNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
-
-    // Get questions text and correct answer
-    // We need to fetch event_questions to get question_ids, then questions
-    const { data: eventQuestions } = await supabase
-      .from("event_questions")
-      .select("question_number, question_id")
-      .eq("event_id", eventId)
-      .in("question_number", ticketNumbers);
-
-    const qMap = new Map();
-    if (eventQuestions) {
-        const qIds = eventQuestions.map(eq => eq.question_id);
-        const { data: questions } = await supabase
-            .from("questions")
-            .select("id, text, correct_answer")
-            .in("id", qIds);
-        
-        questions?.forEach(q => qMap.set(q.id, q));
-    }
-    
-    // Map question_number -> question data
-    const numToQuestion = new Map();
-    eventQuestions?.forEach(eq => {
-        const q = qMap.get(eq.question_id);
-        if (q) numToQuestion.set(eq.question_number, q);
-    });
-
-    // Get player answers
-    const { data: answers } = await supabase
-      .from("player_answers")
-      .select("question_number, answer_yesno, is_correct")
-      .eq("event_id", eventId)
-      .eq("ticket_id", ticket.serial_number);
-
-    const answersMap = new Map();
-    answers?.forEach(a => answersMap.set(a.question_number, a));
-
-    const results = ticketNumbers.map((num: number) => {
-      const question = numToQuestion.get(num);
-      const answer = answersMap.get(num);
-      const isDrawn = drawnSet.has(num);
-
-      let result: "Točno" | "Netočno" | "Propušteno" | "Nije izvučeno" = "Nije izvučeno";
-      
-      if (isDrawn) {
-        if (answer) {
-            result = answer.is_correct ? "Točno" : "Netočno";
-        } else {
-            result = "Propušteno";
-        }
-      }
-
-      return {
-        question_number: num,
-        question_text: question?.text || "Unknown question",
-        correct_answer: question?.correct_answer || "?",
-        player_answer: answer ? answer.answer_yesno : "Nije odgovoreno",
-        is_correct: answer ? answer.is_correct : null,
-        result
-      };
-    }).sort((a: any, b: any) => a.question_number - b.question_number);
-
-    return {
-      ticket_serial: ticket.serial_number,
-      questions: results
-    };
+    const results = await getDetailedResultsHelper(eventId, ticket.serial_number);
+    return results;
   },
 
   /**
