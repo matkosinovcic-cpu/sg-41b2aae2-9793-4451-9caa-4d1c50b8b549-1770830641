@@ -46,8 +46,10 @@ export function SEO({
 }: SEOProps) {
   return (
     <Head>
-      <title>{title}</title>
-      <meta name="description" content={description} />
+      <title>{title ? `${title} | Pitalica Skitalica` : "Pitalica Skitalica"}</title>
+      <meta name="description" content={description || "Interaktivna kviz igra"} />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <meta name="robots" content="noindex, nofollow" />
       <link rel="icon" href="/favicon.ico" />
 
       {/* Open Graph */}

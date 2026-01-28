@@ -22,7 +22,7 @@ export interface TicketStats {
   ticket_serial: string;
   correct: number;
   answered: number;
-  drawn: number;
+  drawn_on_ticket: number;
   missed: number;
   total: number;
   percentage: number;
@@ -31,7 +31,6 @@ export interface TicketStats {
 export interface SessionStats {
   total_correct: number;
   total_answered: number;
-  total_drawn: number;
   total_questions: number;
   ticket_stats: TicketStats[];
 }
