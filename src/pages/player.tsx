@@ -513,10 +513,23 @@ export default function PlayerScreen() {
               {drawnCount} / 15 izvučeno
             </div>
             {/* CRITICAL: Only show stats when game is finished */}
-            {ticketStats && (
+            {event?.status === "finished" && ticketStats && (
               <>
-                <div className="text-lg font-bold text-blue-600">
-                  ✓ {ticketStats.correct} / {ticketStats.total} točno ({ticketStats.percentage}%)
+                <div className="text-center mb-2 space-y-1">
+                  <div className="text-lg font-bold text-blue-600">
+                    ✓ {ticketStats.correct} / {ticketStats.drawn_on_ticket} točno ({ticketStats.percentage}%)
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    Izvučeno na ovoj ulaznici: {ticketStats.drawn_on_ticket} / {ticketStats.total}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Odgovoreno: {ticketStats.answered} / {ticketStats.drawn_on_ticket}
+                  </div>
+                  {ticketStats.missed > 0 && (
+                    <div className="text-xs text-red-600">
+                      Propušteno: {ticketStats.missed}
+                    </div>
+                  )}
                 </div>
                 {details && (
                   <Button
@@ -701,10 +714,18 @@ export default function PlayerScreen() {
             <Card className="bg-white/95 backdrop-blur-sm mb-4">
               <CardContent className="p-6 text-center space-y-3">
                 <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
-                  {getFinalMessage()}
+                  Hvala na sudjelovanju!
                 </h2>
                 <div className="text-2xl font-bold text-gray-700">
                   Ukupno točno: {stats.total_correct} / {stats.total_questions}
+                </div>
+                {stats.total_questions > 0 && (
+                  <div className="text-lg text-gray-600">
+                    Točnost: {Math.round((stats.total_correct / stats.total_questions) * 100)}%
+                  </div>
+                )}
+                <div className="text-sm text-gray-500 mt-2">
+                  Izvučeno u igri: {stats.total_questions} / 90 pitanja
                 </div>
               </CardContent>
             </Card>

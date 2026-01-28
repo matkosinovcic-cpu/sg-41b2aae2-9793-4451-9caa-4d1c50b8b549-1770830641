@@ -272,95 +272,92 @@ export const answerService = {
   /**
    * Calculate statistics for a player session
    * CRITICAL RULES:
-   * - Total is ALWAYS 15 per ticket
-   * - Only count answers for questions that were DRAWN AND are ON this ticket
-   * - Missed = drawn - answered (computed, not stored)
-   * - Correct = count where is_correct === true AND answer_yesno is DA or NE
-   * - Use actual drawn_numbers array from event (random draw support)
+   * - Per-ticket: Shows correct/drawn on that specific ticket
+   * - Overall totalDrawn: Total questions drawn in the EVENT (not per-ticket)
+   * - Overall totalCorrect: Sum of correct answers across all player's tickets
    */
   async getSessionStats(
     sessionId: string,
-    tickets: Array<{ id: string; serial_number: string; ticket_questions: Array<{ question_number: number }> }>,
-    drawnNumbers: number[]
+    tickets: Array<{ 
+      id: string; 
+      serial_number: string; 
+      ticket_questions: Array<{ question_number: number }> 
+    }>,
+    drawnNumbers: number[] // CRITICAL: Actual drawn list from event
   ): Promise<SessionStats> {
-    console.log(`[getSessionStats] Calculating stats for session ${sessionId} with ${tickets.length} tickets`);
-    console.log(`[getSessionStats] Drawn numbers:`, drawnNumbers);
+    console.log(`[getSessionStats] Session ${sessionId} with ${tickets.length} tickets`);
+    console.log(`[getSessionStats] Total drawn in event:`, drawnNumbers.length);
 
     const answers = await this.getSessionAnswers(sessionId);
-    console.log(`[getSessionStats] Found ${answers.length} total answers for session`);
-
-    // CRITICAL: Only count explicit correct answers (DA or NE, never null)
-    const totalCorrect = answers.filter((a) => 
-      a.is_correct === true && 
-      (a.answer_yesno === "DA" || a.answer_yesno === "NE")
-    ).length;
-    const totalAnswered = answers.length;
-    
-    // Total drawn across event
-    const totalDrawn = drawnNumbers.length;
-    
-    // Total questions = sum of all ticket questions (each ticket has exactly 15)
-    const totalQuestions = tickets.length * 15;
+    console.log(`[getSessionStats] Found ${answers.length} total answers`);
 
     const ticketStats: TicketStats[] = tickets.map((ticket) => {
-      const ticketQuestionNumbers = ticket.ticket_questions.map((tq) => tq.question_number);
+      const ticketNumbers = ticket.ticket_questions.map(tq => tq.question_number);
 
-      // CRITICAL: Only consider questions that are BOTH:
-      // 1. On this ticket (in ticketQuestionNumbers)
-      // 2. Have been drawn (in drawnNumbers)
-      const drawnOnTicket = ticketQuestionNumbers.filter(num => drawnNumbers.includes(num));
-      const drawnCount = drawnOnTicket.length;
-
-      // CRITICAL: Only count answers for questions that were drawn AND on this ticket
-      const ticketAnswers = answers.filter((answer) =>
+      // CRITICAL: Only count numbers that were ACTUALLY DRAWN (random draw support)
+      const drawnOnTicket = ticketNumbers.filter(num => drawnNumbers.includes(num));
+      
+      // CRITICAL: Only count answers for THIS TICKET's drawn numbers
+      const ticketAnswers = answers.filter(answer =>
         drawnOnTicket.includes(answer.question_number)
       );
 
-      // CRITICAL: Only count explicit correct answers (DA or NE)
-      const correct = ticketAnswers.filter((a) => 
-        a.is_correct === true && 
-        (a.answer_yesno === "DA" || a.answer_yesno === "NE")
+      // CRITICAL: Only explicit correct answers (never MISSED)
+      const correct = ticketAnswers.filter(a => 
+        a.is_correct === true
       ).length;
       
       const answered = ticketAnswers.length;
       
-      // CRITICAL: Missed = drawn on ticket but not answered
-      const missed = drawnCount - answered;
+      // CRITICAL: Missed = drawn but not answered
+      const missed = drawnOnTicket.length - answered;
       
-      // CRITICAL: Each ticket ALWAYS has exactly 15 questions
+      // CRITICAL: Total is ALWAYS 15 (all ticket numbers)
       const total = 15;
       
-      // Percentage based on drawn questions (if drawn > 0)
-      const percentage = drawnCount > 0 ? Math.round((correct / drawnCount) * 100) : 0;
+      // CRITICAL: Percentage based on DRAWN numbers on this ticket
+      const percentage = drawnOnTicket.length > 0 
+        ? Math.round((correct / drawnOnTicket.length) * 100) 
+        : 0;
 
       console.log(`[getSessionStats] Ticket ${ticket.serial_number}:`, {
-        drawnOnTicket: drawnCount,
-        correct,
+        ticketNumbers: ticketNumbers.length,
+        drawnOnTicket: drawnOnTicket.length,
         answered,
+        correct,
         missed,
-        total,
-        percentage,
-        correctAnswers: ticketAnswers
-          .filter(a => a.is_correct === true)
-          .map(a => ({ q: a.question_number, ans: a.answer_yesno }))
+        percentage: `${percentage}%`
       });
 
       return {
         ticket_serial: ticket.serial_number,
         correct,
         answered,
-        drawn: drawnCount,
         missed,
         total,
+        drawn_on_ticket: drawnOnTicket.length,
         percentage,
       };
+    });
+
+    // CRITICAL: Overall stats are EVENT-SCOPED for totalDrawn, PLAYER-SCOPED for totalCorrect
+    // totalDrawn = TOTAL questions drawn in the EVENT (same as admin shows)
+    // totalCorrect = sum of correct answers across ALL this player's tickets
+    const totalCorrect = ticketStats.reduce((sum, t) => sum + t.correct, 0);
+    const totalAnswered = ticketStats.reduce((sum, t) => sum + t.answered, 0);
+    const totalDrawn = drawnNumbers.length; // CRITICAL: Total drawn in EVENT, not per-ticket sum
+
+    console.log(`[getSessionStats] Overall stats:`, {
+      totalCorrect,
+      totalAnswered,
+      totalDrawn: `${totalDrawn} (event total)`,
+      tickets: ticketStats.length
     });
 
     return {
       total_correct: totalCorrect,
       total_answered: totalAnswered,
-      total_drawn: totalDrawn,
-      total_questions: totalQuestions,
+      total_questions: totalDrawn, // CRITICAL: EVENT-scoped drawn count
       ticket_stats: ticketStats,
     };
   },
