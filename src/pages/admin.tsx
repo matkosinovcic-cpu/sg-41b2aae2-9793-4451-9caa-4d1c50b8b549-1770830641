@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy, CheckCircle } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function AdminPanel() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -22,6 +23,9 @@ export default function AdminPanel() {
     totalTickets: number;
     drawnNumbers: number[];
   } | null>(null);
+
+  const [legacyAnswersCount, setLegacyAnswersCount] = useState<number>(0);
+  const [isDeletingLegacy, setIsDeletingLegacy] = useState(false);
   const [newEventName, setNewEventName] = useState("");
   const [ticketCount, setTicketCount] = useState(10);
   const [loading, setLoading] = useState(false);
@@ -99,10 +103,20 @@ export default function AdminPanel() {
   const loadTicketStats = async (eventId: string) => {
     try {
       const result = await answerService.getEventTicketStatsV2(eventId);
+      console.log("[Admin] ✅ Loaded ticket stats:", result.stats.length, "active tickets");
       setTicketStats(result.stats);
       setStatsDebug(result.debug);
-      console.log("[Admin] ✅ Loaded ticket stats:", result.stats.length, "active tickets");
-      console.log("[Admin] 🔍 Debug info:", result.debug);
+
+      // Count legacy answers (ticket_id IS NULL)
+      const { data: legacyAnswers, error: legacyError } = await supabase
+        .from("player_answers")
+        .select("id", { count: "exact", head: true })
+        .eq("event_id", eventId)
+        .is("ticket_id", null);
+
+      if (!legacyError) {
+        setLegacyAnswersCount(legacyAnswers || 0);
+      }
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
     }
@@ -293,6 +307,30 @@ export default function AdminPanel() {
     if (!winnerId) return null;
     const winnerTicket = tickets.find(t => t.id === winnerId);
     return winnerTicket?.serial_number || winnerId;
+  };
+
+  const handleClearLegacyAnswers = async () => {
+    if (!selectedEvent) return;
+    
+    if (!confirm(`Obrisat ću ${legacyAnswersCount} zastarjelih odgovora za ovaj event. Ova radnja se ne može poništiti. Nastavi?`)) {
+      return;
+    }
+
+    setIsDeletingLegacy(true);
+    try {
+      const result = await answerService.deleteLegacyAnswers(selectedEvent.id);
+      console.log("[Admin] ✅ Deleted legacy answers:", result.count);
+      
+      // Reload stats
+      await loadTicketStats(selectedEvent.id);
+      
+      alert(`✅ Obrisano ${result.count} zastarjelih odgovora.`);
+    } catch (error) {
+      console.error("[Admin] Failed to delete legacy answers:", error);
+      alert("❌ Greška pri brisanju zastarjelih odgovora.");
+    } finally {
+      setIsDeletingLegacy(false);
+    }
   };
 
   return (
@@ -625,14 +663,37 @@ export default function AdminPanel() {
                       
                       {/* DEBUG UI - Shows actual data being fetched */}
                       {statsDebug && (
-                        <div className="mb-4 p-4 bg-gray-100 rounded-lg border-2 border-blue-500">
-                          <div className="text-sm font-mono space-y-1">
-                            <div><strong>🔍 DEBUG INFO:</strong></div>
-                            <div>Event ID: {statsDebug.eventId}</div>
-                            <div>Total Answers in DB: <strong className="text-blue-600">{statsDebug.totalAnswers}</strong></div>
-                            <div>Total Tickets: {statsDebug.totalTickets}</div>
-                            <div>Drawn Numbers: {statsDebug.drawnNumbers.length}</div>
-                            <div>Active Tickets (with answers): <strong className="text-green-600">{ticketStats.length}</strong></div>
+                        <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded text-sm">
+                          <div className="font-semibold mb-2">🔍 DEBUG INFO:</div>
+                          <div>Event ID: <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">{statsDebug.eventId}</code></div>
+                          <div>Total Answers in DB: <strong>{statsDebug.totalAnswers}</strong></div>
+                          <div>Total Tickets: <strong>{statsDebug.totalTickets}</strong></div>
+                          <div>Drawn Numbers: <strong>{statsDebug.drawnNumbers.length}</strong></div>
+                          <div>Active Tickets (with answers): <strong>{ticketStats.length}</strong></div>
+                        </div>
+                      )}
+
+                      {/* Legacy Data Warning */}
+                      {legacyAnswersCount > 0 && (
+                        <div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded">
+                          <div className="flex items-start gap-3">
+                            <div className="flex-shrink-0 text-2xl">⚠️</div>
+                            <div className="flex-1">
+                              <div className="font-semibold text-yellow-900 dark:text-yellow-100 mb-1">
+                                Zastarjeli podaci ({legacyAnswersCount} odgovora)
+                              </div>
+                              <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-3">
+                                Ovaj event ima odgovore iz starog sustava koji ne sadrže ticket_id. 
+                                Ovi odgovori se ne prikazuju u statistici jer nije moguće pouzdano odrediti kojoj ulaznici pripadaju.
+                              </p>
+                              <button
+                                onClick={handleClearLegacyAnswers}
+                                disabled={isDeletingLegacy}
+                                className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-sm rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isDeletingLegacy ? "Brišem..." : "Obriši zastarjele odgovore"}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )}

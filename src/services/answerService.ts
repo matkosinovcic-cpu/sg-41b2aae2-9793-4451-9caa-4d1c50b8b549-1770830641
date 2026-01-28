@@ -926,6 +926,32 @@ export const answerService = {
   },
 
   /**
+   * Delete legacy answers (with NULL ticket_id) for an event
+   * CRITICAL: Only deletes rows where ticket_id IS NULL
+   * This removes unreliable data from before the schema update
+   */
+  async deleteLegacyAnswers(eventId: string): Promise<{ count: number }> {
+    console.log(`[deleteLegacyAnswers] Deleting legacy answers for event ${eventId}`);
+    
+    const { data, error } = await supabase
+      .from("player_answers")
+      .delete()
+      .eq("event_id", eventId)
+      .is("ticket_id", null)
+      .select();
+
+    if (error) {
+      console.error("[deleteLegacyAnswers] Error:", error);
+      throw error;
+    }
+
+    const count = data?.length || 0;
+    console.log(`[deleteLegacyAnswers] ✅ Deleted ${count} legacy answer rows`);
+    
+    return { count };
+  },
+
+  /**
    * Mark a question as unanswered (missed) when time expires
    * CRITICAL: Since CHECK constraint only allows 'YES' or 'NO', we store missed as 'NO' with is_correct=false
    * CRITICAL: Now includes ticket_id for 100% reliable stats tracking
