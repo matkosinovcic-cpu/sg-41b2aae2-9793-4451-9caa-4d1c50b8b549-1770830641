@@ -464,13 +464,13 @@ export const answerService = {
 
   /**
    * Get statistics for all tickets in an event (for admin view)
-   * CRITICAL: Only show stats for tickets that have been joined by a session
+   * CRITICAL: Infer ticket ownership by matching answer patterns to ticket question numbers
+   * CRITICAL: Only show tickets that have been actively played (answers exist)
    * CRITICAL: Use actual drawn_numbers array from event
-   * CRITICAL: Missed questions computed as drawn - answered
    */
   async getEventTicketStats(eventId: string, drawnNumbers: number[]): Promise<TicketStats[]> {
     console.log(`[getEventTicketStats] Loading stats for event ${eventId}`);
-    console.log(`[getEventTicketStats] Drawn numbers:`, drawnNumbers);
+    console.log(`[getEventTicketStats] Drawn numbers:`, drawnNumbers.length);
 
     // Get all tickets for this event
     const { data: tickets, error: ticketsError } = await supabase
@@ -485,6 +485,10 @@ export const answerService = {
       .eq("event_id", eventId);
 
     if (ticketsError) throw ticketsError;
+    if (!tickets || tickets.length === 0) {
+      console.log("[getEventTicketStats] No tickets found");
+      return [];
+    }
 
     // Get all sessions for this event
     const { data: sessions, error: sessionsError } = await supabase
@@ -493,68 +497,128 @@ export const answerService = {
       .eq("event_id", eventId);
 
     if (sessionsError) throw sessionsError;
-
-    const sessionIds = sessions.map((s) => s.id);
-
-    if (sessionIds.length === 0) {
-      console.log("[getEventTicketStats] No sessions found, returning empty stats");
+    if (!sessions || sessions.length === 0) {
+      console.log("[getEventTicketStats] No sessions found");
       return [];
     }
 
+    const sessionIds = sessions.map((s) => s.id);
+
     // Get all answers for all sessions in this event
-    const { data: answers, error: answersError } = await supabase
+    const { data: allAnswers, error: answersError } = await supabase
       .from("player_answers")
       .select("*")
       .eq("event_id", eventId)
       .in("session_id", sessionIds);
 
     if (answersError) throw answersError;
+    if (!allAnswers || allAnswers.length === 0) {
+      console.log("[getEventTicketStats] No answers found");
+      return [];
+    }
 
-    console.log(`[getEventTicketStats] Found ${answers.length} total answers across ${sessionIds.length} sessions`);
+    console.log(`[getEventTicketStats] Found ${allAnswers.length} total answers across ${sessionIds.length} sessions`);
 
-    // CRITICAL: Calculate stats per ticket
-    const ticketStats: TicketStats[] = tickets.map((ticket: any) => {
-      const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+    // CRITICAL: Infer ticket ownership by matching answer patterns
+    // For each session, find which ticket(s) they're playing based on answered question numbers
+    const sessionTicketMap: Map<string, string[]> = new Map(); // session_id -> ticket_id[]
 
-      // CRITICAL: Only consider questions that are BOTH drawn AND on this ticket
-      const drawnOnTicket = ticketQuestionNumbers.filter((num: number) => drawnNumbers.includes(num));
-      const drawnCount = drawnOnTicket.length;
+    for (const session of sessions) {
+      const sessionAnswers = allAnswers.filter((a: any) => a.session_id === session.id);
+      const answeredQuestionNumbers = sessionAnswers.map((a: any) => a.question_number);
 
-      // CRITICAL: Get answers that match THIS ticket's drawn question numbers
-      const ticketAnswers = answers.filter((answer: any) =>
-        drawnOnTicket.includes(answer.question_number)
-      );
+      if (answeredQuestionNumbers.length === 0) continue;
 
-      // CRITICAL: Only count explicit correct answers (DA or NE)
-      const correct = ticketAnswers.filter((a: any) => 
-        a.is_correct === true && 
-        (a.answer_yesno === "DA" || a.answer_yesno === "NE")
-      ).length;
-      
-      const answered = ticketAnswers.length;
-      
-      // CRITICAL: Missed = drawn on ticket but not answered
-      const missed = drawnCount - answered;
-      
-      // CRITICAL: Each ticket ALWAYS has exactly 15 questions
-      const total = 15;
-      const percentage = drawnCount > 0 ? Math.round((correct / drawnCount) * 100) : 0;
+      // Find tickets where answered questions match ticket's question numbers
+      const matchedTickets = tickets.filter((ticket: any) => {
+        const ticketQuestionNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+        
+        // A ticket matches this session if at least 1 answered question is on the ticket
+        // (Player could have multiple tickets, so we match all that have overlap)
+        const hasMatch = answeredQuestionNumbers.some(qNum => 
+          ticketQuestionNumbers.includes(qNum)
+        );
+        
+        return hasMatch;
+      });
 
-      return {
-        ticket_serial: ticket.serial_number,
-        correct,
-        answered,
-        drawn_on_ticket: drawnCount,
-        missed,
-        total,
-        percentage,
-      };
-    });
+      if (matchedTickets.length > 0) {
+        sessionTicketMap.set(
+          session.id,
+          matchedTickets.map((t: any) => t.id)
+        );
+      }
+    }
 
-    // CRITICAL: Only return tickets that have at least one answer
-    const activeTicketStats = ticketStats.filter((stat) => stat.answered > 0);
+    console.log(`[getEventTicketStats] Mapped ${sessionTicketMap.size} sessions to tickets`);
+
+    // Calculate stats for each ticket that has been played
+    const ticketStatsMap: Map<string, TicketStats> = new Map();
+
+    for (const [sessionId, ticketIds] of sessionTicketMap.entries()) {
+      const sessionAnswers = allAnswers.filter((a: any) => a.session_id === sessionId);
+
+      for (const ticketId of ticketIds) {
+        const ticket = tickets.find((t: any) => t.id === ticketId);
+        if (!ticket) continue;
+
+        const ticketQuestionNumbers = (ticket as any).ticket_questions.map((tq: any) => tq.question_number);
+
+        // CRITICAL: Only consider questions that are BOTH drawn AND on this ticket
+        const drawnOnTicket = ticketQuestionNumbers.filter((num: number) => drawnNumbers.includes(num));
+        const drawnCount = drawnOnTicket.length;
+
+        // CRITICAL: Get answers that match THIS ticket's drawn question numbers
+        const ticketAnswers = sessionAnswers.filter((answer: any) =>
+          drawnOnTicket.includes(answer.question_number)
+        );
+
+        // CRITICAL: Only count explicit correct answers
+        const correct = ticketAnswers.filter((a: any) => 
+          a.is_correct === true
+        ).length;
+        
+        const answered = ticketAnswers.length;
+        const missed = drawnCount - answered;
+        const total = 15;
+        
+        const percentage = drawnCount > 0 
+          ? Math.round((correct / drawnCount) * 100) 
+          : 0;
+
+        // Aggregate if ticket already has stats from another session (multi-session scenario)
+        const existingStats = ticketStatsMap.get(ticketId);
+        if (existingStats) {
+          // Sum up stats across sessions for this ticket
+          ticketStatsMap.set(ticketId, {
+            ticket_serial: (ticket as any).serial_number,
+            correct: existingStats.correct + correct,
+            answered: existingStats.answered + answered,
+            drawn_on_ticket: drawnCount, // Same for all sessions
+            missed: existingStats.missed + missed,
+            total: 15,
+            percentage: drawnCount > 0 
+              ? Math.round(((existingStats.correct + correct) / drawnCount) * 100)
+              : 0,
+          });
+        } else {
+          ticketStatsMap.set(ticketId, {
+            ticket_serial: (ticket as any).serial_number,
+            correct,
+            answered,
+            drawn_on_ticket: drawnCount,
+            missed,
+            total,
+            percentage,
+          });
+        }
+      }
+    }
+
+    const activeTicketStats = Array.from(ticketStatsMap.values());
     
-    console.log(`[getEventTicketStats] Returning stats for ${activeTicketStats.length} active tickets (out of ${tickets.length} total)`);
+    console.log(`[getEventTicketStats] Returning stats for ${activeTicketStats.length} active tickets`);
+    console.log(`[getEventTicketStats] Sample:`, activeTicketStats.slice(0, 2));
 
     return activeTicketStats;
   },
