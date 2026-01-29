@@ -220,6 +220,22 @@ export const eventService = {
   },
 
   async startEvent(eventId: string) {
+    // ✅ CRITICAL: Re-fetch event to check current status (SOURCE OF TRUTH)
+    const { data: currentEvent } = await supabase
+      .from("events")
+      .select("status")
+      .eq("id", eventId)
+      .single();
+
+    if (!currentEvent) {
+      throw new Error("Event not found");
+    }
+
+    // ✅ STATE MACHINE: FINISHED events cannot be restarted (use reset instead)
+    if (currentEvent.status === "finished") {
+      throw new Error("Event je završen i ne može se ponovno pokrenuti. Koristi 'Reset Event' akciju.");
+    }
+
     // First, deactivate ALL other active events
     const { error: deactivateError } = await supabase
       .from("events")
@@ -229,21 +245,26 @@ export const eventService = {
     
     if (deactivateError) throw deactivateError;
 
-    // Then activate the selected event and reset drawn numbers
+    // Then activate the selected event
+    // Only clear drawn numbers if starting from DRAFT (not PAUSED)
+    const updates: any = { status: "active" };
+    
+    if (currentEvent.status === "draft") {
+      updates.drawn_numbers = [];
+      updates.current_drawn_number = null;
+      updates.winner_ticket_id = null;
+    }
+
     const { error } = await supabase
       .from("events")
-      .update({ 
-        status: "active",
-        drawn_numbers: [],
-        current_drawn_number: null,
-        winner_ticket_id: null
-      })
+      .update(updates)
       .eq("id", eventId);
     
     if (error) throw error;
   },
 
   async drawNextQuestion(eventId: string) {
+    // ✅ CRITICAL: Re-fetch event from DB (SOURCE OF TRUTH)
     const { data: event } = await supabase
       .from("events")
       .select("*")
@@ -252,16 +273,24 @@ export const eventService = {
 
     if (!event) throw new Error("Event not found");
 
-    // CRITICAL: Check if winner exists and continue mode is OFF
-    if (event.winner_ticket_id && !event.continue_after_winner) {
-      throw new Error("Pobjednik pronađen. Omogući 'Nastavi izvlačenje' za nastavak.");
+    // ✅ STATE MACHINE: Enforce strict status rules
+    if (event.status === "finished") {
+      throw new Error("Event je završen. Za novo izvlačenje koristi 'Reset Event' u admin panelu.");
+    }
+
+    if (event.status === "paused") {
+      throw new Error("Event je pauziran. Klikni 'Nastavi' za nastavak.");
+    }
+
+    if (event.status !== "active") {
+      throw new Error(`Event mora biti aktivan za izvlačenje (trenutni status: ${event.status})`);
     }
 
     const drawnNumbers = event.drawn_numbers || [];
     
     // Check if all 90 numbers are drawn
     if (drawnNumbers.length >= 90) {
-      throw new Error("All numbers drawn");
+      throw new Error("Svih 90 brojeva je izvučeno");
     }
 
     // Find all numbers from 1-90 that haven't been drawn yet
@@ -273,7 +302,7 @@ export const eventService = {
     }
 
     if (availableNumbers.length === 0) {
-      throw new Error("No more numbers available");
+      throw new Error("Nema više dostupnih brojeva");
     }
 
     // Randomly select one number from available numbers
@@ -289,7 +318,7 @@ export const eventService = {
       .single();
 
     if (!questionData) {
-      throw new Error("Question not found for drawn number");
+      throw new Error("Pitanje nije pronađeno za izvučeni broj");
     }
 
     const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
@@ -300,7 +329,7 @@ export const eventService = {
       .update({ drawn: true, drawn_at: new Date().toISOString() })
       .eq("id", questionData.id);
 
-    // CRITICAL: Update drawn numbers list and current drawn number
+    // Update drawn numbers list and current drawn number
     const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
     await supabase
@@ -315,7 +344,7 @@ export const eventService = {
 
     console.log("[drawNextQuestion] ✅ Drew number:", drawnNumber, "Total drawn:", updatedDrawnNumbers.length);
 
-    // CRITICAL: Check for winner after drawing number
+    // ✅ CRITICAL: Check for winner after drawing (auto-sets FINISHED if winner found)
     await this.checkForWinner(eventId);
 
     return { question: questionData, questionOpenUntil, drawnNumber };
@@ -372,6 +401,7 @@ export const eventService = {
    * Check if any ticket has all its 15 numbers drawn and mark as winner
    * CRITICAL: Winner is first ticket with all 15 numbers drawn
    * CRITICAL: Only marks the FIRST winner, never changes winner once set
+   * CRITICAL: Auto-sets event status to FINISHED when winner found
    */
   async checkForWinner(eventId: string): Promise<{ winnerFound: boolean; winnerSerial?: string } | null> {
     console.log("[checkForWinner] Checking for winner in event:", eventId);
@@ -417,7 +447,7 @@ export const eventService = {
           .update({ is_winner: true })
           .eq("id", ticket.id);
 
-        // Mark event as finished with winner
+        // ✅ CRITICAL: Auto-set event status to FINISHED when winner found
         await supabase
           .from("events")
           .update({ 
@@ -425,6 +455,8 @@ export const eventService = {
             winner_ticket_id: ticket.id 
           })
           .eq("id", eventId);
+
+        console.log("[checkForWinner] ✅ Event status set to FINISHED");
 
         return { winnerFound: true, winnerSerial: ticket.serial_number };
       }
