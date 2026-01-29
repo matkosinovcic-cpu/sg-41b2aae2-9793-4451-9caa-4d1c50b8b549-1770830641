@@ -34,7 +34,8 @@ interface TicketData {
 interface AggregatedStats {
   ticket_stats: Array<SessionStats & { ticket_serial: string }>;
   total_correct: number;
-  total_questions: number;
+  total_answered: number;    // Sum of answered across all tickets
+  drawn_in_game: number;     // Event-level: unique drawn questions (NOT per-ticket sum)
 }
 
 export default function PlayerScreen() {
@@ -261,13 +262,16 @@ export default function PlayerScreen() {
 
       // Aggregate results
       const totalCorrect = results.reduce((sum, r) => sum + r.correct, 0);
-      // Total drawn questions across all tickets (can overlap, but sum gives total "opportunities")
-      const totalQuestions = results.reduce((sum, r) => sum + r.drawnOnTicket, 0);
+      const totalAnswered = results.reduce((sum, r) => sum + r.answered, 0);
+      
+      // ✅ FIX: Use event-level drawn count, NOT per-ticket sum
+      const drawnInGame = event.drawn_numbers?.length || 0;
 
       setStats({
         ticket_stats: results,
         total_correct: totalCorrect,
-        total_questions: totalQuestions
+        total_answered: totalAnswered,
+        drawn_in_game: drawnInGame,
       });
     } catch (error) {
       console.error("[Player] Failed to load stats:", error);
@@ -761,15 +765,15 @@ export default function PlayerScreen() {
                   Hvala na sudjelovanju!
                 </h2>
                 <div className="text-2xl font-bold text-gray-700">
-                  Ukupno točno: {stats.total_correct} / {stats.total_questions}
+                  Ukupno točno: {stats.total_correct} / {stats.total_answered}
                 </div>
-                {stats.total_questions > 0 && (
+                {stats.total_answered > 0 && (
                   <div className="text-lg text-gray-600">
-                    Točnost: {Math.round((stats.total_correct / stats.total_questions) * 100)}%
+                    Točnost: {Math.round((stats.total_correct / stats.total_answered) * 100)}%
                   </div>
                 )}
                 <div className="text-sm text-gray-500 mt-2">
-                  Izvučeno u igri: {stats.total_questions} / 90 pitanja
+                  Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
                 </div>
               </CardContent>
             </Card>

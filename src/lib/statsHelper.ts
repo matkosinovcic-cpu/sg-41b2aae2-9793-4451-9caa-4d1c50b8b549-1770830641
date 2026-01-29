@@ -222,7 +222,8 @@ export async function getTicketDetailedResults(
     question_text: string;
     correct_answer: string;
     player_answer: string;
-    result: string;
+    is_correct: boolean | null;
+    result: "Točno" | "Netočno" | "Propušteno" | "Nije izvučeno";
   }>;
 }> {
   // 1. Get drawn questions on this ticket
@@ -279,6 +280,13 @@ export async function getTicketDetailedResults(
     const questionText = questionData?.text || "N/A";
     const correctAnswer = questionData?.correct_answer ? "DA" : "NE";
     const playerAnswer = answer ? answer.answer_yesno : "Nije odgovoreno";
+    
+    // Determine is_correct
+    let isCorrect: boolean | null = null;
+    if (answer) {
+      isCorrect = answer.is_correct;
+    }
+
     const result = !answer
       ? "Propušteno"
       : answer.is_correct
@@ -290,7 +298,8 @@ export async function getTicketDetailedResults(
       question_text: questionText,
       correct_answer: correctAnswer,
       player_answer: playerAnswer,
-      result,
+      is_correct: isCorrect,
+      result: result as "Točno" | "Netočno" | "Propušteno" | "Nije izvučeno",
     };
   });
 

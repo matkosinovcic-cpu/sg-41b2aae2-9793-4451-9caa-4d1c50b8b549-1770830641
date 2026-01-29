@@ -39,36 +39,59 @@ export interface TicketDetailedResults {
     question_text: string;
     correct_answer: string;
     player_answer: string;
-    is_correct: boolean | null; // null if not answered
+    is_correct: boolean | null;
     result: "Točno" | "Netočno" | "Propušteno" | "Nije izvučeno";
   }>;
 }
 
-// Helper to normalize answers
-function normalizeAnswerValue(value: string | boolean | null): string {
-  if (value === null) return "";
-  if (typeof value === "boolean") return value ? "DA" : "NE";
-  return String(value).trim().toUpperCase();
+/**
+ * Normalize answer to DB-compliant "YES" or "NO"
+ * DB constraint: CHECK (answer_yesno = ANY (ARRAY['YES'::text, 'NO'::text]))
+ */
+function normalizeYesNo(value: string | boolean | null | undefined): string {
+  if (value === null || value === undefined) {
+    console.warn("[normalizeYesNo] Received null/undefined value");
+    return "";
+  }
+  
+  // Handle boolean directly
+  if (typeof value === "boolean") {
+    return value ? "YES" : "NO";
+  }
+  
+  // Normalize string
+  const normalized = String(value).trim().toUpperCase();
+  
+  // Map YES variants
+  if (["DA", "YES", "Y", "TRUE", "1"].includes(normalized)) {
+    return "YES";
+  }
+  
+  // Map NO variants
+  if (["NE", "NO", "N", "FALSE", "0"].includes(normalized)) {
+    return "NO";
+  }
+  
+  // Invalid value
+  console.error("[normalizeYesNo] Invalid answer value:", value);
+  return "";
 }
 
-function checkCorrectness(playerAnswer: string | boolean, correctAnswer: string | boolean): boolean {
-  const normPlayer = normalizeAnswerValue(playerAnswer);
-  const normCorrect = normalizeAnswerValue(correctAnswer);
+/**
+ * Check if player answer is correct (for is_correct calculation)
+ */
+function checkCorrectness(
+  playerAnswer: string | boolean,
+  correctAnswer: string | boolean
+): boolean {
+  // Normalize both to YES/NO
+  const playerNorm = normalizeYesNo(playerAnswer);
+  const correctNorm = normalizeYesNo(correctAnswer);
   
-  // Handle variations
-  const trueValues = ["DA", "YES", "Y", "TRUE", "1"];
-  const falseValues = ["NE", "NO", "N", "FALSE", "0"];
+  // Must be valid values
+  if (!playerNorm || !correctNorm) return false;
   
-  const isPlayerTrue = trueValues.includes(normPlayer);
-  const isPlayerFalse = falseValues.includes(normPlayer);
-  
-  const isCorrectTrue = trueValues.includes(normCorrect);
-  const isCorrectFalse = falseValues.includes(normCorrect);
-  
-  if (isCorrectTrue) return isPlayerTrue;
-  if (isCorrectFalse) return isPlayerFalse;
-  
-  return normPlayer === normCorrect;
+  return playerNorm === correctNorm;
 }
 
 export const answerService = {
@@ -112,15 +135,18 @@ export const answerService = {
     answerYesNo: string | boolean,
     ticketSerial: string
   ): Promise<PlayerAnswer> {
-    console.log("[answerService] Submitting answer:", {
-      sessionId,
-      eventId,
-      questionNumber,
-      answerYesNo,
-      ticketSerial,
-    });
+    // 1. Normalize answer to YES/NO
+    const normalizedAnswer = normalizeYesNo(answerYesNo);
+    
+    // 2. Validate before attempting insert
+    if (!normalizedAnswer || !["YES", "NO"].includes(normalizedAnswer)) {
+      console.error("[submitAnswer] Invalid answer value:", answerYesNo);
+      throw new Error(
+        "Nevažeći odgovor. Molimo odaberite DA ili NE."
+      );
+    }
 
-    // 1. Get question_id from event_questions
+    // 3. Get question details
     const { data: eventQuestion, error: eqError } = await supabase
       .from("event_questions")
       .select("question_id")
@@ -128,22 +154,24 @@ export const answerService = {
       .eq("question_number", questionNumber)
       .single();
 
-    if (eqError || !eventQuestion) throw new Error("Event question not found");
+    if (eqError || !eventQuestion) {
+      throw new Error("Pitanje nije pronađeno");
+    }
 
-    // 2. Get correct answer from questions
     const { data: question, error: qError } = await supabase
       .from("questions")
       .select("correct_answer")
       .eq("id", eventQuestion.question_id)
       .single();
 
-    if (qError || !question) throw new Error("Question not found");
+    if (qError || !question) {
+      throw new Error("Pitanje nije pronađeno");
+    }
 
-    // 3. Calculate correctness
+    // 4. Calculate correctness
     const isCorrect = checkCorrectness(answerYesNo, question.correct_answer);
-    const answerString = normalizeAnswerValue(answerYesNo);
 
-    // 4. UPSERT answer
+    // 5. UPSERT answer (now guaranteed to be "YES" or "NO")
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -152,7 +180,7 @@ export const answerService = {
           event_id: eventId,
           question_number: questionNumber,
           question_id: eventQuestion.question_id,
-          answer_yesno: answerString,
+          answer_yesno: normalizedAnswer, // ← ALWAYS "YES" or "NO"
           ticket_id: ticketSerial,
           is_correct: isCorrect,
         },
@@ -164,14 +192,13 @@ export const answerService = {
       .select()
       .single();
 
-    if (error) throw error;
-
-    // 5. Check for winner
-    try {
-       await supabase.rpc("check_winner_tickets", { p_event_id: eventId });
-    } catch (e) {
-      console.error("Winner check failed:", e);
+    if (error) {
+      console.error("[submitAnswer] UPSERT error:", error);
+      throw new Error("Greška pri spremanju odgovora");
     }
+
+    // 6. Check for winner
+    await supabase.rpc("check_winner_tickets", { p_event_id: eventId });
 
     return data as PlayerAnswer;
   },
@@ -203,7 +230,7 @@ export const answerService = {
           event_id: eventId,
           question_number: questionNumber,
           question_id: eventQuestion.question_id,
-          answer_yesno: "NO", // Default for missed
+          answer_yesno: "NO",
           ticket_id: ticketSerial,
           is_correct: false,
         },
@@ -256,14 +283,7 @@ export const answerService = {
    * Get stats for all active tickets in an event (Admin/TV view)
    * Uses statsHelper for accurate, deduplicated stats
    */
-  async getEventTicketStats(eventId: string): Promise<Array<{
-    ticket_serial: string;
-    correct: number;
-    answered: number;
-    missed: number;
-    drawn_on_ticket: number;
-    percentage: number;
-  }>> {
+  async getEventTicketStats(eventId: string): Promise<TicketStats[]> {
     const eventStats = await computeEventStats(eventId);
     
     return eventStats.ticketStats.map((ts: HelperTicketStats) => ({
