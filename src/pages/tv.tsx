@@ -566,6 +566,11 @@ export default function TVScreen() {
                 <div className="text-9xl font-extrabold text-white animate-pulse">
                   {event.current_drawn_number}
                 </div>
+                {timeRemaining > 0 && (
+                  <div className="text-6xl font-bold text-yellow-300 mt-4">
+                    {timeRemaining}s
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -589,6 +594,7 @@ export default function TVScreen() {
           )}
         </div>
       )}
+
       {/* Bottom Stats */}
       <div className="grid grid-cols-3 gap-6 max-w-4xl mx-auto">
         <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
