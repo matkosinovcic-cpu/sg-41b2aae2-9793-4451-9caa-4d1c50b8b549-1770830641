@@ -1,5 +1,6 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,6 +16,7 @@ interface TicketData {
 }
 
 export default function TVScreen() {
+  const router = useRouter();
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
@@ -45,11 +47,26 @@ export default function TVScreen() {
         await loadEvents();
         console.log("[TV] ✅ Events loaded successfully");
         
-        // Auto-select stored event if available
+        // Priority 1: URL query param
+        const urlEventId = router.query.eventId as string;
+        
+        // Priority 2: localStorage
         const storedEventId = localStorage.getItem("tv_event_id");
-        if (storedEventId) {
-          console.log("[TV] 📌 Auto-selecting stored event:", storedEventId);
-          setSelectedEventId(storedEventId);
+        
+        const targetEventId = urlEventId || storedEventId;
+        
+        if (targetEventId) {
+          console.log("[TV] 📌 Auto-selecting event:", targetEventId, "from", urlEventId ? "URL" : "localStorage");
+          
+          // Validate event exists before selecting
+          const eventExists = await validateEventExists(targetEventId);
+          if (eventExists) {
+            setSelectedEventId(targetEventId);
+          } else {
+            console.warn("[TV] ⚠️ Event", targetEventId, "no longer exists, clearing and showing selection");
+            localStorage.removeItem("tv_event_id");
+            setSelectedEventId("");
+          }
         } else {
           console.log("[TV] ℹ️ No stored event, user must select");
         }
@@ -60,12 +77,25 @@ export default function TVScreen() {
     };
 
     initializeTV();
-  }, []);
+  }, [router.query.eventId]);
 
-  // Save selected event to localStorage
+  // Validate event exists in database
+  const validateEventExists = async (eventId: string): Promise<boolean> => {
+    try {
+      const event = await eventService.getEvent(eventId);
+      return !!event;
+    } catch (error) {
+      console.error("[TV] Event validation failed:", error);
+      return false;
+    }
+  };
+
+  // Save selected event to localStorage and URL
   useEffect(() => {
     if (selectedEventId) {
       localStorage.setItem("tv_event_id", selectedEventId);
+      // Update URL without reload
+      router.replace({ pathname: "/tv", query: { eventId: selectedEventId } }, undefined, { shallow: true });
     }
   }, [selectedEventId]);
 
@@ -150,18 +180,56 @@ export default function TVScreen() {
 
   // Safari-safe fallback: Polling mechanism (every 1.5s)
   useEffect(() => {
-    if (!selectedEventId || !event || event.status !== "active") {
+    if (!selectedEventId || !event) {
       setPollingActive(false);
       return;
     }
 
-    console.log("[TV-POLL] Starting polling for event:", selectedEventId);
+    // ✅ CRITICAL: Stop polling if event is FINISHED
+    if (event.status === "finished") {
+      console.log("[TV-POLL] Event FINISHED, polling disabled");
+      setPollingActive(false);
+      return;
+    }
+
+    // ✅ CRITICAL: Stop polling if event is PAUSED
+    if (event.status === "paused") {
+      console.log("[TV-POLL] Event PAUSED, polling disabled");
+      setPollingActive(false);
+      return;
+    }
+
+    // Only poll ACTIVE events
+    if (event.status !== "active") {
+      setPollingActive(false);
+      return;
+    }
+
+    console.log("[TV-POLL] Starting polling for ACTIVE event:", selectedEventId);
     setPollingActive(true);
 
     const pollInterval = setInterval(async () => {
       try {
         console.log("[TV-POLL] Fetching event state...");
         const updatedEvent = await eventService.getEvent(selectedEventId);
+        
+        // ✅ CRITICAL: Stop polling if event became FINISHED
+        if (updatedEvent.status === "finished") {
+          console.log("[TV-POLL] Event became FINISHED, stopping polling");
+          setPollingActive(false);
+          clearInterval(pollInterval);
+          setEvent(updatedEvent);
+          return;
+        }
+
+        // ✅ CRITICAL: Stop polling if event became PAUSED
+        if (updatedEvent.status === "paused") {
+          console.log("[TV-POLL] Event became PAUSED, stopping polling");
+          setPollingActive(false);
+          clearInterval(pollInterval);
+          setEvent(updatedEvent);
+          return;
+        }
         
         // Check if drawn number changed
         const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
@@ -182,12 +250,6 @@ export default function TVScreen() {
 
         // Update event state
         setEvent(updatedEvent);
-
-        // Stop polling if event ended
-        if (updatedEvent.status !== "active") {
-          console.log("[TV-POLL] Event ended, stopping polling");
-          setPollingActive(false);
-        }
       } catch (error) {
         console.error("[TV-POLL] Polling error:", error);
       }
@@ -227,7 +289,6 @@ export default function TVScreen() {
   const loadEventData = async () => {
     if (!selectedEventId) {
       console.warn("[TV] ⚠️ loadEventData called without selectedEventId");
-      setLoadingError("No event selected");
       return;
     }
 
@@ -235,16 +296,28 @@ export default function TVScreen() {
       setLoadingError(null);
       console.log("[TV] 🔍 Step 1: Starting loadEventData for:", selectedEventId);
       
+      // ✅ SAFE: Use getEvent with try-catch instead of assuming .single() succeeds
       const data = await eventService.getEvent(selectedEventId);
-      console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
       
       if (!data) {
-        throw new Error("Event not found");
+        console.warn("[TV] ⚠️ Event not found:", selectedEventId);
+        // Graceful fallback: Clear selection and return to Event Selection
+        localStorage.removeItem("tv_event_id");
+        setSelectedEventId("");
+        setEvent(null);
+        return;
       }
 
+      console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
       console.log("[TV] ✅ Step 3: Event name:", data.name);
       console.log("[TV] ✅ Step 4: Event status:", data.status);
       console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
+      
+      // ✅ CRITICAL: Respect FINISHED status - stop polling
+      if (data.status === "finished") {
+        console.log("[TV] 🏁 Event is FINISHED, stopping all polling");
+        setPollingActive(false);
+      }
       
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
@@ -271,14 +344,17 @@ export default function TVScreen() {
         selectedEventId,
       });
       
-      // CRITICAL: Clear the error after showing it briefly, then allow retry
-      setLoadingError(`Failed to load event: ${error instanceof Error ? error.message : 'Unknown error'}. Event ID: ${selectedEventId}`);
-      setEvent(null);
-      
-      // Optional: Auto-clear error after 5 seconds to allow retry
-      setTimeout(() => {
-        console.log("[TV] 🔄 Clearing error, user can retry");
-      }, 5000);
+      // Check if it's a "not found" error
+      if (error instanceof Error && (error.message.includes("not found") || error.message.includes("0 rows"))) {
+        console.log("[TV] 🔄 Event no longer exists, returning to selection");
+        localStorage.removeItem("tv_event_id");
+        setSelectedEventId("");
+        setEvent(null);
+        setLoadingError(null); // Don't show error, just return to selection
+      } else {
+        setLoadingError(`Failed to load event: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setEvent(null);
+      }
     }
   };
 
