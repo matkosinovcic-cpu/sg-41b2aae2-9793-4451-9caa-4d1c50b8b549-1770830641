@@ -372,7 +372,7 @@ export default function TVScreen() {
       if (data?.question_id) {
         const { data: qData, error: qError } = await supabase
           .from("questions")
-          .select("question_text")
+          .select("text")
           .eq("id", data.question_id)
           .single();
 
@@ -380,8 +380,8 @@ export default function TVScreen() {
           console.error("[TV] ❌ Failed to load question text:", qError);
           setQuestionText(null);
         } else {
-          console.log("[TV] ✅ Question text loaded:", qData?.question_text);
-          setQuestionText(qData?.question_text || null);
+          console.log("[TV] ✅ Question text loaded:", qData?.text);
+          setQuestionText(qData?.text || null);
         }
       } else {
         setQuestionText(null);
