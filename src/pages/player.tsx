@@ -764,14 +764,19 @@ export default function PlayerScreen() {
                 <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
                   Hvala na sudjelovanju!
                 </h2>
+                
+                {/* ✅ FIX: Use drawn_in_game as denominator (SOURCE OF TRUTH) */}
                 <div className="text-2xl font-bold text-gray-700">
-                  Ukupno točno: {stats.total_correct} / {stats.total_answered}
+                  Ukupno točno: {stats.total_correct} / {stats.drawn_in_game}
                 </div>
-                {stats.total_answered > 0 && (
+                
+                {/* ✅ FIX: Accuracy based on drawnInGame, not answered */}
+                {stats.drawn_in_game > 0 && (
                   <div className="text-lg text-gray-600">
-                    Točnost: {Math.round((stats.total_correct / stats.total_answered) * 100)}%
+                    Točnost: {Math.round((stats.total_correct / stats.drawn_in_game) * 100)}%
                   </div>
                 )}
+                
                 <div className="text-sm text-gray-500 mt-2">
                   Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
                 </div>
