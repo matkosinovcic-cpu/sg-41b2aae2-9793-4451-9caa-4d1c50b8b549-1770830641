@@ -267,6 +267,33 @@ export default function PlayerScreen() {
       // ✅ FIX: Use event-level drawn count, NOT per-ticket sum
       const drawnInGame = event.drawn_numbers?.length || 0;
 
+      // 🔍 DEBUG LOGGING: Verify stats calculation
+      console.log("═══════════════════════════════════════════");
+      console.log("📊 [Player Stats Debug]");
+      console.log("═══════════════════════════════════════════");
+      console.log("Event ID:", event.id);
+      console.log("Event Status:", event.status);
+      console.log("Event drawn_numbers:", event.drawn_numbers);
+      console.log("───────────────────────────────────────────");
+      console.log("🎯 AGGREGATED STATS:");
+      console.log("  • Total Correct:", totalCorrect);
+      console.log("  • Total Answered:", totalAnswered);
+      console.log("  • Drawn In Game:", drawnInGame, "← SOURCE OF TRUTH (event-level)");
+      console.log("───────────────────────────────────────────");
+      console.log("🎫 PER-TICKET BREAKDOWN:");
+      results.forEach((r, idx) => {
+        console.log(`  Ticket ${idx + 1} (${r.ticket_serial}):`);
+        console.log(`    ✓ Correct: ${r.correct}`);
+        console.log(`    📝 Answered: ${r.answered}`);
+        console.log(`    🎲 Drawn on ticket: ${r.drawnOnTicket}`);
+        console.log(`    📊 Accuracy: ${r.accuracy}%`);
+      });
+      console.log("═══════════════════════════════════════════");
+      console.log("🎨 UI WILL DISPLAY:");
+      console.log(`  Header: "Ukupno točno: ${totalCorrect} / ${drawnInGame}"`);
+      console.log(`  Accuracy: "${Math.round((totalCorrect / drawnInGame) * 100)}%"`);
+      console.log("═══════════════════════════════════════════");
+
       setStats({
         ticket_stats: results,
         total_correct: totalCorrect,
