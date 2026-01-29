@@ -127,6 +127,10 @@ export default function TVScreen() {
       console.log("[TV] Real-time event update received:", payload);
       const updatedEvent = payload.new;
       
+      // ✅ CRITICAL: Always update drawn numbers set from event
+      console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+      
       // Check if drawn number changed
       const numberChanged = updatedEvent.current_drawn_number !== lastDrawnNumberRef.current;
       
@@ -135,12 +139,15 @@ export default function TVScreen() {
         playBeep('start');
         lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
         await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
-        
-        // Update drawn numbers set
-        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
       }
       
+      // ✅ CRITICAL: Always update event state
       setEvent(updatedEvent);
+      console.log("[TV] Event state updated:", {
+        status: updatedEvent.status,
+        current_number: updatedEvent.current_drawn_number,
+        drawn_count: updatedEvent.drawn_numbers?.length || 0
+      });
     });
 
     console.log("[TV] Subscription active");
@@ -178,29 +185,23 @@ export default function TVScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
-  // Safari-safe fallback: Polling mechanism (every 1.5s)
+  // Safari-safe fallback: Polling mechanism (every 2s for stability)
   useEffect(() => {
     if (!selectedEventId || !event) {
       setPollingActive(false);
       return;
     }
 
-    // ✅ CRITICAL: Stop polling if event is FINISHED
+    // ✅ Stop polling if event is FINISHED
     if (event.status === "finished") {
       console.log("[TV-POLL] Event FINISHED, polling disabled");
       setPollingActive(false);
       return;
     }
 
-    // ✅ CRITICAL: Stop polling if event is PAUSED
-    if (event.status === "paused") {
-      console.log("[TV-POLL] Event PAUSED, polling disabled");
-      setPollingActive(false);
-      return;
-    }
-
-    // Only poll ACTIVE events
+    // ✅ Only poll ACTIVE events
     if (event.status !== "active") {
+      console.log("[TV-POLL] Event not ACTIVE, polling disabled");
       setPollingActive(false);
       return;
     }
@@ -213,47 +214,46 @@ export default function TVScreen() {
         console.log("[TV-POLL] Fetching event state...");
         const updatedEvent = await eventService.getEvent(selectedEventId);
         
-        // ✅ CRITICAL: Stop polling if event became FINISHED
+        if (!updatedEvent) {
+          console.warn("[TV-POLL] Event not found, stopping polling");
+          setPollingActive(false);
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        // ✅ Stop polling if event became FINISHED
         if (updatedEvent.status === "finished") {
           console.log("[TV-POLL] Event became FINISHED, stopping polling");
           setPollingActive(false);
           clearInterval(pollInterval);
-          setEvent(updatedEvent);
-          return;
         }
-
-        // ✅ CRITICAL: Stop polling if event became PAUSED
-        if (updatedEvent.status === "paused") {
-          console.log("[TV-POLL] Event became PAUSED, stopping polling");
-          setPollingActive(false);
-          clearInterval(pollInterval);
-          setEvent(updatedEvent);
-          return;
-        }
+        
+        // ✅ CRITICAL: Always update drawn numbers (fixes refresh bug)
+        console.log("[TV-POLL] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
         
         // Check if drawn number changed
         const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
         
         if (numberChanged && updatedEvent.current_drawn_number) {
           console.log(`[TV-POLL] ✅ Number changed: ${event.current_drawn_number} → ${updatedEvent.current_drawn_number}`);
-          
-          // Play sound for number change
           playBeep('start');
-          
-          // Update ref and load new question
           lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
           await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
-          
-          // Update drawn numbers set
-          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
         }
 
-        // Update event state
+        // ✅ CRITICAL: Always update event state
         setEvent(updatedEvent);
+        console.log("[TV-POLL] Event refreshed:", {
+          status: updatedEvent.status,
+          current_number: updatedEvent.current_drawn_number,
+          drawn_count: updatedEvent.drawn_numbers?.length || 0
+        });
+        
       } catch (error) {
         console.error("[TV-POLL] Polling error:", error);
       }
-    }, 1500);
+    }, 2000); // ✅ 2s interval for stability
 
     return () => {
       console.log("[TV-POLL] Cleaning up polling");
@@ -539,151 +539,69 @@ export default function TVScreen() {
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-8">
-        <div className="container mx-auto max-w-7xl">
-          
-          {/* WINNER SCREEN - Show when winner exists AND game is finished */}
-          {event.winner_ticket_id && event.status === "finished" && (
-            <div className="fixed inset-0 bg-gradient-to-br from-yellow-400 via-orange-500 to-red-500 flex items-center justify-center z-50 animate-pulse">
-              <div className="text-center">
-                <Trophy className="w-48 h-48 text-white mx-auto mb-8 animate-bounce" />
-                <h1 className="text-9xl font-black text-white mb-6 drop-shadow-2xl">
-                  POBJEDNIK!
-                </h1>
-                <div className="bg-white/20 backdrop-blur-sm rounded-3xl p-12 border-8 border-white">
-                  <p className="text-6xl font-black text-white mb-4">Ulaznica:</p>
-                  <p className="text-8xl font-black text-white">
-                    {event.winner_ticket_id}
-                  </p>
-                </div>
-                <p className="text-4xl text-white mt-12 font-bold">
-                  🎉 Čestitamo! 🎉
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* WINNER BANNER - Show during continue mode (Active + Winner exists) */}
-          {event.winner_ticket_id && event.status === "active" && (
-            <Card className="mb-6 border-4 border-yellow-500 bg-yellow-50">
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-center gap-4">
-                  <Trophy className="w-12 h-12 text-yellow-600" />
-                  <div className="text-center">
-                    <p className="text-4xl font-black text-yellow-600">POBJEDNIK: {event.winner_ticket_id}</p>
-                    <p className="text-xl text-yellow-700">Igra se nastavlja za zabavu...</p>
-                  </div>
-                  <Trophy className="w-12 h-12 text-yellow-600" />
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Background Elements */}
-          <div className="absolute inset-0 bg-gradient-to-br from-purple-900 via-blue-900 to-black opacity-50" />
-          
-          <div className="relative z-10 container mx-auto px-4 py-8 h-screen flex flex-col">
-            {/* Header */}
-            <div className="flex justify-between items-center mb-8">
-              <h1 className="text-4xl font-bold text-white/80">{event.name}</h1>
-              <div className="text-2xl font-mono text-purple-300">
-                PITALICA SKITALICA
-              </div>
-            </div>
-
-            {/* Game Board Display */}
-            <div className="flex-1 flex gap-8">
-              {/* Left: Current Question */}
-              <div className="flex-1 flex flex-col justify-center">
-                {currentQuestion ? (
-                  <div className="space-y-6">
-                    {/* Question Number Circle */}
-                    <div className="flex justify-center mb-6">
-                      <div className="w-48 h-48 rounded-full bg-purple-600 flex items-center justify-center border-8 border-purple-400 shadow-[0_0_50px_rgba(147,51,234,0.5)]">
-                        <span className="text-8xl font-black">{currentQuestion.question_number}</span>
-                      </div>
-                    </div>
-
-                    {/* Question Text */}
-                    <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 border border-white/20">
-                      <h2 className="text-5xl font-bold leading-tight text-shadow text-center">
-                        {currentQuestion.questions?.text}
-                      </h2>
-                    </div>
-
-                    {/* Timer */}
-                    {timeRemaining > 0 ? (
-                      <div className="flex items-center gap-4">
-                        <Clock className="w-12 h-12 text-green-400 animate-pulse" />
-                        <div className="h-6 flex-1 bg-gray-800 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-green-500 to-green-300 transition-all duration-100 ease-linear"
-                            style={{ width: `${(timeRemaining / 10) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-5xl font-black font-mono text-green-400 min-w-[2ch]">
-                          {timeRemaining}
-                        </span>
-                      </div>
-                    ) : currentQuestion ? (
-                      <div className="bg-red-500/20 border border-red-500/50 rounded-2xl p-4 text-center">
-                        <p className="text-3xl font-bold text-red-400">TIME'S UP</p>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
-                  /* Waiting State */
-                  <div className="text-center space-y-6">
-                    <Gamepad2 className="w-32 h-32 text-purple-500 mx-auto animate-pulse" />
-                    <h2 className="text-5xl font-bold text-white/50">
-                      Waiting for next number...
-                    </h2>
-                  </div>
-                )}
-              </div>
-
-              {/* Right: Full 1-90 Number Board */}
-              <div className="w-[500px] flex flex-col">
-                <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/20">
-                  <h3 className="text-2xl font-bold text-center mb-4 text-purple-300">TOMBOLA BOARD</h3>
-                  <div className="grid grid-cols-10 gap-2">
-                    {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
-                      const isDrawn = drawnNumbers.has(num);
-                      const isCurrent = event.current_drawn_number === num;
-                      
-                      return (
-                        <div
-                          key={num}
-                          className={`
-                            aspect-square flex items-center justify-center rounded-lg font-bold text-lg
-                            transition-all duration-300
-                            ${isCurrent 
-                              ? 'bg-yellow-400 text-black scale-110 shadow-[0_0_20px_rgba(250,204,21,0.8)] animate-pulse' 
-                              : isDrawn 
-                                ? 'bg-green-500 text-white shadow-[0_0_10px_rgba(34,197,94,0.5)]' 
-                                : 'bg-white/10 text-white/60 hover:bg-white/20'
-                          }
-                        `}
-                        >
-                          {num}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-4 text-center text-sm text-white/40">
-                    {drawnNumbers.size} / 90 drawn
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer Stats */}
-            <div className="mt-8 grid grid-cols-3 gap-8 text-center text-white/40 text-xl font-bold">
-              <div>90 Numbers Total</div>
-              <div>15 to Win</div>
-              <div>Good Luck!</div>
-            </div>
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900 text-white p-8">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-7xl font-extrabold text-white tracking-wide">
+            PITALICA SKITALICA
+          </h1>
+        </div>
+      </div>
+      {/* Main Content */}
+      {!event ? (
+        <div className="text-center py-20">
+          <div className="text-3xl text-gray-300">
+            {selectedEventId ? "Loading event..." : "Select an event to display"}
           </div>
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {/* Current Question Display */}
+          {event.current_drawn_number ? (
+            <div className="bg-gradient-to-r from-yellow-500 to-orange-500 rounded-3xl p-12 shadow-2xl transform hover:scale-105 transition-transform">
+              <div className="text-center">
+                <div className="text-2xl font-semibold text-white mb-4">
+                  Trenutno pitanje #{event.current_drawn_number}
+                </div>
+                <div className="text-9xl font-extrabold text-white animate-pulse">
+                  {event.current_drawn_number}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-20">
+              <div className="inline-block animate-pulse">
+                <div className="text-8xl mb-4">⏳</div>
+              </div>
+              <p className="text-3xl text-gray-300">Čekam sljedeće pitanje...</p>
+            </div>
+          )}
+
+          {/* Winner Announcement */}
+          {event.winner_ticket_id && (
+            <div className="bg-gradient-to-r from-green-500 to-emerald-500 rounded-3xl p-12 shadow-2xl animate-bounce">
+              <div className="text-center">
+                <div className="text-6xl mb-4">🎉</div>
+                <div className="text-4xl font-bold text-white mb-2">POBJEDNIK!</div>
+                <div className="text-3xl text-white">Ulaznica: {event.winner_ticket_id}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Bottom Stats */}
+      <div className="grid grid-cols-3 gap-6 max-w-4xl mx-auto">
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
+          <div className="text-4xl font-bold text-yellow-300">90</div>
+          <div className="text-lg text-gray-300 mt-2">90 Numbers Total</div>
+        </div>
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
+          <div className="text-4xl font-bold text-green-300">15</div>
+          <div className="text-lg text-gray-300 mt-2">15 to Win</div>
+        </div>
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
+          <div className="text-4xl font-bold text-pink-300">🍀</div>
+          <div className="text-lg text-gray-300 mt-2">Good Luck!</div>
         </div>
       </div>
     </>

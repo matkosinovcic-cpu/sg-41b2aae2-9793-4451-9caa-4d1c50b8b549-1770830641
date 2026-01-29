@@ -70,6 +70,12 @@ export default function AdminPanel() {
     });
     
     console.log(`[AUTO] stopped ${eventId}`, reason);
+    if (reason === "manual") {
+      toast({
+        title: "Auto izvlačenje zaustavljeno",
+        description: "Zaustavili ste automatsko izvlačenje. Možete nastaviti ručno.",
+      });
+    }
   };
 
   // ✅ START AUTO implementation
@@ -446,20 +452,6 @@ export default function AdminPanel() {
     }
   };
 
-  const handlePauseEvent = async (eventId: string) => {
-    setLoading(true);
-    try {
-      await eventService.pauseEvent(eventId);
-      await loadEvents();
-      toast({
-        title: "Success",
-        description: "Event paused",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleContinueAfterWinner = (eventId: string) => {
     setContinueAfterWinner(prev => ({ ...prev, [eventId]: true }));
     toast({
@@ -730,17 +722,6 @@ export default function AdminPanel() {
                                     Zaustavi auto
                                   </Button>
                                 )}
-
-                                {/* ✅ PAUSE BUTTON */}
-                                <Button
-                                  onClick={() => handlePauseEvent(event.id)}
-                                  disabled={loading}
-                                  variant="outline"
-                                  size="sm"
-                                >
-                                  <Pause className="w-4 h-4 mr-1" />
-                                  Pauziraj
-                                </Button>
                               </>
                             )}
 
