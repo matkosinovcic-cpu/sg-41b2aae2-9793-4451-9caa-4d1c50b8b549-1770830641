@@ -6,6 +6,7 @@ import { answerService, TicketDetailedResults, TicketStats } from "@/services/an
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 
 interface TicketData {
   id: string;
@@ -592,6 +593,14 @@ export default function TVScreen() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {currentQuestion && (
+        <div className="mt-6 bg-white/10 rounded-xl p-6 backdrop-blur-sm">
+          <p className="text-2xl text-white font-medium text-center">
+            {currentQuestion.text}
+          </p>
         </div>
       )}
 
