@@ -578,69 +578,110 @@ export default function TVScreen() {
           </div>
         </div>
       ) : (
-        <div className="space-y-8">
-          {/* Current Question Display */}
-          {event.current_drawn_number ? (
-            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-8 shadow-2xl max-w-4xl mx-auto">
-              <div className="text-center">
-                <div className="text-xl text-indigo-200 mb-2">
-                  Trenutno pitanje
-                </div>
-                <div className="text-9xl font-black text-white mb-4">
-                  #{event.current_drawn_number}
-                </div>
-                {timeRemaining > 0 && (
-                  <div className="text-6xl font-bold text-yellow-300 animate-pulse">
-                    {timeRemaining}s
+        <>
+          {/* ✅ MAIN TV DISPLAY */}
+          <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900 flex items-center justify-center p-4">
+            <div className="w-full max-w-[1920px] aspect-[16/9] relative overflow-hidden">
+              <div className="absolute inset-0 overflow-y-auto overflow-x-hidden">
+                <div className="min-h-full flex flex-col p-3 sm:p-4 lg:p-4 text-white">
+                  
+                  {/* 1️⃣ HEADER */}
+                  <div className="text-center mb-3">
+                    <h1 className="text-5xl lg:text-6xl font-extrabold tracking-wide">
+                      PITALICA SKITALICA
+                    </h1>
                   </div>
-                )}
+                  
+                  {/* 2️⃣ BOARD (1-90) - UVIJEK VIDLJIV */}
+                  <div className="mb-3">
+                    <div className="grid grid-cols-10 gap-2 max-w-6xl mx-auto">
+                      {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
+                        const isDrawn = drawnNumbers.has(num);
+                        const isCurrent = event.current_drawn_number === num;
+                        
+                        return (
+                          <div
+                            key={num}
+                            className={`
+                              aspect-square rounded-lg flex items-center justify-center 
+                              text-lg lg:text-xl font-bold transition-all duration-300 border-2
+                              ${
+                                isCurrent
+                                  ? "bg-yellow-400 text-gray-900 border-yellow-500 scale-110 shadow-2xl animate-pulse"
+                                  : isDrawn
+                                  ? "bg-indigo-600 text-white border-indigo-400"
+                                  : "bg-gray-800/50 text-gray-500 border-gray-700"
+                              }
+                            `}
+                          >
+                            {num}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  
+                  {/* 3️⃣ CURRENT QUESTION OR WAITING */}
+                  {event.current_drawn_number ? (
+                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-4 lg:p-6 shadow-2xl max-w-4xl mx-auto mb-3">
+                      <div className="text-center">
+                        <div className="text-base lg:text-lg text-indigo-200 mb-1">
+                          Trenutno pitanje
+                        </div>
+                        <div className="text-6xl lg:text-8xl font-black text-white mb-3">
+                          #{event.current_drawn_number}
+                        </div>
+                        {timeRemaining > 0 && (
+                          <div className="text-4xl lg:text-5xl font-bold text-yellow-300 animate-pulse">
+                            {timeRemaining}s
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* ✅ QUESTION TEXT */}
+                      {questionText && (
+                        <div className="mt-4 bg-white/10 rounded-xl p-3 lg:p-4 backdrop-blur-sm">
+                          <p className="text-lg lg:text-xl text-white font-medium text-center">
+                            {questionText}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6 lg:py-8 mb-3">
+                      <div className="inline-block animate-pulse">
+                        <div className="text-5xl lg:text-6xl mb-3">⏳</div>
+                      </div>
+                      <p className="text-xl lg:text-2xl text-gray-300">
+                        Čekam sljedeće pitanje...
+                      </p>
+                    </div>
+                  )}
+                  
+                  {/* 4️⃣ BOTTOM STATS */}
+                  <div className="mt-auto">
+                    <div className="grid grid-cols-3 gap-3 lg:gap-4 max-w-4xl mx-auto">
+                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 lg:p-4 text-center">
+                        <div className="text-2xl lg:text-3xl font-bold text-yellow-300">90</div>
+                        <div className="text-xs lg:text-sm text-gray-300 mt-1">90 pitanja</div>
+                      </div>
+                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 lg:p-4 text-center">
+                        <div className="text-2xl lg:text-3xl font-bold text-green-300">15</div>
+                        <div className="text-xs lg:text-sm text-gray-300 mt-1">15 za pobjedu</div>
+                      </div>
+                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 lg:p-4 text-center">
+                        <div className="text-2xl lg:text-3xl font-bold text-pink-300">🍀</div>
+                        <div className="text-xs lg:text-sm text-gray-300 mt-1">Sretno</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="text-center py-20">
-              <div className="inline-block animate-pulse">
-                <div className="text-8xl mb-4">⏳</div>
-              </div>
-              <p className="text-3xl text-gray-300">Čekam sljedeće pitanje...</p>
-            </div>
-          )}
-
-          {/* Winner Announcement */}
-          {event.winner_ticket_id && (
-            <div className="bg-gradient-to-r from-green-500 to-emerald-500 rounded-3xl p-12 shadow-2xl animate-bounce">
-              <div className="text-center">
-                <div className="text-6xl mb-4">🎉</div>
-                <div className="text-4xl font-bold text-white mb-2">POBJEDNIK!</div>
-                <div className="text-3xl text-white">Ulaznica: {event.winner_ticket_id}</div>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
-
-      {questionText && (
-        <div className="mt-6 bg-white/10 rounded-xl p-6 backdrop-blur-sm">
-          <p className="text-2xl text-white font-medium text-center">
-            {questionText}
-          </p>
-        </div>
-      )}
-
-      {/* Bottom Stats */}
-      <div className="grid grid-cols-3 gap-6 max-w-4xl mx-auto">
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
-          <div className="text-4xl font-bold text-yellow-300">90</div>
-          <div className="text-lg text-gray-300 mt-2">90 pitanja</div>
-        </div>
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
-          <div className="text-4xl font-bold text-green-300">15</div>
-          <div className="text-lg text-gray-300 mt-2">15 za pobjedu</div>
-        </div>
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
-          <div className="text-4xl font-bold text-pink-300">🍀</div>
-          <div className="text-lg text-gray-300 mt-2">Sretno</div>
-        </div>
-      </div>
     </>
   );
 }
