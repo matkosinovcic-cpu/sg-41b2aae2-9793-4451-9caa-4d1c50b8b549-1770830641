@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
 import { answerService, TicketStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy, CheckCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+
+// ✅ CRITICAL: Answer timing configuration (SOURCE OF TRUTH)
+// Used for both player answer time and auto-draw interval
+const ANSWER_SECONDS = 9;  // Players have 9 seconds to answer
+const AUTO_DRAW_INTERVAL_MS = (ANSWER_SECONDS + 1) * 1000;  // Auto-draw waits 10s (answer time + 1s buffer)
 
 export default function AdminPanel() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -27,10 +32,141 @@ export default function AdminPanel() {
   // CRITICAL: Continue mode state - defaults to FALSE for each event
   const [continueAfterWinner, setContinueAfterWinner] = useState<Record<string, boolean>>({});
   
+  // ✅ Auto-draw refs (critical for stability)
+  const autoTimerRef = useRef<Record<string, NodeJS.Timeout | null>>({});
+  const autoRunningRef = useRef<Record<string, boolean>>({});
+  const autoInFlightRef = useRef<Record<string, boolean>>({});
+  
+  // UI state for button toggles
+  const [autoDrawingState, setAutoDrawingState] = useState<Record<string, boolean>>({});
+  
   const { toast } = useToast();
 
   useEffect(() => {
     loadEvents();
+    
+    // ✅ Cleanup on unmount
+    return () => {
+      Object.keys(autoTimerRef.current).forEach(eventId => {
+        stopAuto(eventId, "unmount");
+      });
+    };
+  }, []);
+
+  // ✅ STOP AUTO implementation
+  const stopAuto = (eventId: string, reason: string) => {
+    if (autoTimerRef.current[eventId]) {
+      clearInterval(autoTimerRef.current[eventId]!);
+      autoTimerRef.current[eventId] = null;
+    }
+    
+    autoRunningRef.current[eventId] = false;
+    autoInFlightRef.current[eventId] = false;
+    
+    // Update UI
+    setAutoDrawingState(prev => {
+      if (!prev[eventId]) return prev; // Avoid unnecessary renders
+      return { ...prev, [eventId]: false };
+    });
+    
+    console.log(`[AUTO] stopped ${eventId}`, reason);
+  };
+
+  // ✅ START AUTO implementation
+  const startAuto = (eventId: string) => {
+    // Prevent double start
+    if (autoRunningRef.current[eventId]) return;
+
+    console.log(`[AUTO] starting ${eventId}`);
+    
+    // Set running state
+    autoRunningRef.current[eventId] = true;
+    setAutoDrawingState(prev => ({ ...prev, [eventId]: true }));
+    
+    toast({
+      title: "Auto izvlačenje pokrenuto",
+      description: `Interval: ${ANSWER_SECONDS + 1}s`,
+    });
+
+    // Start interval
+    autoTimerRef.current[eventId] = setInterval(async () => {
+      // DEBUG LOG
+      console.log(`[AUTO] tick ${eventId}`, { 
+        running: autoRunningRef.current[eventId], 
+        inFlight: autoInFlightRef.current[eventId] 
+      });
+      
+      if (!autoRunningRef.current[eventId]) return;
+      if (autoInFlightRef.current[eventId]) return;
+
+      autoInFlightRef.current[eventId] = true;
+
+      try {
+        // 1) RE-FETCH event iz baze (svaki tick) da ne koristimo stale state
+        const { data: freshEvent, error } = await supabase
+          .from("events")
+          .select("*")
+          .eq("id", eventId)
+          .single();
+
+        if (error || !freshEvent) {
+          console.error("[AUTO] Failed to fetch event", error);
+          return;
+        }
+
+        console.log(`[AUTO] event state ${eventId}`, { 
+          status: freshEvent.status, 
+          winner: freshEvent.winner_ticket_id 
+        });
+
+        // 2) Guard: stop ako je finished ili ima winner ili nije active
+        if (freshEvent.status === "finished" || freshEvent.winner_ticket_id || freshEvent.status !== "active") {
+          stopAuto(eventId, "winner_or_finished_or_paused");
+          
+          if (freshEvent.winner_ticket_id) {
+             toast({ 
+               title: "Pobjednik pronađen!", 
+               description: `Ulaznica: ${freshEvent.winner_ticket_id}` 
+             });
+          } else if (freshEvent.status === "finished") {
+             toast({ title: "Auto stop", description: "Event je završen." });
+          } else {
+             toast({ title: "Auto stop", description: "Event nije aktivan." });
+          }
+          
+          await loadEvents();
+          return;
+        }
+
+        // 3) Check drawn count limit
+        if ((freshEvent.drawn_numbers?.length || 0) >= 90) {
+           stopAuto(eventId, "max_questions");
+           toast({ title: "Auto stop", description: "Svih 90 pitanja izvučeno." });
+           await loadEvents();
+           return;
+        }
+
+        // 4) Povuci sljedeće pitanje
+        await eventService.drawNextQuestion(eventId);
+        console.log(`[AUTO] drawNextQuestion OK ${eventId}`);
+        
+        // Refresh UI list
+        await loadEvents();
+
+      } catch (e: any) {
+        console.error("[AUTO] drawNextQuestion FAILED", e);
+        // Ne gasimo auto na prvi network error, ali logiramo
+      } finally {
+        autoInFlightRef.current[eventId] = false;
+      }
+    }, AUTO_DRAW_INTERVAL_MS);
+  };
+
+  // ✅ Cleanup: Stop ALL auto-draw intervals on unmount
+  useEffect(() => {
+    Object.keys(autoRunningRef.current).forEach(eventId => {
+      stopAuto(eventId, "unmount");
+    });
   }, []);
 
   // Load event details when selected
@@ -319,12 +455,6 @@ export default function AdminPanel() {
         title: "Success",
         description: "Event paused",
       });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to pause event",
-        variant: "destructive",
-      });
     } finally {
       setLoading(false);
     }
@@ -339,7 +469,7 @@ export default function AdminPanel() {
   };
 
   const handleResetEvent = async (eventId: string) => {
-    // ✅ CONFIRMATION REQUIRED for destructive action
+    // ✅ CONFIRMATION REQUIRED
     const confirmed = window.confirm(
       "⚠️ RESET EVENT?\n\n" +
       "Ovo će:\n" +
@@ -354,8 +484,8 @@ export default function AdminPanel() {
 
     setLoading(true);
     try {
-      // ✅ Reset event to DRAFT state
-      const { error: updateError } = await supabase
+      // ✅ Reset event using UPDATE instead of delete
+      const { error } = await supabase
         .from("events")
         .update({
           status: "draft",
@@ -367,27 +497,27 @@ export default function AdminPanel() {
         })
         .eq("id", eventId);
 
-      if (updateError) throw updateError;
+      if (error) throw error;
+      
+      // Also clear event_questions drawn status
+      const { error: qError } = await supabase
+        .from("event_questions")
+        .update({ drawn: false, drawn_at: null })
+        .eq("event_id", eventId);
+        
+      if (qError) console.error("Failed to reset questions", qError);
 
-      // ✅ Reload events
       await loadEvents();
       
-      if (selectedEvent?.id === eventId) {
-        const updatedEvent = await eventService.getEvent(eventId);
-        setSelectedEvent(updatedEvent);
-      }
-
-      // ✅ Reset continue mode state
-      setContinueAfterWinner(prev => ({ ...prev, [eventId]: false }));
-
       toast({
         title: "Event resetiran",
-        description: "Event je vraćen u DRAFT stanje. Možete ponovno generirati pitanja i ulaznice.",
+        description: "Event je vraćen u DRAFT stanje.",
       });
-    } catch (error: any) {
+    } catch (error) {
+      console.error("Failed to reset event:", error);
       toast({
-        title: "Error",
-        description: error.message || "Failed to reset event",
+        title: "Greška",
+        description: "Nije moguće resetirati event.",
         variant: "destructive",
       });
     } finally {
@@ -563,26 +693,52 @@ export default function AdminPanel() {
 
                             {event.status === "active" && (
                               <>
+                                {/* ✅ MANUAL DRAW BUTTON (disabled during auto-draw) */}
                                 <Button
                                   onClick={() => handleDrawNextQuestion(event.id)}
-                                  disabled={
-                                    loading ||
-                                    (event.drawn_numbers?.length || 0) >= 90
-                                  }
-                                  variant="default"
+                                  disabled={loading || autoDrawingState[event.id]}
                                   size="sm"
                                 >
-                                  <SkipForward className="w-4 h-4 mr-2" />
+                                  <SkipForward className="w-4 h-4 mr-1" />
                                   Izvuci sljedeće pitanje
                                 </Button>
-                                
+
+                                {/* ✅ AUTO DRAW BUTTON */}
+                                {!autoDrawingState[event.id] ? (
+                                  <div className="flex flex-col gap-1">
+                                    <Button
+                                      onClick={() => startAuto(event.id)}
+                                      disabled={loading}
+                                      variant="secondary"
+                                      size="sm"
+                                    >
+                                      <Play className="w-4 h-4 mr-1" />
+                                      Auto izvlačenje
+                                    </Button>
+                                    <span className="text-xs text-gray-500 text-center">
+                                      svakih {ANSWER_SECONDS + 1}s
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <Button
+                                    onClick={() => stopAuto(event.id, "manual_stop")}
+                                    disabled={loading}
+                                    variant="destructive"
+                                    size="sm"
+                                  >
+                                    <Pause className="w-4 h-4 mr-1" />
+                                    Zaustavi auto
+                                  </Button>
+                                )}
+
+                                {/* ✅ PAUSE BUTTON */}
                                 <Button
                                   onClick={() => handlePauseEvent(event.id)}
                                   disabled={loading}
-                                  variant="secondary"
+                                  variant="outline"
                                   size="sm"
                                 >
-                                  <Pause className="w-4 h-4 mr-2" />
+                                  <Pause className="w-4 h-4 mr-1" />
                                   Pauziraj
                                 </Button>
                               </>
