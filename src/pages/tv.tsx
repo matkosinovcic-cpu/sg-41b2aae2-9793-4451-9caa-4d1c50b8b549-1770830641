@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/integrations/supabase/client";
 
 interface TicketData {
   id: string;
@@ -22,6 +23,7 @@ export default function TVScreen() {
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
+  const [questionText, setQuestionText] = useState<string | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
@@ -365,6 +367,25 @@ export default function TVScreen() {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[TV] ✅ loadCurrentQuestion: Question loaded:", data);
       setCurrentQuestion(data);
+
+      // Fetch question text if we have a question ID
+      if (data?.question_id) {
+        const { data: qData, error: qError } = await supabase
+          .from("questions")
+          .select("question_text")
+          .eq("id", data.question_id)
+          .single();
+
+        if (qError) {
+          console.error("[TV] ❌ Failed to load question text:", qError);
+          setQuestionText(null);
+        } else {
+          console.log("[TV] ✅ Question text loaded:", qData?.question_text);
+          setQuestionText(qData?.question_text || null);
+        }
+      } else {
+        setQuestionText(null);
+      }
     } catch (error) {
       console.error("[TV] ❌ loadCurrentQuestion: Failed to load question:", error);
       console.error("[TV] ❌ loadCurrentQuestion: Details:", {
@@ -373,6 +394,7 @@ export default function TVScreen() {
         questionNumber,
       });
       setCurrentQuestion(null);
+      setQuestionText(null);
     }
   };
 
@@ -596,10 +618,10 @@ export default function TVScreen() {
         </div>
       )}
 
-      {currentQuestion && (
+      {questionText && (
         <div className="mt-6 bg-white/10 rounded-xl p-6 backdrop-blur-sm">
           <p className="text-2xl text-white font-medium text-center">
-            {currentQuestion.text}
+            {questionText}
           </p>
         </div>
       )}
