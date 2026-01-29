@@ -186,15 +186,43 @@ export default function AdminPanel() {
   const handleStartEvent = async (eventId: string) => {
     setLoading(true);
     try {
+      // ✅ Re-fetch event to check current status
+      const { data: freshEvent, error: fetchError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("id", eventId)
+        .maybeSingle();
+
+      if (fetchError || !freshEvent) {
+        toast({
+          title: "Error",
+          description: "Failed to fetch event state",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ✅ PREVENT restarting FINISHED events
+      if (freshEvent.status === "finished") {
+        toast({
+          title: "Event je završen",
+          description: "Ne možete ponovno pokrenuti završen event. Koristite 'Reset Event' za novo izvlačenje.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
       await eventService.startEvent(eventId);
       
-      // CRITICAL: Reset continue mode to OFF when starting event
+      // ✅ Reset continue mode when starting/resuming
       setContinueAfterWinner(prev => ({ ...prev, [eventId]: false }));
       
       await loadEvents();
       toast({
         title: "Success",
-        description: "Event started",
+        description: freshEvent.status === "paused" ? "Event nastavljen" : "Event pokrenut",
       });
     } catch (error) {
       toast({
@@ -208,29 +236,68 @@ export default function AdminPanel() {
   };
 
   const handleDrawNextQuestion = async (eventId: string) => {
-    const event = events.find(e => e.id === eventId);
-    
-    // CRITICAL: Block draw if winner exists and continue mode is OFF
-    if (event?.winner_ticket_id && !continueAfterWinner[eventId]) {
-      toast({
-        title: "Winner Found",
-        description: "Winner exists. Click 'Continue After Winner' to keep drawing.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setLoading(true);
     try {
+      // ✅ CRITICAL: Re-fetch event from DB to get latest state (SOURCE OF TRUTH)
+      const { data: freshEvent, error: fetchError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("id", eventId)
+        .maybeSingle();
+
+      if (fetchError || !freshEvent) {
+        toast({
+          title: "Error",
+          description: "Failed to fetch event state",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ✅ STATE MACHINE: Enforce strict status rules
+      if (freshEvent.status === "finished") {
+        toast({
+          title: "Event završen",
+          description: "Event je završen (pobjednik postoji). Za novo izvlačenje koristi 'Reset Event'.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (freshEvent.status === "paused") {
+        toast({
+          title: "Event pauziran",
+          description: "Event je pauziran. Klikni 'Nastavi' za nastavak.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (freshEvent.status !== "active") {
+        toast({
+          title: "Nevažeći status",
+          description: `Event mora biti aktivan za izvlačenje (trenutni status: ${freshEvent.status})`,
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ✅ ACTIVE status: Allow draw
       await eventService.drawNextQuestion(eventId);
       await loadEvents();
+      
       if (selectedEvent?.id === eventId) {
         const updatedEvent = await eventService.getEvent(eventId);
         setSelectedEvent(updatedEvent);
       }
+      
       toast({
         title: "Success",
-        description: "Question drawn",
+        description: "Pitanje izvučeno",
       });
     } catch (error: any) {
       toast({
@@ -269,6 +336,63 @@ export default function AdminPanel() {
       title: "Continue Mode Enabled",
       description: "Drawing will continue until 90. Winner remains locked.",
     });
+  };
+
+  const handleResetEvent = async (eventId: string) => {
+    // ✅ CONFIRMATION REQUIRED for destructive action
+    const confirmed = window.confirm(
+      "⚠️ RESET EVENT?\n\n" +
+      "Ovo će:\n" +
+      "• Resetirati event status na DRAFT\n" +
+      "• Obrisati pobjednika\n" +
+      "• Obrisati sva izvučena pitanja\n" +
+      "• ZADRŽATI sve odgovore igrača\n\n" +
+      'Za potvrdu, klikni "OK".'
+    );
+
+    if (!confirmed) return;
+
+    setLoading(true);
+    try {
+      // ✅ Reset event to DRAFT state
+      const { error: updateError } = await supabase
+        .from("events")
+        .update({
+          status: "draft",
+          winner_ticket_id: null,
+          current_question_number: 0,
+          current_drawn_number: null,
+          drawn_numbers: [],
+          question_open_until: null,
+        })
+        .eq("id", eventId);
+
+      if (updateError) throw updateError;
+
+      // ✅ Reload events
+      await loadEvents();
+      
+      if (selectedEvent?.id === eventId) {
+        const updatedEvent = await eventService.getEvent(eventId);
+        setSelectedEvent(updatedEvent);
+      }
+
+      // ✅ Reset continue mode state
+      setContinueAfterWinner(prev => ({ ...prev, [eventId]: false }));
+
+      toast({
+        title: "Event resetiran",
+        description: "Event je vraćen u DRAFT stanje. Možete ponovno generirati pitanja i ulaznice.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reset event",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -452,19 +576,6 @@ export default function AdminPanel() {
                                   Izvuci sljedeće pitanje
                                 </Button>
                                 
-                                {event.winner_ticket_id && !continueAfterWinner[event.id] && (
-                                  <Button
-                                    onClick={() => handleContinueAfterWinner(event.id)}
-                                    disabled={loading}
-                                    variant="secondary"
-                                    size="sm"
-                                    className="bg-yellow-500 hover:bg-yellow-600 text-white"
-                                  >
-                                    <Trophy className="w-4 h-4 mr-2" />
-                                    Continue After Winner
-                                  </Button>
-                                )}
-                                
                                 <Button
                                   onClick={() => handlePauseEvent(event.id)}
                                   disabled={loading}
@@ -486,6 +597,17 @@ export default function AdminPanel() {
                               >
                                 <Play className="w-4 h-4 mr-2" />
                                 Nastavi
+                              </Button>
+                            )}
+
+                            {event.status === "finished" && (
+                              <Button
+                                onClick={() => handleResetEvent(event.id)}
+                                disabled={loading}
+                                variant="destructive"
+                                size="sm"
+                              >
+                                🔄 Reset Event
                               </Button>
                             )}
                           </div>
