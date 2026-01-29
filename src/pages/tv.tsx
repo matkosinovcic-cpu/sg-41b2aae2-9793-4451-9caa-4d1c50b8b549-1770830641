@@ -581,16 +581,16 @@ export default function TVScreen() {
         <div className="space-y-8">
           {/* Current Question Display */}
           {event.current_drawn_number ? (
-            <div className="bg-gradient-to-r from-yellow-500 to-orange-500 rounded-3xl p-12 shadow-2xl transform hover:scale-105 transition-transform">
+            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-8 shadow-2xl max-w-4xl mx-auto">
               <div className="text-center">
-                <div className="text-2xl font-semibold text-white mb-4">
-                  Trenutno pitanje #{event.current_drawn_number}
+                <div className="text-xl text-indigo-200 mb-2">
+                  Trenutno pitanje
                 </div>
-                <div className="text-9xl font-extrabold text-white animate-pulse">
-                  {event.current_drawn_number}
+                <div className="text-9xl font-black text-white mb-4">
+                  #{event.current_drawn_number}
                 </div>
                 {timeRemaining > 0 && (
-                  <div className="text-6xl font-bold text-yellow-300 mt-4">
+                  <div className="text-6xl font-bold text-yellow-300 animate-pulse">
                     {timeRemaining}s
                   </div>
                 )}
@@ -630,15 +630,15 @@ export default function TVScreen() {
       <div className="grid grid-cols-3 gap-6 max-w-4xl mx-auto">
         <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
           <div className="text-4xl font-bold text-yellow-300">90</div>
-          <div className="text-lg text-gray-300 mt-2">90 Numbers Total</div>
+          <div className="text-lg text-gray-300 mt-2">90 pitanja</div>
         </div>
         <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
           <div className="text-4xl font-bold text-green-300">15</div>
-          <div className="text-lg text-gray-300 mt-2">15 to Win</div>
+          <div className="text-lg text-gray-300 mt-2">15 za pobjedu</div>
         </div>
         <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 text-center">
           <div className="text-4xl font-bold text-pink-300">🍀</div>
-          <div className="text-lg text-gray-300 mt-2">Good Luck!</div>
+          <div className="text-lg text-gray-300 mt-2">Sretno</div>
         </div>
       </div>
     </>
