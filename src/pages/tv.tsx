@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Gamepad2, Trophy, Clock } from "lucide-react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { useActiveEvent } from "@/hooks/useActiveEvent";
 
 interface TicketData {
   id: string;
@@ -21,6 +22,7 @@ export default function TVScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const { event: activeEvent, isLoading: loadingActiveEvent, realtimeStatus } = useActiveEvent();
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [questionText, setQuestionText] = useState<string | null>(null);
@@ -53,163 +55,34 @@ export default function TVScreen() {
     return () => console.log("[TV] 💀 COMPONENT UNMOUNTED");
   }, []);
 
-  // 🎯 FETCH ACTIVE EVENT (polling function)
-  const fetchActiveEvent = async (): Promise<Event | null> => {
-    try {
-      console.log('[TV-FETCH] 🔄 Fetching active event...');
-      console.log('[TV-FETCH] Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
-      console.log('[TV-FETCH] Has anon key:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  // 🎯 SYNC WITH ACTIVE EVENT from hook
+  useEffect(() => {
+    if (loadingActiveEvent) return;
+    
+    if (activeEvent) {
+      console.log("[TV] ✅ Active event from hook:", {
+        id: activeEvent.id.slice(0, 8),
+        name: activeEvent.name,
+        status: activeEvent.status,
+        currentNumber: activeEvent.current_drawn_number
+      });
       
-      const { data, error } = await supabase
-        .from('events')
-        .select('*')
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Update local state
+      setEvent(activeEvent);
+      setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
+      lastDrawnNumberRef.current = activeEvent.current_drawn_number;
       
-      if (error) {
-        console.error("[TV-FETCH] ❌ Supabase error:", error);
-        console.error("[TV-FETCH] ❌ Error details:", JSON.stringify(error, null, 2));
-        return null;
+      // Load current question if exists
+      if (activeEvent.current_drawn_number) {
+        loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
       }
-      
-      console.log("[TV-FETCH] ✅ Success, data:", data);
-      return data as unknown as Event;
-    } catch (error) {
-      console.error("[TV-FETCH] ❌ Exception:", error);
-      console.error("[TV-FETCH] ❌ Error type:", typeof error);
-      console.error("[TV-FETCH] ❌ Stack:", (error as Error)?.stack);
-      return null;
+    } else {
+      console.log("[TV] ℹ️ No active event");
+      setEvent(null);
     }
-  };
+  }, [activeEvent, loadingActiveEvent]);
 
-  // 📡 HANDLE REALTIME UPDATES
-  const handleRealtimeUpdate = async (newEventData: Event) => {
-    lastRealtimeUpdateRef.current = Date.now();
-    
-    console.log('[TV-RT] 🔄 Processing realtime update...', {
-      eventId: newEventData.id.slice(0, 8),
-      currentNumber: newEventData.current_drawn_number,
-      drawnCount: newEventData.drawn_numbers?.length || 0,
-      status: newEventData.status
-    });
-    
-    // 🎯 DE-DUPE CHECK - Ignore if nothing changed
-    const newDrawnCount = newEventData.drawn_numbers?.length || 0;
-    const currentDrawnCount = drawnNumbers.size;
-    
-    if (newEventData.current_drawn_number === lastDrawnNumberRef.current &&
-        newDrawnCount === currentDrawnCount &&
-        newEventData.status === event?.status) {
-      console.log('[TV-RT] ⏭️ DUPLICATE update, ignoring');
-      return;
-    }
-    
-    // Update drawn numbers
-    if (newEventData.drawn_numbers) {
-      const newDrawnNumbers = new Set(newEventData.drawn_numbers);
-      if (JSON.stringify([...newDrawnNumbers]) !== JSON.stringify([...drawnNumbers])) {
-        console.log('[TV-RT] 📊 Drawn numbers changed');
-        setDrawnNumbers(newDrawnNumbers);
-      }
-    }
-    
-    // Update current number
-    if (newEventData.current_drawn_number !== lastDrawnNumberRef.current) {
-      console.log('[TV-RT] 🔔 Current number changed:', lastDrawnNumberRef.current, '→', newEventData.current_drawn_number);
-      playBeep('start');
-      lastDrawnNumberRef.current = newEventData.current_drawn_number;
-      
-      if (newEventData.current_drawn_number) {
-        await loadCurrentQuestion(newEventData.id, newEventData.current_drawn_number);
-      }
-    }
-    
-    // Update status
-    if (newEventData.status !== event?.status) {
-      console.log('[TV-RT] 📢 Status changed:', event?.status, '→', newEventData.status);
-    }
-    
-    // Update event state
-    console.log('[TV-STATE] setEvent from realtime', {
-      eventId: newEventData.id.slice(0, 8),
-      currentNumber: newEventData.current_drawn_number,
-      status: newEventData.status,
-      ts: Date.now()
-    });
-    setEvent(newEventData);
-    
-    // 🛡️ UPDATE LAST GOOD DISPLAY if we have valid data
-    if (newEventData.current_drawn_number && questionText) {
-      lastGoodDisplayRef.current = {
-        eventId: newEventData.id,
-        number: newEventData.current_drawn_number,
-        questionText: questionText,
-        questionId: currentQuestion?.question_id || null,
-        drawnNumbers: newEventData.drawn_numbers || [],
-        updatedAt: Date.now()
-      };
-      console.log('[TV-GUARD] 🛡️ Updated lastGoodDisplay', lastGoodDisplayRef.current);
-    }
-    
-    // Log to console (for debug)
-    console.debug('[TV-STATUS]', {
-      eventId: newEventData.id.slice(0, 8),
-      name: newEventData.name,
-      status: newEventData.status,
-      currentNumber: newEventData.current_drawn_number,
-      drawnCount: newEventData.drawn_numbers?.length || 0,
-      source: 'realtime'
-    });
-  };
-
-  // 🔥 HARD RESET TV (when new active event detected)
-  const hardResetTV = async (newActiveEvent: Event) => {
-    console.log("[TV-RESET] 🔥 HARD RESET TV UI STATE");
-    console.log("[TV-RESET] Old event:", selectedEventId?.slice(0, 8));
-    console.log("[TV-RESET] New event:", newActiveEvent.id.slice(0, 8), "-", newActiveEvent.name);
-    
-    // 1. Unsubscribe from old event
-    if (channelRef.current) {
-      console.log("[TV-RESET] 🧹 Unsubscribing from old event");
-      await channelRef.current.unsubscribe();
-      channelRef.current = null;
-    }
-    
-    // 2. Clear all UI state
-    setAnimatedCount(0);
-    setDrawnNumbers(new Set());
-    setTickets([]);
-    setTicketStats([]);
-    setCurrentQuestion(null);
-    setQuestionText(null);
-    setTimeRemaining(0);
-    lastDrawnNumberRef.current = null;
-    lastGoodDisplayRef.current = null; // Clear guard for new event
-    
-    // 3. Set new event
-    setSelectedEventId(newActiveEvent.id);
-    console.log('[TV-STATE] setEvent from hardReset', {
-      eventId: newActiveEvent.id.slice(0, 8),
-      currentNumber: newActiveEvent.current_drawn_number,
-      status: newActiveEvent.status,
-      ts: Date.now()
-    });
-    setEvent(newActiveEvent);
-    
-    // 4. Load fresh data
-    setDrawnNumbers(new Set(newActiveEvent.drawn_numbers || []));
-    lastDrawnNumberRef.current = newActiveEvent.current_drawn_number;
-    
-    if (newActiveEvent.current_drawn_number) {
-      await loadCurrentQuestion(newActiveEvent.id, newActiveEvent.current_drawn_number);
-    }
-    
-    console.log("[TV-RESET] ✅ TV reset complete, showing new event");
-  };
-
-  // Initialize AudioContext and fetch initial ACTIVE event
+  // Initialize AudioContext
   useEffect(() => {
     // Initialize AudioContext with error handling
     try {
@@ -218,186 +91,7 @@ export default function TVScreen() {
     } catch (error) {
       console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
     }
-
-    // 🧹 CLEAR ALL POSSIBLE LOCALSTORAGE KEYS (prevent loading old events)
-    console.log("[TV-INIT] 🧹 Clearing all localStorage keys...");
-    localStorage.removeItem('selectedEventId');
-    localStorage.removeItem('eventId');
-    localStorage.removeItem('activeEventId');
-    localStorage.removeItem('tvEventId');
-    localStorage.removeItem('tv_event_id');
-    localStorage.removeItem('persist:store');
-
-    // 🎯 Fetch initial ACTIVE event
-    const initializeTV = async () => {
-      console.log("[TV-INIT] 🎯 Fetching initial ACTIVE event...");
-      const activeEvent = await fetchActiveEvent();
-      
-      if (activeEvent) {
-        console.log("[TV-INIT] ✅ ACTIVE event found:", activeEvent.name);
-        setSelectedEventId(activeEvent.id);
-        console.log('[TV-STATE] setEvent from init', {
-          eventId: activeEvent.id.slice(0, 8),
-          currentNumber: activeEvent.current_drawn_number,
-          status: activeEvent.status,
-          ts: Date.now()
-        });
-        setEvent(activeEvent);
-        setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
-        lastDrawnNumberRef.current = activeEvent.current_drawn_number;
-        
-        if (activeEvent.current_drawn_number) {
-          await loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
-        }
-      } else {
-        console.log("[TV-INIT] ℹ️ No ACTIVE event found");
-        setSelectedEventId("");
-      }
-    };
-
-    initializeTV();
   }, []);
-
-  // ⏰ POLLING TIMER - Check for new ACTIVE event every 30 seconds (SLOW - realtime is primary)
-  useEffect(() => {
-    console.log("[TV-POLL] ⏰ Starting polling timer (30s interval - realtime primary)...");
-
-    const pollForActiveEvent = async () => {
-      const timeSinceRealtime = Date.now() - lastRealtimeUpdateRef.current;
-      
-      // If realtime is fresh (< 20s), only check for event switch (no state update)
-      if (timeSinceRealtime < 20000) {
-        console.log("[TV-POLL] ⏭️ Realtime is fresh, only checking for event switch");
-        const activeEvent = await fetchActiveEvent();
-        
-        if (!activeEvent) {
-          console.log("[TV-POLL] ⚠️ No ACTIVE event found");
-          return;
-        }
-        
-        // Only handle event switch
-        if (activeEvent.id !== selectedEventId) {
-          console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
-          console.log("[TV-POLL] Current:", selectedEventId?.slice(0, 8));
-          console.log("[TV-POLL] New:", activeEvent.id.slice(0, 8), "-", activeEvent.name);
-          await hardResetTV(activeEvent);
-        }
-        return;
-      }
-      
-      // Realtime is stale (> 20s), use polling as fallback
-      console.log("[TV-POLL] 🔄 Realtime stale, using polling fallback");
-      
-      const activeEvent = await fetchActiveEvent();
-      
-      if (!activeEvent) {
-        console.log("[TV-POLL] ⚠️ No ACTIVE event found");
-        setFailCount(prev => {
-          const newCount = prev + 1;
-          console.log("[TV-POLL] Fail count:", newCount);
-          
-          if (newCount >= 3) {
-            console.log("[TV-POLL] ❌ 3 FETCH FAILURES - FORCE RELOAD");
-            window.location.replace('/tv?ts=' + Date.now());
-          }
-          
-          return newCount;
-        });
-        return;
-      }
-      
-      if (failCount > 0) {
-        console.log("[TV-POLL] ✅ Fetch success, resetting fail count");
-        setFailCount(0);
-      }
-      
-      if (!selectedEventId) {
-        console.log("[TV-POLL] ✅ Found ACTIVE event (initial or after none)");
-        await hardResetTV(activeEvent);
-        return;
-      }
-      
-      if (activeEvent.id !== selectedEventId) {
-        console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
-        console.log("[TV-POLL] Current:", selectedEventId.slice(0, 8));
-        console.log("[TV-POLL] New:", activeEvent.id.slice(0, 8), "-", activeEvent.name);
-        await hardResetTV(activeEvent);
-      } else {
-        // Same event, update state (polling fallback mode)
-        console.log("[TV-POLL] 📊 Updating state from polling (realtime stale)");
-        console.log('[TV-STATE] setEvent from polling', {
-          eventId: activeEvent.id.slice(0, 8),
-          currentNumber: activeEvent.current_drawn_number,
-          status: activeEvent.status,
-          ts: Date.now()
-        });
-        setEvent(activeEvent);
-        setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
-        
-        if (activeEvent.current_drawn_number !== lastDrawnNumberRef.current) {
-          console.log("[TV-POLL] 🔔 Number changed:", lastDrawnNumberRef.current, "→", activeEvent.current_drawn_number);
-          playBeep('start');
-          lastDrawnNumberRef.current = activeEvent.current_drawn_number;
-          if (activeEvent.current_drawn_number) {
-            await loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
-          }
-        }
-        
-        console.debug('[TV-STATUS]', {
-          eventId: activeEvent.id.slice(0, 8),
-          name: activeEvent.name,
-          status: activeEvent.status,
-          currentNumber: activeEvent.current_drawn_number,
-          drawnCount: activeEvent.drawn_numbers?.length || 0,
-          winnersCount: tickets.filter(t => t.is_winner).length,
-          source: 'polling',
-          failCount
-        });
-      }
-    };
-
-    pollForActiveEvent();
-    const pollInterval = setInterval(pollForActiveEvent, 30000); // 30s interval
-
-    return () => {
-      console.log("[TV-POLL] 🧹 Cleaning up polling timer");
-      clearInterval(pollInterval);
-    };
-  }, [failCount, selectedEventId, tickets]);
-
-  // 📡 REALTIME SUBSCRIPTION
-  useEffect(() => {
-    if (!selectedEventId) return;
-    
-    console.log('[TV-RT] 📡 Setting up realtime subscription for event:', selectedEventId.slice(0, 8));
-    
-    if (channelRef.current) {
-      channelRef.current.unsubscribe();
-    }
-    
-    const channel = supabase
-      .channel(`tv-event:${selectedEventId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'events',
-        filter: `id=eq.${selectedEventId}`
-      }, (payload) => {
-        console.log('[TV-RT] ✅ Received realtime update');
-        handleRealtimeUpdate(payload.new as Event);
-      })
-      .subscribe((status) => {
-        console.log('[TV-RT] Subscription status:', status);
-      });
-    
-    channelRef.current = channel;
-    
-    return () => {
-      console.log('[TV-RT] 🧹 Cleaning up realtime subscription');
-      channel.unsubscribe();
-      channelRef.current = null;
-    };
-  }, [selectedEventId]);
 
   // Timer countdown with sound effects
   useEffect(() => {

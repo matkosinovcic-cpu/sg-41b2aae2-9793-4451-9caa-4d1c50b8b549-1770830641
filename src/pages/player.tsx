@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useActiveEvent } from "@/hooks/useActiveEvent";
 
 // Helper to normalize answers for local comparison (matches service logic)
 function normalizeAnswer(value: any): boolean | null {
@@ -40,6 +41,9 @@ interface AggregatedStats {
 }
 
 export default function PlayerScreen() {
+  // 🚀 USE ACTIVE EVENT HOOK (replaces localStorage + manual fetch)
+  const { event: activeEventFromHook, isLoading: loadingActiveEvent, realtimeStatus } = useActiveEvent();
+  
   const [serialInput, setSerialInput] = useState("");
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [ticket, setTicket] = useState<TicketData | null>(null);
@@ -56,54 +60,76 @@ export default function PlayerScreen() {
   const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
   const { toast } = useToast();
 
-  // Load tickets from localStorage on mount
+  // 🎯 SYNC WITH ACTIVE EVENT from hook
   useEffect(() => {
-    const storedSerialsJSON = localStorage.getItem("ticket_serials");
-    const storedEventId = localStorage.getItem("event_id");
+    if (loadingActiveEvent) return;
     
-    if (storedSerialsJSON && storedEventId) {
-      try {
-        const serials: string[] = JSON.parse(storedSerialsJSON);
-        console.log("[Player] Restoring tickets from localStorage:", serials);
-        
-        eventService.getEvent(storedEventId).then(eventData => {
-          setEvent(eventData);
-          setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-          
-          answerService.getOrCreateSession(storedEventId).then(sessionData => {
-            setSession(sessionData);
-            console.log("[Player] ✅ Session initialized:", sessionData.id);
-          });
-          
-          Promise.all(
-            serials.map(serial => 
-              eventService.getTicketBySerial(serial).catch(err => {
-                console.error(`Failed to load ticket ${serial}:`, err);
-                return null;
-              })
-            )
-          ).then(loadedTickets => {
-            const validTickets = loadedTickets.filter(t => t !== null) as TicketData[];
-            if (validTickets.length > 0) {
-              setTickets(validTickets);
-              setTicket(validTickets[0]);
-              console.log("[Player] ✅ Restored tickets:", validTickets.map(t => t.serial_number));
-            } else {
-              localStorage.removeItem("ticket_serials");
-              localStorage.removeItem("event_id");
-            }
-          });
-        }).catch(err => {
-          console.error("[Player] Failed to restore event:", err);
-          localStorage.removeItem("ticket_serials");
-          localStorage.removeItem("event_id");
-        });
-      } catch (err) {
-        console.error("[Player] Failed to parse stored tickets:", err);
-        localStorage.removeItem("ticket_serials");
+    if (activeEventFromHook && !event) {
+      console.log("[Player] ✅ Active event from hook:", {
+        id: activeEventFromHook.id.slice(0, 8),
+        name: activeEventFromHook.name,
+        status: activeEventFromHook.status
+      });
+      
+      // If we have tickets for this event, use it
+      const storedSerials = localStorage.getItem("ticket_serials");
+      if (storedSerials) {
+        try {
+          const serials: string[] = JSON.parse(storedSerials);
+          if (serials.length > 0) {
+            // Load tickets for active event
+            Promise.all(
+              serials.map(serial => eventService.getTicketBySerial(serial))
+            ).then(loadedTickets => {
+              const validTickets = loadedTickets.filter(t => t !== null && t.event_id === activeEventFromHook.id);
+              if (validTickets.length > 0) {
+                setTickets(validTickets);
+                setTicket(validTickets[0]);
+                setEvent(activeEventFromHook);
+                setDrawnNumbers(new Set(activeEventFromHook.drawn_numbers || []));
+                
+                // Initialize session
+                answerService.getOrCreateSession(activeEventFromHook.id).then(sessionData => {
+                  setSession(sessionData);
+                });
+                
+                console.log("[Player] ✅ Restored tickets for active event");
+              }
+            });
+          }
+        } catch (err) {
+          console.error("[Player] Failed to parse stored tickets:", err);
+        }
       }
     }
-  }, []);
+  }, [activeEventFromHook, loadingActiveEvent, event]);
+
+  // 🔄 SYNC EVENT STATE when active event updates
+  useEffect(() => {
+    if (!activeEventFromHook || !event) return;
+    
+    // Only update if it's the same event we're watching
+    if (activeEventFromHook.id === event.id) {
+      console.log("[Player] 📊 Active event updated:", {
+        currentNumber: activeEventFromHook.current_drawn_number,
+        drawnCount: activeEventFromHook.drawn_numbers?.length || 0,
+        status: activeEventFromHook.status
+      });
+      
+      setEvent(activeEventFromHook);
+      setDrawnNumbers(new Set(activeEventFromHook.drawn_numbers || []));
+      
+      if (activeEventFromHook.current_question_number) {
+        loadCurrentQuestion(activeEventFromHook.id, activeEventFromHook.current_question_number);
+      }
+      
+      // Load stats when event finishes
+      if (activeEventFromHook.status === "finished" && session && tickets.length > 0) {
+        loadStats();
+        loadDetailedResults();
+      }
+    }
+  }, [activeEventFromHook]);
 
   // CRITICAL: Load statistics ONLY when event is finished
   useEffect(() => {
@@ -113,28 +139,11 @@ export default function PlayerScreen() {
     }
   }, [session?.id, tickets.length, event?.status]);
 
-  // Real-time subscriptions
+  // Real-time subscriptions (for tickets and answers only - event comes from hook)
   useEffect(() => {
     if (!event) return;
 
-    console.log("[Player] Setting up subscriptions for event:", event.id);
-
-    const eventSubscription = eventService.subscribeToEvent(event.id, (payload) => {
-      console.log("[Player] Event update:", payload);
-      const updatedEvent = payload.new;
-      setEvent(updatedEvent);
-      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-      
-      if (updatedEvent.current_question_number) {
-        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
-      }
-      
-      // CRITICAL: Load stats when event finishes
-      if (updatedEvent.status === "finished" && session && tickets.length > 0) {
-        loadStats();
-        loadDetailedResults();
-      }
-    });
+    console.log("[Player] Setting up ticket subscriptions for event:", event.id);
 
     const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
       console.log("[Player] Ticket update:", payload);
@@ -157,45 +166,10 @@ export default function PlayerScreen() {
       : null;
 
     return () => {
-      eventSubscription.unsubscribe();
       ticketsSubscription.unsubscribe();
       if (answersSubscription) answersSubscription.unsubscribe();
     };
   }, [event?.id, ticket?.id, session?.id, event?.status]);
-
-  // Polling fallback
-  useEffect(() => {
-    if (!event || event.status !== "active") return;
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const updatedEvent = await eventService.getEvent(event.id);
-        
-        if (updatedEvent.current_drawn_number !== event.current_drawn_number) {
-          console.log("[Player-Poll] Number changed:", updatedEvent.current_drawn_number);
-          setEvent(updatedEvent);
-          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-          
-          if (updatedEvent.current_question_number) {
-            await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
-          }
-        }
-        
-        // Check if event finished
-        if (updatedEvent.status === "finished" && event.status === "active") {
-          setEvent(updatedEvent);
-          if (session && tickets.length > 0) {
-            await loadStats();
-            await loadDetailedResults();
-          }
-        }
-      } catch (error) {
-        console.error("[Player-Poll] Error:", error);
-      }
-    }, 1500);
-
-    return () => clearInterval(pollInterval);
-  }, [event?.id, event?.status, event?.current_drawn_number, session?.id, tickets.length]);
 
   // Timer countdown with timeout handling
   useEffect(() => {
@@ -421,8 +395,6 @@ export default function PlayerScreen() {
         if (eventData.current_question_number) {
           await loadCurrentQuestion(eventData.id, eventData.current_question_number);
         }
-        
-        localStorage.setItem("event_id", eventData.id);
       }
 
       const newTickets = [...tickets, ticketData];
