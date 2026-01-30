@@ -563,7 +563,7 @@ export default function TVScreen() {
                 </div>
                 
                 {/* Main title - centered */}
-                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-6xl font-black tracking-wider text-white drop-shadow-2xl">
+                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-4xl sm:text-5xl lg:text-6xl font-black tracking-normal text-white drop-shadow-2xl whitespace-nowrap">
                   PITALICA SKITALICA
                 </h1>
               </div>
