@@ -43,7 +43,7 @@ export default function TVScreen() {
         .from('events')
         .select('*')
         .eq('status', 'active')
-        .order('updated_at', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
       
