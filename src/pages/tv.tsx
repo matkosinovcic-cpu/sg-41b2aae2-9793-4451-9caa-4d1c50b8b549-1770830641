@@ -283,6 +283,19 @@ export default function TVScreen() {
     }
   }, [event?.status]);
 
+  const loadStats = async () => {
+    if (!event || tickets.length === 0) return;
+    
+    try {
+      const statsData = await answerService.getEventTicketStats(event.id);
+      setTicketStats(statsData);
+      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
+    } catch (error) {
+      console.error("[TV] Failed to load stats:", error);
+      setTicketStats([]);
+    }
+  };
+
   const loadEvents = async () => {
     try {
       console.log("[TV] 🔍 loadEvents: Fetching all events...");
@@ -464,19 +477,6 @@ export default function TVScreen() {
       setDetailedResults(resultsMap);
     } catch (error) {
       console.error("[TV] Failed to load detailed results:", error);
-    }
-  };
-
-  const loadStats = async () => {
-    if (!event || tickets.length === 0) return;
-    
-    try {
-      const statsData = await answerService.getEventTicketStats(event.id);
-      setTicketStats(statsData);
-      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
-    } catch (error) {
-      console.error("[TV] Failed to load stats:", error);
-      setTicketStats([]);
     }
   };
 
