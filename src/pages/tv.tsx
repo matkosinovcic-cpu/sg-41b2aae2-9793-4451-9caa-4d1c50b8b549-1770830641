@@ -6,7 +6,7 @@ import { answerService, TicketDetailedResults, TicketStats } from "@/services/an
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
 interface TicketData {
@@ -35,7 +35,7 @@ export default function TVScreen() {
   const [animatedCount, setAnimatedCount] = useState(0);
   const [tvKey, setTvKey] = useState(0);
   const [failCount, setFailCount] = useState(0);
-  const channelRef = useRef<SupabaseRealtimeChannel | null>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   // 🎯 FETCH ACTIVE EVENT (polling function)
   const fetchActiveEvent = async (): Promise<Event | null> => {
@@ -60,13 +60,63 @@ export default function TVScreen() {
     }
   };
 
+  // 📡 HANDLE REALTIME UPDATES
+  const handleRealtimeUpdate = async (newEventData: Event) => {
+    // console.log('[TV-RT] 🔄 Processing realtime update...');
+    
+    // Update drawn numbers
+    if (newEventData.drawn_numbers) {
+      const newDrawnNumbers = new Set(newEventData.drawn_numbers);
+      if (JSON.stringify([...newDrawnNumbers]) !== JSON.stringify([...drawnNumbers])) {
+        // console.log('[TV-RT] 📊 Drawn numbers changed');
+        setDrawnNumbers(newDrawnNumbers);
+      }
+    }
+    
+    // Update current number
+    if (newEventData.current_drawn_number !== lastDrawnNumberRef.current) {
+      console.log('[TV-RT] 🔔 Current number changed:', lastDrawnNumberRef.current, '→', newEventData.current_drawn_number);
+      playBeep('start');
+      lastDrawnNumberRef.current = newEventData.current_drawn_number;
+      
+      if (newEventData.current_drawn_number) {
+        await loadCurrentQuestion(newEventData.id, newEventData.current_drawn_number);
+      }
+    }
+    
+    // Update status
+    if (newEventData.status !== event?.status) {
+      console.log('[TV-RT] 📢 Status changed:', event?.status, '→', newEventData.status);
+    }
+    
+    // Update event state
+    setEvent(newEventData);
+    
+    // Log to console (for debug)
+    console.debug('[TV-STATUS]', {
+      eventId: newEventData.id.slice(0, 8),
+      name: newEventData.name,
+      status: newEventData.status,
+      currentNumber: newEventData.current_drawn_number,
+      drawnCount: newEventData.drawn_numbers?.length || 0,
+      source: 'realtime'
+    });
+  };
+
   // 🔥 HARD RESET TV (when new active event detected)
   const hardResetTV = async (newActiveEvent: Event) => {
     console.log("[TV-RESET] 🔥 HARD RESET TV UI STATE");
     console.log("[TV-RESET] Old event:", selectedEventId?.slice(0, 8));
     console.log("[TV-RESET] New event:", newActiveEvent.id.slice(0, 8), "-", newActiveEvent.name);
     
-    // 1. Clear all UI state
+    // 1. Unsubscribe from old event
+    if (channelRef.current) {
+      console.log("[TV-RESET] 🧹 Unsubscribing from old event");
+      await channelRef.current.unsubscribe();
+      channelRef.current = null;
+    }
+    
+    // 2. Clear all UI state
     setAnimatedCount(0);
     setDrawnNumbers(new Set());
     setTickets([]);
@@ -76,17 +126,17 @@ export default function TVScreen() {
     setTimeRemaining(0);
     lastDrawnNumberRef.current = null;
     
-    // 2. Set new event
+    // 3. Set new event
     setSelectedEventId(newActiveEvent.id);
     setEvent(newActiveEvent);
     
-    // 3. Increment tvKey (force remount)
+    // 4. Increment tvKey (force remount)
     setTvKey(prev => {
       console.log("[TV-RESET] 🔑 Incrementing tvKey:", prev, "→", prev + 1);
       return prev + 1;
     });
     
-    // 4. Load fresh data
+    // 5. Load fresh data
     setDrawnNumbers(new Set(newActiveEvent.drawn_numbers || []));
     lastDrawnNumberRef.current = newActiveEvent.current_drawn_number;
     
@@ -217,7 +267,43 @@ export default function TVScreen() {
       console.log("[TV-POLL] 🧹 Cleaning up polling timer");
       clearInterval(pollInterval);
     };
-  }, [event?.status, tickets, failCount]);
+  }, [failCount]);
+
+  // 📡 REALTIME SUBSCRIPTION
+  useEffect(() => {
+    if (!selectedEventId) return;
+    
+    console.log('[TV-RT] 📡 Setting up realtime subscription for event:', selectedEventId.slice(0, 8));
+    
+    // Cleanup old subscription
+    if (channelRef.current) {
+      channelRef.current.unsubscribe();
+    }
+    
+    // Create new channel
+    const channel = supabase
+      .channel(`tv-event:${selectedEventId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'events',
+        filter: `id=eq.${selectedEventId}`
+      }, (payload) => {
+        // console.log('[TV-RT] ✅ Received realtime update:', payload);
+        handleRealtimeUpdate(payload.new as Event);
+      })
+      .subscribe((status) => {
+        console.log('[TV-RT] Subscription status:', status);
+      });
+    
+    channelRef.current = channel;
+    
+    return () => {
+      console.log('[TV-RT] 🧹 Cleaning up realtime subscription');
+      channel.unsubscribe();
+      channelRef.current = null;
+    };
+  }, [selectedEventId]); // Re-subscribe when event ID changes
 
   // Timer countdown with sound effects
   useEffect(() => {
