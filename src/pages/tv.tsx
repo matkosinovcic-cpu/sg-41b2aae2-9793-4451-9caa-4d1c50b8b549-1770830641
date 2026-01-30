@@ -26,7 +26,6 @@ export default function TVScreen() {
   const [questionText, setQuestionText] = useState<string | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(0);
-  const [pollingActive, setPollingActive] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
@@ -35,7 +34,69 @@ export default function TVScreen() {
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
   const [animatedCount, setAnimatedCount] = useState(0);
   const [tvKey, setTvKey] = useState(0);
+  const [failCount, setFailCount] = useState(0);
 
+  // 🎯 FETCH ACTIVE EVENT (polling function)
+  const fetchActiveEvent = async (): Promise<Event | null> => {
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .eq('status', 'active')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[TV-FETCH] ❌ Error fetching active event:", error);
+        return null;
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("[TV-FETCH] ❌ Exception:", error);
+      return null;
+    }
+  };
+
+  // 🔥 HARD RESET TV (when new active event detected)
+  const hardResetTV = async (newActiveEvent: Event) => {
+    console.log("[TV-RESET] 🔥 HARD RESET TV UI STATE");
+    console.log("[TV-RESET] Old event:", selectedEventId?.slice(0, 8));
+    console.log("[TV-RESET] New event:", newActiveEvent.id.slice(0, 8), "-", newActiveEvent.name);
+    
+    // 1. Clear all UI state
+    setAnimatedCount(0);
+    setDrawnNumbers(new Set());
+    setTickets([]);
+    setTicketStats([]);
+    setCurrentQuestion(null);
+    setQuestionText(null);
+    setTimeRemaining(0);
+    lastDrawnNumberRef.current = null;
+    
+    // 2. Set new event
+    setSelectedEventId(newActiveEvent.id);
+    setEvent(newActiveEvent);
+    
+    // 3. Increment tvKey (force remount)
+    setTvKey(prev => {
+      console.log("[TV-RESET] 🔑 Incrementing tvKey:", prev, "→", prev + 1);
+      return prev + 1;
+    });
+    
+    // 4. Load fresh data
+    setDrawnNumbers(new Set(newActiveEvent.drawn_numbers || []));
+    lastDrawnNumberRef.current = newActiveEvent.current_drawn_number;
+    
+    if (newActiveEvent.current_drawn_number) {
+      await loadCurrentQuestion(newActiveEvent.id, newActiveEvent.current_drawn_number);
+    }
+    
+    console.log("[TV-RESET] ✅ TV reset complete, showing new event");
+  };
+
+  // Initialize AudioContext and fetch initial ACTIVE event
   useEffect(() => {
     // Initialize AudioContext with error handling
     try {
@@ -45,140 +106,119 @@ export default function TVScreen() {
       console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
     }
 
-    // Load available events
+    // 🧹 CLEAR ALL POSSIBLE LOCALSTORAGE KEYS (prevent loading old events)
+    console.log("[TV-INIT] 🧹 Clearing all localStorage keys...");
+    localStorage.removeItem('selectedEventId');
+    localStorage.removeItem('eventId');
+    localStorage.removeItem('activeEventId');
+    localStorage.removeItem('tvEventId');
+    localStorage.removeItem('tv_event_id');
+    localStorage.removeItem('persist:store');
+
+    // 🎯 Fetch initial ACTIVE event
     const initializeTV = async () => {
-      try {
-        console.log("[TV] 🚀 Initializing TV display...");
-        await loadEvents();
-        console.log("[TV] ✅ Events loaded successfully");
+      console.log("[TV-INIT] 🎯 Fetching initial ACTIVE event...");
+      const activeEvent = await fetchActiveEvent();
+      
+      if (activeEvent) {
+        console.log("[TV-INIT] ✅ ACTIVE event found:", activeEvent.name);
+        setSelectedEventId(activeEvent.id);
+        setEvent(activeEvent);
+        setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
+        lastDrawnNumberRef.current = activeEvent.current_drawn_number;
         
-        // Priority 1: URL query param
-        const urlEventId = router.query.eventId as string;
-        
-        // Priority 2: localStorage
-        const storedEventId = localStorage.getItem("tv_event_id");
-        
-        const targetEventId = urlEventId || storedEventId;
-        
-        if (targetEventId) {
-          console.log("[TV] 📌 Auto-selecting event:", targetEventId, "from", urlEventId ? "URL" : "localStorage");
-          
-          // Validate event exists before selecting
-          const eventExists = await validateEventExists(targetEventId);
-          if (eventExists) {
-            setSelectedEventId(targetEventId);
-          } else {
-            console.warn("[TV] ⚠️ Event", targetEventId, "no longer exists, clearing and showing selection");
-            localStorage.removeItem("tv_event_id");
-            setSelectedEventId("");
-          }
-        } else {
-          console.log("[TV] ℹ️ No stored event, user must select");
+        if (activeEvent.current_drawn_number) {
+          await loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
         }
-      } catch (error) {
-        console.error("[TV] ❌ Initialization failed:", error);
-        setLoadingError("Failed to initialize TV display. Please refresh the page.");
+      } else {
+        console.log("[TV-INIT] ℹ️ No ACTIVE event found");
+        setSelectedEventId("");
       }
     };
 
     initializeTV();
-  }, [router.query.eventId]);
+  }, []);
 
-  // Validate event exists in database
-  const validateEventExists = async (eventId: string): Promise<boolean> => {
-    try {
-      const event = await eventService.getEvent(eventId);
-      return !!event;
-    } catch (error) {
-      console.error("[TV] Event validation failed:", error);
-      return false;
-    }
-  };
-
-  // Save selected event to localStorage and URL
+  // ⏰ POLLING TIMER - Check for new ACTIVE event every 2 seconds
   useEffect(() => {
-    if (selectedEventId) {
-      // Update URL without reload
-      router.replace({ pathname: "/tv", query: { eventId: selectedEventId } }, undefined, { shallow: true });
-    }
-  }, [selectedEventId]);
+    if (!selectedEventId) return;
 
-  // Real-time subscriptions
-  useEffect(() => {
-    if (!selectedEventId) {
-      return;
-    }
+    console.log("[TV-POLL] ⏰ Starting polling timer (2s interval)...");
 
-    console.log("[TV] Setting up subscription for event:", selectedEventId);
-
-    // Define async initialization function
-    const initializeEventView = async () => {
-      try {
-        // Initial load - MUST complete before subscription
-        await loadEventData();
-        console.log("[TV] ✅ Initial data loaded, subscription will handle updates");
-      } catch (error) {
-        console.error("[TV] ❌ Failed to initialize event view:", error);
-        // Error already handled by loadEventData
+    const pollForActiveEvent = async () => {
+      console.log("[TV-POLL] 🔄 Checking for new ACTIVE event...");
+      
+      const activeEvent = await fetchActiveEvent();
+      
+      if (!activeEvent) {
+        console.log("[TV-POLL] ⚠️ No ACTIVE event found");
+        setFailCount(prev => {
+          const newCount = prev + 1;
+          console.log("[TV-POLL] Fail count:", newCount);
+          
+          // 🛟 SAFETY: Reload after 3 consecutive failures
+          if (newCount >= 3) {
+            console.log("[TV-POLL] ❌ 3 FETCH FAILURES - FORCE RELOAD");
+            window.location.replace('/tv?ts=' + Date.now());
+          }
+          
+          return newCount;
+        });
+        return;
+      }
+      
+      // Reset fail count on success
+      if (failCount > 0) {
+        console.log("[TV-POLL] ✅ Fetch success, resetting fail count");
+        setFailCount(0);
+      }
+      
+      // 🔄 NEW ACTIVE EVENT DETECTED?
+      if (activeEvent.id !== selectedEventId) {
+        console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
+        console.log("[TV-POLL] Current:", selectedEventId.slice(0, 8));
+        console.log("[TV-POLL] New:", activeEvent.id.slice(0, 8), "-", activeEvent.name);
+        
+        // 🛟 SAFETY: If stuck on winner screen, force reload
+        const currentWinnerCount = tickets.filter(t => t.is_winner).length;
+        const isOnWinnerScreen = event?.status === "finished" && currentWinnerCount > 0;
+        
+        if (isOnWinnerScreen) {
+          console.log("[TV-POLL] ⚠️ STUCK ON WINNER SCREEN - FORCE RELOAD");
+          window.location.replace('/tv?ts=' + Date.now());
+          return;
+        }
+        
+        // HARD RESET TV with new event
+        await hardResetTV(activeEvent);
+      } else {
+        // Same event, but update state in case of changes
+        setEvent(activeEvent);
+        setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
+        
+        // Check if drawn number changed
+        if (activeEvent.current_drawn_number !== lastDrawnNumberRef.current) {
+          console.log("[TV-POLL] 🔔 Number changed:", lastDrawnNumberRef.current, "→", activeEvent.current_drawn_number);
+          playBeep('start');
+          lastDrawnNumberRef.current = activeEvent.current_drawn_number;
+          if (activeEvent.current_drawn_number) {
+            await loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
+          }
+        }
       }
     };
 
-    // Start initialization
-    initializeEventView();
+    // Initial poll
+    pollForActiveEvent();
 
-    // Subscribe to event changes
-    const eventSubscription = eventService.subscribeToEvent(selectedEventId, async (payload) => {
-      console.log("[TV] Real-time event update received:", payload);
-      const updatedEvent = payload.new;
-      
-      // ✅ CRITICAL: Always update drawn numbers set from event
-      console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
-      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-      
-      // ✅ CRITICAL: Log winner detection
-      if (updatedEvent.winner_ticket_id) {
-        console.log("[TV] 🏆 WINNER DETECTED:", updatedEvent.winner_ticket_id);
-      }
-      
-      // ✅ CRITICAL: Log status changes
-      if (updatedEvent.status !== event?.status) {
-        console.log("[TV] 📊 Status changed:", event?.status, "→", updatedEvent.status);
-      }
-      
-      // Check if drawn number changed
-      const numberChanged = updatedEvent.current_drawn_number !== lastDrawnNumberRef.current;
-      
-      if (numberChanged && updatedEvent.current_drawn_number) {
-        console.log(`[TV] Number changed from ${lastDrawnNumberRef.current} to ${updatedEvent.current_drawn_number}`);
-        playBeep('start');
-        lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
-        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
-      }
-      
-      // ✅ CRITICAL: Always update event state
-      setEvent(updatedEvent);
-      console.log("[TV] Event state updated:", {
-        status: updatedEvent.status,
-        current_number: updatedEvent.current_drawn_number,
-        drawn_count: updatedEvent.drawn_numbers?.length || 0,
-        winner: updatedEvent.winner_ticket_id || "none"
-      });
-    });
-
-    // Subscribe to tickets changes
-    const ticketsSubscription = eventService.subscribeToTickets(selectedEventId, async (payload) => {
-      console.log("[TV] Real-time tickets update received, reloading all tickets...");
-      await loadTickets();
-    });
-
-    console.log("[TV] Subscription active");
+    // Poll every 2 seconds
+    const pollInterval = setInterval(pollForActiveEvent, 2000);
 
     return () => {
-      console.log("[TV] Cleaning up subscription");
-      eventSubscription.unsubscribe();
-      ticketsSubscription.unsubscribe();
+      console.log("[TV-POLL] 🧹 Cleaning up polling timer");
+      clearInterval(pollInterval);
     };
-  }, [selectedEventId]);
+  }, [selectedEventId, event?.status, tickets, failCount]);
 
   // Timer countdown with sound effects
   useEffect(() => {
@@ -207,84 +247,7 @@ export default function TVScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
-  // Safari-safe fallback: Polling mechanism (every 2s for stability)
-  useEffect(() => {
-    if (!selectedEventId || !event) {
-      setPollingActive(false);
-      return;
-    }
-
-    // ✅ Stop polling if event is FINISHED
-    if (event.status === "finished") {
-      console.log("[TV-POLL] Event FINISHED, polling disabled");
-      setPollingActive(false);
-      return;
-    }
-
-    // ✅ Only poll ACTIVE events
-    if (event.status !== "active") {
-      console.log("[TV-POLL] Event not ACTIVE, polling disabled");
-      setPollingActive(false);
-      return;
-    }
-
-    console.log("[TV-POLL] Starting polling for ACTIVE event:", selectedEventId);
-    setPollingActive(true);
-
-    const pollInterval = setInterval(async () => {
-      try {
-        console.log("[TV-POLL] Fetching event state...");
-        const updatedEvent = await eventService.getEvent(selectedEventId);
-        
-        if (!updatedEvent) {
-          console.warn("[TV-POLL] Event not found, stopping polling");
-          setPollingActive(false);
-          clearInterval(pollInterval);
-          return;
-        }
-        
-        // ✅ Stop polling if event became FINISHED
-        if (updatedEvent.status === "finished") {
-          console.log("[TV-POLL] Event became FINISHED, stopping polling");
-          setPollingActive(false);
-          clearInterval(pollInterval);
-        }
-        
-        // ✅ CRITICAL: Always update drawn numbers (fixes refresh bug)
-        console.log("[TV-POLL] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
-        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-        
-        // Check if drawn number changed
-        const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
-        
-        if (numberChanged && updatedEvent.current_drawn_number) {
-          console.log(`[TV-POLL] ✅ Number changed: ${event.current_drawn_number} → ${updatedEvent.current_drawn_number}`);
-          playBeep('start');
-          lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
-          await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
-        }
-
-        // ✅ CRITICAL: Always update event state
-        setEvent(updatedEvent);
-        console.log("[TV-POLL] Event refreshed:", {
-          status: updatedEvent.status,
-          current_number: updatedEvent.current_drawn_number,
-          drawn_count: updatedEvent.drawn_numbers?.length || 0
-        });
-        
-      } catch (error) {
-        console.error("[TV-POLL] Polling error:", error);
-      }
-    }, 2000); // ✅ 2s interval for stability
-
-    return () => {
-      console.log("[TV-POLL] Cleaning up polling");
-      clearInterval(pollInterval);
-      setPollingActive(false);
-    };
-  }, [selectedEventId, event?.id, event?.status, event?.current_drawn_number]);
-
-  // Load statistics when event finishes
+  // Load statistics and tickets when event finishes
   useEffect(() => {
     if (event?.status === "finished") {
       loadStats();
@@ -370,95 +333,6 @@ export default function TVScreen() {
     }
   };
 
-  const loadEvents = async () => {
-    try {
-      console.log("[TV] 🔍 loadEvents: Fetching all events...");
-      setLoadingError(null);
-      const data = await eventService.getEvents();
-      console.log("[TV] ✅ loadEvents: Found", data.length, "events");
-      setEvents(data);
-    } catch (error) {
-      console.error("[TV] ❌ loadEvents: Failed to load events:", error);
-      console.error("[TV] ❌ loadEvents: Error details:", {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      setLoadingError("Failed to load events. Please refresh the page.");
-    }
-  };
-
-  const loadEventData = async () => {
-    if (!selectedEventId) {
-      console.warn("[TV] ⚠️ loadEventData called without selectedEventId");
-      return;
-    }
-
-    try {
-      setLoadingError(null);
-      console.log("[TV] 🔍 Step 1: Starting loadEventData for:", selectedEventId);
-      
-      // ✅ SAFE: Use getEvent with try-catch instead of assuming .single() succeeds
-      const data = await eventService.getEvent(selectedEventId);
-      
-      if (!data) {
-        console.warn("[TV] ⚠️ Event not found:", selectedEventId);
-        // Graceful fallback: Clear selection and return to Event Selection
-        localStorage.removeItem("tv_event_id");
-        setSelectedEventId("");
-        setEvent(null);
-        return;
-      }
-
-      console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
-      console.log("[TV] ✅ Step 3: Event name:", data.name);
-      console.log("[TV] ✅ Step 4: Event status:", data.status);
-      console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
-      
-      // ✅ CRITICAL: Respect FINISHED status - stop polling
-      if (data.status === "finished") {
-        console.log("[TV] 🏁 Event is FINISHED, stopping all polling");
-        setPollingActive(false);
-      }
-      
-      setEvent(data);
-      lastDrawnNumberRef.current = data.current_drawn_number;
-      
-      // Load drawn numbers from event
-      setDrawnNumbers(new Set(data.drawn_numbers || []));
-      console.log("[TV] ✅ Step 6: Drawn numbers set loaded");
-      
-      // Load current question if one exists
-      if (data.current_drawn_number) {
-        console.log("[TV] ✅ Step 7: Loading current question #", data.current_drawn_number);
-        await loadCurrentQuestion(data.id, data.current_drawn_number);
-        console.log("[TV] ✅ Step 8: Current question loaded");
-      } else {
-        console.log("[TV] ℹ️ Step 7: No current question (waiting for first draw)");
-      }
-      
-      console.log("[TV] 🎉 Event data loaded successfully!");
-    } catch (error) {
-      console.error("[TV] ❌ FAILED at some step:", error);
-      console.error("[TV] ❌ Error details:", {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        selectedEventId,
-      });
-      
-      // Check if it's a "not found" error
-      if (error instanceof Error && (error.message.includes("not found") || error.message.includes("0 rows"))) {
-        console.log("[TV] 🔄 Event no longer exists, returning to selection");
-        localStorage.removeItem("tv_event_id");
-        setSelectedEventId("");
-        setEvent(null);
-        setLoadingError(null); // Don't show error, just return to selection
-      } else {
-        setLoadingError(`Failed to load event: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        setEvent(null);
-      }
-    }
-  };
-
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
       console.log(`[TV] 🔍 loadCurrentQuestion: Loading question #${questionNumber} for event ${eventId}`);
@@ -486,11 +360,6 @@ export default function TVScreen() {
       }
     } catch (error) {
       console.error("[TV] ❌ loadCurrentQuestion: Failed to load question:", error);
-      console.error("[TV] ❌ loadCurrentQuestion: Details:", {
-        message: error instanceof Error ? error.message : String(error),
-        eventId,
-        questionNumber,
-      });
       setCurrentQuestion(null);
       setQuestionText(null);
     }
@@ -583,28 +452,6 @@ export default function TVScreen() {
     } catch (e) { console.error(e); }
   };
 
-  const loadDetailedResults = async () => {
-    if (!event || tickets.length === 0) return;
-    
-    try {
-      const resultsMap = new Map<string, TicketDetailedResults>();
-      
-      for (const ticket of tickets) {
-        const details = await answerService.getTicketDetailedResults(
-          ticket.id,
-          ticket,
-          event.id,
-          event.drawn_numbers || []
-        );
-        resultsMap.set(ticket.serial_number, details);
-      }
-      
-      setDetailedResults(resultsMap);
-    } catch (error) {
-      console.error("[TV] Failed to load detailed results:", error);
-    }
-  };
-
   const shouldShowWinnerScreen = useMemo(() => {
     return event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
   }, [event?.status, tickets]);
@@ -626,27 +473,6 @@ export default function TVScreen() {
               </div>
               <div className="space-y-3">
                 <button 
-                  onClick={() => {
-                    setLoadingError(null);
-                    setSelectedEventId("");
-                    localStorage.removeItem("tv_event_id");
-                  }} 
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded font-semibold"
-                >
-                  ← Back to Event Selection
-                </button>
-                <button 
-                  onClick={() => {
-                    setLoadingError(null);
-                    if (selectedEventId) {
-                      loadEventData();
-                    }
-                  }} 
-                  className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded font-semibold"
-                >
-                  🔄 Retry Loading Event
-                </button>
-                <button 
                   onClick={() => window.location.reload()} 
                   className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-3 rounded font-semibold"
                 >
@@ -657,23 +483,15 @@ export default function TVScreen() {
           </Card>
         </div>
       ) : !selectedEventId ? (
-        /* Event selection */
+        /* No active event */
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
+          <Card className="w-full max-w-md border-blue-500 border-2">
             <CardContent className="pt-6">
-              <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
-              <Select onValueChange={setSelectedEventId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an event" />
-                </SelectTrigger>
-                <SelectContent>
-                  {events.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.name} ({e.status})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="text-center space-y-4">
+                <div className="text-6xl animate-pulse">⏳</div>
+                <h1 className="text-2xl font-bold text-blue-400">Čekam događaj...</h1>
+                <p className="text-gray-400">Nema aktivnog događaja</p>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -684,7 +502,7 @@ export default function TVScreen() {
         </div>
       ) : shouldShowWinnerScreen ? (
         /* ✅ WINNER SCREEN - TV DISPLAY */
-        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+        <div key={`tv-winner-${tvKey}-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
           {/* Background gradient */}
           <div className="absolute inset-0 bg-gradient-to-br from-yellow-900 via-orange-900 to-red-900" />
@@ -741,7 +559,7 @@ export default function TVScreen() {
         </div>
       ) : (
         /* ✅ MAIN TV DISPLAY - NORMAL GAME SCREEN */
-        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+        <div key={`tv-game-${tvKey}-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
           {/* Background gradient (fills entire screen) */}
           <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
@@ -859,6 +677,45 @@ export default function TVScreen() {
                 
               </div>
               
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Debug overlay (dev only) */}
+      {process.env.NODE_ENV === 'development' && selectedEventId && (
+        <div className="fixed bottom-4 left-4 bg-black/90 text-white p-3 rounded-lg text-xs font-mono border border-green-500 z-50">
+          <div className="font-bold text-green-400 mb-2">🎯 TV DEBUG (POLLING ONLY)</div>
+          <div className="space-y-1">
+            <div>
+              <span className="text-gray-400">Event ID:</span>{" "}
+              <span className="text-white">{event?.id?.slice(0, 8) || "loading"}...</span>
+            </div>
+            <div>
+              <span className="text-gray-400">Name:</span>{" "}
+              <span className="text-white">{event?.name || "loading"}</span>
+            </div>
+            <div>
+              <span className="text-gray-400">Status:</span>{" "}
+              <span className={`font-bold ${event?.status === 'active' ? 'text-green-400' : 'text-red-400'}`}>
+                {event?.status || "loading"}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-400">Source:</span>{" "}
+              <span className="text-green-400 font-bold">✅ polling (2s)</span>
+            </div>
+            <div>
+              <span className="text-gray-400">TV Key:</span>{" "}
+              <span className="text-yellow-300">{tvKey}</span>
+            </div>
+            <div>
+              <span className="text-gray-400">Winners:</span>{" "}
+              <span className="text-purple-300">{tickets.filter(t => t.is_winner).length}</span>
+            </div>
+            <div>
+              <span className="text-gray-400">Fail Count:</span>{" "}
+              <span className={failCount >= 2 ? "text-red-400" : "text-gray-300"}>{failCount}/3</span>
             </div>
           </div>
         </div>
