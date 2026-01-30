@@ -34,6 +34,7 @@ export default function TVScreen() {
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
   const [animatedCount, setAnimatedCount] = useState(0);
+  const [tvKey, setTvKey] = useState(0);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -97,7 +98,6 @@ export default function TVScreen() {
   // Save selected event to localStorage and URL
   useEffect(() => {
     if (selectedEventId) {
-      localStorage.setItem("tv_event_id", selectedEventId);
       // Update URL without reload
       router.replace({ pathname: "/tv", query: { eventId: selectedEventId } }, undefined, { shallow: true });
     }
