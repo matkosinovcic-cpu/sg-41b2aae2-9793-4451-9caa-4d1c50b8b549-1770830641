@@ -6,7 +6,7 @@ import { answerService, TicketDetailedResults, TicketStats } from "@/services/an
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
-import { createClient, RealtimeChannel } from "@supabase/supabase-js";
+import { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
 interface TicketData {
@@ -33,15 +33,33 @@ export default function TVScreen() {
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
   const [animatedCount, setAnimatedCount] = useState(0);
-  const [tvKey, setTvKey] = useState(0);
   const [failCount, setFailCount] = useState(0);
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const lastPolledStateRef = useRef<Event | null>(null);
-  const lastRealtimeUpdateRef = useRef<Event | null>(null);
+  const lastRealtimeUpdateRef = useRef(Date.now());
+  
+  // 🛡️ HARD ANTI-FLICKER GUARD - Last good display state
+  const lastGoodDisplayRef = useRef<{
+    eventId: string;
+    number: number;
+    questionText: string;
+    questionId: string | null;
+    drawnNumbers: number[];
+    updatedAt: number;
+  } | null>(null);
+
+  // 🚀 MOUNT/UNMOUNT TRACKING
+  useEffect(() => {
+    console.log("[TV] 🚀 COMPONENT MOUNTED");
+    return () => console.log("[TV] 💀 COMPONENT UNMOUNTED");
+  }, []);
 
   // 🎯 FETCH ACTIVE EVENT (polling function)
   const fetchActiveEvent = async (): Promise<Event | null> => {
     try {
+      console.log('[TV-FETCH] 🔄 Fetching active event...');
+      console.log('[TV-FETCH] Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
+      console.log('[TV-FETCH] Has anon key:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+      
       const { data, error } = await supabase
         .from('events')
         .select('*')
@@ -51,26 +69,48 @@ export default function TVScreen() {
         .maybeSingle();
       
       if (error) {
-        console.error("[TV-FETCH] ❌ Error fetching active event:", error);
+        console.error("[TV-FETCH] ❌ Supabase error:", error);
+        console.error("[TV-FETCH] ❌ Error details:", JSON.stringify(error, null, 2));
         return null;
       }
       
+      console.log("[TV-FETCH] ✅ Success, data:", data);
       return data as unknown as Event;
     } catch (error) {
       console.error("[TV-FETCH] ❌ Exception:", error);
+      console.error("[TV-FETCH] ❌ Error type:", typeof error);
+      console.error("[TV-FETCH] ❌ Stack:", (error as Error)?.stack);
       return null;
     }
   };
 
   // 📡 HANDLE REALTIME UPDATES
   const handleRealtimeUpdate = async (newEventData: Event) => {
-    console.log('[TV-RT] 🔄 Processing realtime update...');
+    lastRealtimeUpdateRef.current = Date.now();
+    
+    console.log('[TV-RT] 🔄 Processing realtime update...', {
+      eventId: newEventData.id.slice(0, 8),
+      currentNumber: newEventData.current_drawn_number,
+      drawnCount: newEventData.drawn_numbers?.length || 0,
+      status: newEventData.status
+    });
+    
+    // 🎯 DE-DUPE CHECK - Ignore if nothing changed
+    const newDrawnCount = newEventData.drawn_numbers?.length || 0;
+    const currentDrawnCount = drawnNumbers.size;
+    
+    if (newEventData.current_drawn_number === lastDrawnNumberRef.current &&
+        newDrawnCount === currentDrawnCount &&
+        newEventData.status === event?.status) {
+      console.log('[TV-RT] ⏭️ DUPLICATE update, ignoring');
+      return;
+    }
     
     // Update drawn numbers
     if (newEventData.drawn_numbers) {
       const newDrawnNumbers = new Set(newEventData.drawn_numbers);
       if (JSON.stringify([...newDrawnNumbers]) !== JSON.stringify([...drawnNumbers])) {
-        // console.log('[TV-RT] 📊 Drawn numbers changed');
+        console.log('[TV-RT] 📊 Drawn numbers changed');
         setDrawnNumbers(newDrawnNumbers);
       }
     }
@@ -92,7 +132,26 @@ export default function TVScreen() {
     }
     
     // Update event state
+    console.log('[TV-STATE] setEvent from realtime', {
+      eventId: newEventData.id.slice(0, 8),
+      currentNumber: newEventData.current_drawn_number,
+      status: newEventData.status,
+      ts: Date.now()
+    });
     setEvent(newEventData);
+    
+    // 🛡️ UPDATE LAST GOOD DISPLAY if we have valid data
+    if (newEventData.current_drawn_number && questionText) {
+      lastGoodDisplayRef.current = {
+        eventId: newEventData.id,
+        number: newEventData.current_drawn_number,
+        questionText: questionText,
+        questionId: currentQuestion?.question_id || null,
+        drawnNumbers: newEventData.drawn_numbers || [],
+        updatedAt: Date.now()
+      };
+      console.log('[TV-GUARD] 🛡️ Updated lastGoodDisplay', lastGoodDisplayRef.current);
+    }
     
     // Log to console (for debug)
     console.debug('[TV-STATUS]', {
@@ -127,18 +186,19 @@ export default function TVScreen() {
     setQuestionText(null);
     setTimeRemaining(0);
     lastDrawnNumberRef.current = null;
+    lastGoodDisplayRef.current = null; // Clear guard for new event
     
     // 3. Set new event
     setSelectedEventId(newActiveEvent.id);
+    console.log('[TV-STATE] setEvent from hardReset', {
+      eventId: newActiveEvent.id.slice(0, 8),
+      currentNumber: newActiveEvent.current_drawn_number,
+      status: newActiveEvent.status,
+      ts: Date.now()
+    });
     setEvent(newActiveEvent);
     
-    // 4. Increment tvKey (force remount)
-    setTvKey(prev => {
-      console.log("[TV-RESET] 🔑 Incrementing tvKey:", prev, "→", prev + 1);
-      return prev + 1;
-    });
-    
-    // 5. Load fresh data
+    // 4. Load fresh data
     setDrawnNumbers(new Set(newActiveEvent.drawn_numbers || []));
     lastDrawnNumberRef.current = newActiveEvent.current_drawn_number;
     
@@ -176,6 +236,12 @@ export default function TVScreen() {
       if (activeEvent) {
         console.log("[TV-INIT] ✅ ACTIVE event found:", activeEvent.name);
         setSelectedEventId(activeEvent.id);
+        console.log('[TV-STATE] setEvent from init', {
+          eventId: activeEvent.id.slice(0, 8),
+          currentNumber: activeEvent.current_drawn_number,
+          status: activeEvent.status,
+          ts: Date.now()
+        });
         setEvent(activeEvent);
         setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
         lastDrawnNumberRef.current = activeEvent.current_drawn_number;
@@ -192,12 +258,35 @@ export default function TVScreen() {
     initializeTV();
   }, []);
 
-  // ⏰ POLLING TIMER - Check for new ACTIVE event every 2 seconds
+  // ⏰ POLLING TIMER - Check for new ACTIVE event every 30 seconds (SLOW - realtime is primary)
   useEffect(() => {
-    console.log("[TV-POLL] ⏰ Starting polling timer (2s interval)...");
+    console.log("[TV-POLL] ⏰ Starting polling timer (30s interval - realtime primary)...");
 
     const pollForActiveEvent = async () => {
-      console.log("[TV-POLL] 🔄 Checking for new ACTIVE event...");
+      const timeSinceRealtime = Date.now() - lastRealtimeUpdateRef.current;
+      
+      // If realtime is fresh (< 20s), only check for event switch (no state update)
+      if (timeSinceRealtime < 20000) {
+        console.log("[TV-POLL] ⏭️ Realtime is fresh, only checking for event switch");
+        const activeEvent = await fetchActiveEvent();
+        
+        if (!activeEvent) {
+          console.log("[TV-POLL] ⚠️ No ACTIVE event found");
+          return;
+        }
+        
+        // Only handle event switch
+        if (activeEvent.id !== selectedEventId) {
+          console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
+          console.log("[TV-POLL] Current:", selectedEventId?.slice(0, 8));
+          console.log("[TV-POLL] New:", activeEvent.id.slice(0, 8), "-", activeEvent.name);
+          await hardResetTV(activeEvent);
+        }
+        return;
+      }
+      
+      // Realtime is stale (> 20s), use polling as fallback
+      console.log("[TV-POLL] 🔄 Realtime stale, using polling fallback");
       
       const activeEvent = await fetchActiveEvent();
       
@@ -207,7 +296,6 @@ export default function TVScreen() {
           const newCount = prev + 1;
           console.log("[TV-POLL] Fail count:", newCount);
           
-          // 🛟 SAFETY: Reload after 3 consecutive failures
           if (newCount >= 3) {
             console.log("[TV-POLL] ❌ 3 FETCH FAILURES - FORCE RELOAD");
             window.location.replace('/tv?ts=' + Date.now());
@@ -218,36 +306,34 @@ export default function TVScreen() {
         return;
       }
       
-      // Reset fail count on success
       if (failCount > 0) {
         console.log("[TV-POLL] ✅ Fetch success, resetting fail count");
         setFailCount(0);
       }
       
-      // 🆕 NEW ACTIVE EVENT DETECTED?
+      if (!selectedEventId) {
+        console.log("[TV-POLL] ✅ Found ACTIVE event (initial or after none)");
+        await hardResetTV(activeEvent);
+        return;
+      }
+      
       if (activeEvent.id !== selectedEventId) {
         console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
         console.log("[TV-POLL] Current:", selectedEventId.slice(0, 8));
         console.log("[TV-POLL] New:", activeEvent.id.slice(0, 8), "-", activeEvent.name);
-        
-        // 🛟 SAFETY: If stuck on winner screen, force reload
-        const currentWinnerCount = tickets.filter(t => t.is_winner).length;
-        const isOnWinnerScreen = event?.status === "finished" && currentWinnerCount > 0;
-        
-        if (isOnWinnerScreen) {
-          console.log("[TV-POLL] ⚠️ STUCK ON WINNER SCREEN - FORCE RELOAD");
-          window.location.replace('/tv?ts=' + Date.now());
-          return;
-        }
-        
-        // HARD RESET TV with new event
         await hardResetTV(activeEvent);
       } else {
-        // Same event, but update state in case of changes
+        // Same event, update state (polling fallback mode)
+        console.log("[TV-POLL] 📊 Updating state from polling (realtime stale)");
+        console.log('[TV-STATE] setEvent from polling', {
+          eventId: activeEvent.id.slice(0, 8),
+          currentNumber: activeEvent.current_drawn_number,
+          status: activeEvent.status,
+          ts: Date.now()
+        });
         setEvent(activeEvent);
         setDrawnNumbers(new Set(activeEvent.drawn_numbers || []));
         
-        // Check if drawn number changed
         if (activeEvent.current_drawn_number !== lastDrawnNumberRef.current) {
           console.log("[TV-POLL] 🔔 Number changed:", lastDrawnNumberRef.current, "→", activeEvent.current_drawn_number);
           playBeep('start');
@@ -257,7 +343,6 @@ export default function TVScreen() {
           }
         }
         
-        // 🐛 Console debug logging (always active)
         console.debug('[TV-STATUS]', {
           eventId: activeEvent.id.slice(0, 8),
           name: activeEvent.name,
@@ -271,17 +356,14 @@ export default function TVScreen() {
       }
     };
 
-    // Initial poll
     pollForActiveEvent();
-
-    // Poll every 2 seconds
-    const pollInterval = setInterval(pollForActiveEvent, 2000);
+    const pollInterval = setInterval(pollForActiveEvent, 30000); // 30s interval
 
     return () => {
       console.log("[TV-POLL] 🧹 Cleaning up polling timer");
       clearInterval(pollInterval);
     };
-  }, [failCount]);
+  }, [failCount, selectedEventId, tickets]);
 
   // 📡 REALTIME SUBSCRIPTION
   useEffect(() => {
@@ -289,12 +371,10 @@ export default function TVScreen() {
     
     console.log('[TV-RT] 📡 Setting up realtime subscription for event:', selectedEventId.slice(0, 8));
     
-    // Cleanup old subscription
     if (channelRef.current) {
       channelRef.current.unsubscribe();
     }
     
-    // Create new channel
     const channel = supabase
       .channel(`tv-event:${selectedEventId}`)
       .on('postgres_changes', {
@@ -303,7 +383,7 @@ export default function TVScreen() {
         table: 'events',
         filter: `id=eq.${selectedEventId}`
       }, (payload) => {
-        // console.log('[TV-RT] ✅ Received realtime update:', payload);
+        console.log('[TV-RT] ✅ Received realtime update');
         handleRealtimeUpdate(payload.new as Event);
       })
       .subscribe((status) => {
@@ -317,7 +397,7 @@ export default function TVScreen() {
       channel.unsubscribe();
       channelRef.current = null;
     };
-  }, [selectedEventId]); // Re-subscribe when event ID changes
+  }, [selectedEventId]);
 
   // Timer countdown with sound effects
   useEffect(() => {
@@ -331,7 +411,6 @@ export default function TVScreen() {
       const deadline = new Date(event.question_open_until!).getTime();
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
       
-      // Play tick sound for last 3 seconds
       if (remaining <= 3 && remaining > 0 && remaining !== timeRemaining) {
         playBeep('tick');
       }
@@ -351,7 +430,6 @@ export default function TVScreen() {
     if (event?.status === "finished") {
       loadStats();
     }
-    // Always try to load tickets if event exists to keep count updated
     if (event) {
       loadTickets();
     }
@@ -372,7 +450,7 @@ export default function TVScreen() {
       if (animatedCount < actualCount) {
         const timer = setTimeout(() => {
           setAnimatedCount(prev => prev + 1);
-        }, 100); // Increment every 100ms
+        }, 100);
         return () => clearTimeout(timer);
       }
     } else {
@@ -386,11 +464,9 @@ export default function TVScreen() {
     
     const actualCount = tickets.filter(t => t.is_winner).length;
     
-    // Play tick for each increment (except 0)
     if (animatedCount > 0 && animatedCount < actualCount) {
       playWinnerTick();
     } 
-    // Play fanfare on completion
     else if (animatedCount > 0 && animatedCount === actualCount) {
       playWinnerFanfare();
     }
@@ -437,9 +513,14 @@ export default function TVScreen() {
       console.log(`[TV] 🔍 loadCurrentQuestion: Loading question #${questionNumber} for event ${eventId}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       console.log("[TV] ✅ loadCurrentQuestion: Question loaded:", data);
+      
+      console.log('[TV-STATE] setCurrentQuestion', {
+        questionNumber,
+        questionId: data?.question_id?.slice(0, 8),
+        ts: Date.now()
+      });
       setCurrentQuestion(data);
 
-      // Fetch question text if we have a question ID
       if (data?.question_id) {
         const { data: qData, error: qError } = await supabase
           .from("questions")
@@ -449,18 +530,33 @@ export default function TVScreen() {
 
         if (qError) {
           console.error("[TV] ❌ Failed to load question text:", qError);
-          setQuestionText(null);
+          // 🛡️ DON'T CLEAR - Keep old question visible
         } else {
           console.log("[TV] ✅ Question text loaded:", qData?.text);
+          console.log('[TV-STATE] setQuestionText', {
+            text: qData?.text?.slice(0, 50) + '...',
+            ts: Date.now()
+          });
           setQuestionText(qData?.text || null);
+          
+          // 🛡️ UPDATE LAST GOOD DISPLAY
+          if (event && questionNumber) {
+            lastGoodDisplayRef.current = {
+              eventId: event.id,
+              number: questionNumber,
+              questionText: qData?.text || '',
+              questionId: data.question_id,
+              drawnNumbers: event.drawn_numbers || [],
+              updatedAt: Date.now()
+            };
+            console.log('[TV-GUARD] 🛡️ Updated lastGoodDisplay after question load', lastGoodDisplayRef.current);
+          }
         }
-      } else {
-        setQuestionText(null);
       }
+      // 🛡️ DON'T CLEAR if no question_id - keep old question
     } catch (error) {
       console.error("[TV] ❌ loadCurrentQuestion: Failed to load question:", error);
-      setCurrentQuestion(null);
-      setQuestionText(null);
+      // 🛡️ DON'T CLEAR STATE - Keep current display visible
     }
   };
 
@@ -510,7 +606,6 @@ export default function TVScreen() {
       osc.connect(gain);
       gain.connect(ctx.destination);
       
-      // Rising pitch based on count
       const pitch = 600 + (animatedCount * 50); 
       
       osc.frequency.setValueAtTime(pitch, ctx.currentTime);
@@ -526,7 +621,6 @@ export default function TVScreen() {
     if (!audioContextRef.current) return;
     try {
       const ctx = audioContextRef.current;
-      // C Major Arpeggio: C5, E5, G5, C6
       const notes = [523.25, 659.25, 783.99, 1046.50]; 
       
       notes.forEach((freq, i) => {
@@ -539,7 +633,7 @@ export default function TVScreen() {
         osc.frequency.value = freq;
         osc.type = 'triangle';
         
-        const startTime = ctx.currentTime + (i * 0.05); // Staggered entry
+        const startTime = ctx.currentTime + (i * 0.05);
         
         gain.gain.setValueAtTime(0, startTime);
         gain.gain.linearRampToValueAtTime(0.1, startTime + 0.1);
@@ -555,23 +649,45 @@ export default function TVScreen() {
     return event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
   }, [event?.status, tickets]);
 
-  // 🐛 DEBUG OVERLAY CONTROL (hidden by default)
   const showOverlay = useMemo(() => {
-    // Option A (primary): URL parameter ?debug=1
     const urlDebug = typeof window !== 'undefined' 
       && new URLSearchParams(window.location.search).get('debug') === '1';
-    
-    // Option B (secondary): Environment variable
     const envDebug = process.env.NEXT_PUBLIC_TV_DEBUG === '1';
-    
     return urlDebug || envDebug;
   }, []);
+
+  // 🛡️ ANTI-FLICKER DISPLAY VALUES - Use lastGood if current is empty
+  const displayNumber = useMemo(() => {
+    if (event?.current_drawn_number) return event.current_drawn_number;
+    if (lastGoodDisplayRef.current?.number) {
+      console.log('[TV-GUARD] 🛡️ Using lastGoodDisplay number:', lastGoodDisplayRef.current.number);
+      return lastGoodDisplayRef.current.number;
+    }
+    return null;
+  }, [event?.current_drawn_number, lastGoodDisplayRef.current]);
+
+  const displayQuestionText = useMemo(() => {
+    if (questionText) return questionText;
+    if (lastGoodDisplayRef.current?.questionText) {
+      console.log('[TV-GUARD] 🛡️ Using lastGoodDisplay question');
+      return lastGoodDisplayRef.current.questionText;
+    }
+    return null;
+  }, [questionText, lastGoodDisplayRef.current]);
+
+  const displayDrawnNumbers = useMemo(() => {
+    if (drawnNumbers.size > 0) return drawnNumbers;
+    if (lastGoodDisplayRef.current?.drawnNumbers) {
+      console.log('[TV-GUARD] 🛡️ Using lastGoodDisplay drawnNumbers');
+      return new Set(lastGoodDisplayRef.current.drawnNumbers);
+    }
+    return new Set<number>();
+  }, [drawnNumbers, lastGoodDisplayRef.current]);
 
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
       
-      {/* Error state */}
       {loadingError ? (
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
           <Card className="w-full max-w-2xl border-red-500 border-2">
@@ -594,7 +710,6 @@ export default function TVScreen() {
           </Card>
         </div>
       ) : !selectedEventId ? (
-        /* No active event */
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
           <Card className="w-full max-w-md border-blue-500 border-2">
             <CardContent className="pt-6">
@@ -607,30 +722,18 @@ export default function TVScreen() {
           </Card>
         </div>
       ) : !event ? (
-        /* Loading */
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-white text-2xl">Loading event...</div>
         </div>
       ) : shouldShowWinnerScreen ? (
-        /* ✅ WINNER SCREEN - TV DISPLAY */
-        <div key={`tv-winner-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
-          
-          {/* Background gradient */}
+        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           <div className="absolute inset-0 bg-gradient-to-br from-yellow-900 via-orange-900 to-red-900" />
-          
-          {/* 16:9 Container */}
           <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
-            
-            {/* Content wrapper */}
             <div className="absolute inset-0 flex items-center justify-center p-[5vh]">
               <div className="w-full max-w-[92vw] max-h-[86vh] flex flex-col items-center justify-center text-center gap-[2vh]">
-                
-                {/* Trophy icon */}
                 <div className="animate-bounce">
                   <Trophy className="w-20 h-20 text-yellow-300" />
                 </div>
-                
-                {/* Winner title */}
                 <h1 
                   className="text-white font-extrabold tracking-wide text-center leading-tight drop-shadow-2xl animate-pulse"
                   style={{ fontSize: "clamp(40px, 6vw, 84px)" }}
@@ -640,8 +743,6 @@ export default function TVScreen() {
                     return winnerCount === 1 ? "POBJEDNIKA" : "POBJEDNIKE";
                   })()}!
                 </h1>
-                
-                {/* Winner display box */}
                 <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
                   <div 
                     className="font-extrabold text-yellow-400 text-center leading-none"
@@ -655,75 +756,54 @@ export default function TVScreen() {
                     })()}
                   </div>
                 </div>
-                
-                {/* Confetti effect */}
                 <div 
                   className="animate-pulse"
                   style={{ fontSize: "clamp(32px, 4.5vw, 56px)" }}
                 >
                   🎉 🎊 🏆 🎊 🎉
                 </div>
-                
               </div>
             </div>
           </div>
         </div>
       ) : (
-        /* ✅ MAIN TV DISPLAY - NORMAL GAME SCREEN */
-        <div key={`tv-game-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
-          
-          {/* Background gradient (fills entire screen) */}
+        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
-          
-          {/* 16:9 Container (constrained, centered, letterboxed if needed) */}
           <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
-            
-            {/* Content wrapper with padding */}
             <div className="absolute inset-0 flex flex-col p-6">
-              
-              {/* 1️⃣ HEADER (12% height) */}
               <div className="flex-none h-[12%] flex items-center justify-between px-4">
-                {/* Event name - top left corner */}
                 <div className="text-lg text-gray-400 font-medium">
                   {event.name}
                 </div>
-                
-                {/* Main title - centered */}
                 <h1 className="absolute left-1/2 transform -translate-x-1/2 text-4xl sm:text-5xl lg:text-6xl font-black tracking-normal text-white drop-shadow-2xl whitespace-nowrap">
                   PITALICA SKITALICA
                 </h1>
               </div>
               
-              {/* 2️⃣ MAIN CONTENT AREA (76% height) - 2 columns */}
               <div className="flex-none h-[76%] grid grid-cols-[58%_38%] gap-[4%] py-4">
-                
-                {/* LEFT COLUMN: Question Panel (58%) */}
                 <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-6 flex flex-col justify-center shadow-2xl overflow-hidden">
-                  
-                  {event.current_drawn_number ? (
-                    /* Active question state */
+                  {displayNumber ? (
                     <div className="text-center space-y-4">
                       <div className="text-lg text-indigo-300 tracking-wide uppercase">
                         Trenutno pitanje
                       </div>
                       <div className="text-8xl font-black text-white drop-shadow-2xl">
-                        #{event.current_drawn_number}
+                        #{displayNumber}
                       </div>
                       {timeRemaining > 0 && (
                         <div className="text-5xl font-bold text-yellow-300 animate-pulse">
                           {timeRemaining}s
                         </div>
                       )}
-                      {questionText && (
+                      {displayQuestionText && (
                         <div className="mt-6 bg-white/10 rounded-2xl p-5 backdrop-blur max-h-[40vh] overflow-y-auto">
                           <p className="text-xl text-white leading-relaxed">
-                            {questionText}
+                            {displayQuestionText}
                           </p>
                         </div>
                       )}
                     </div>
                   ) : (
-                    /* Waiting state */
                     <div className="text-center">
                       <div className="text-6xl mb-4 animate-pulse">⏳</div>
                       <p className="text-3xl text-gray-300 animate-pulse">
@@ -731,17 +811,13 @@ export default function TVScreen() {
                       </p>
                     </div>
                   )}
-                  
                 </div>
                 
-                {/* RIGHT COLUMN: Numbers Board (38%) */}
                 <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-4 flex items-center justify-center shadow-2xl overflow-hidden">
-                  
-                  {/* Board grid - scaled down for better fit */}
                   <div className="grid grid-cols-10 gap-1 w-full h-full max-h-full" style={{ aspectRatio: '10/9' }}>
                     {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
-                      const isDrawn = drawnNumbers.has(num);
-                      const isCurrent = event.current_drawn_number === num;
+                      const isDrawn = displayDrawnNumbers.has(num);
+                      const isCurrent = displayNumber === num;
                       
                       return (
                         <div
@@ -763,40 +839,31 @@ export default function TVScreen() {
                       );
                     })}
                   </div>
-                  
                 </div>
-                
               </div>
               
-              {/* 3️⃣ FOOTER (12% height) */}
               <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
-                
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
                   <div className="text-3xl font-bold text-yellow-300">90</div>
                   <div className="text-sm text-gray-300 mt-1">pitanja</div>
                 </div>
-                
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
                   <div className="text-3xl font-bold text-green-300">15</div>
                   <div className="text-sm text-gray-300 mt-1">za pobjedu</div>
                 </div>
-                
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
                   <div className="text-3xl font-bold text-pink-300">🍀</div>
                   <div className="text-sm text-gray-300 mt-1">Sretno</div>
                 </div>
-                
               </div>
-              
             </div>
           </div>
         </div>
       )}
 
-      {/* Debug overlay (hidden by default, show with ?debug=1) */}
       {showOverlay && selectedEventId && (
         <div className="fixed bottom-4 left-4 bg-black/90 text-white p-3 rounded-lg text-xs font-mono border border-green-500 z-50">
-          <div className="font-bold text-green-400 mb-2">🎯 TV DEBUG (POLLING ONLY)</div>
+          <div className="font-bold text-green-400 mb-2">🎯 TV DEBUG (REALTIME PRIMARY)</div>
           <div className="space-y-1">
             <div>
               <span className="text-gray-400">Event ID:</span>{" "}
@@ -813,20 +880,24 @@ export default function TVScreen() {
               </span>
             </div>
             <div>
-              <span className="text-gray-400">Source:</span>{" "}
-              <span className="text-green-400 font-bold">✅ polling (2s)</span>
+              <span className="text-gray-400">Display #:</span>{" "}
+              <span className="text-yellow-300">{displayNumber || "none"}</span>
             </div>
             <div>
-              <span className="text-gray-400">TV Key:</span>{" "}
-              <span className="text-yellow-300">{tvKey}</span>
+              <span className="text-gray-400">Has Guard:</span>{" "}
+              <span className={lastGoodDisplayRef.current ? "text-green-400" : "text-red-400"}>
+                {lastGoodDisplayRef.current ? "✅ YES" : "❌ NO"}
+              </span>
             </div>
             <div>
               <span className="text-gray-400">Winners:</span>{" "}
               <span className="text-purple-300">{tickets.filter(t => t.is_winner).length}</span>
             </div>
             <div>
-              <span className="text-gray-400">Fail Count:</span>{" "}
-              <span className={failCount >= 2 ? "text-red-400" : "text-gray-300"}>{failCount}/3</span>
+              <span className="text-gray-400">RT Fresh:</span>{" "}
+              <span className={Date.now() - lastRealtimeUpdateRef.current < 20000 ? "text-green-400" : "text-yellow-400"}>
+                {Math.floor((Date.now() - lastRealtimeUpdateRef.current) / 1000)}s
+              </span>
             </div>
           </div>
         </div>
