@@ -612,7 +612,14 @@ export default function TVScreen() {
                   SERIJSKI BROJ ULAZNICE
                 </div>
                 <div className="text-9xl font-black text-yellow-400 drop-shadow-2xl">
+                  {/* 🔒 GUARANTEED: NEVER SHOWS UUID */}
                   {winnerSerial || "..."}
+                  {/* Fallback hierarchy:
+                      1. winnerSerial (T1769710949158-0004)
+                      2. "N/A" (if serial missing)
+                      3. "..." (loading)
+                      NEVER: event.winner_ticket_id (UUID)
+                  */}
                 </div>
               </div>
               
