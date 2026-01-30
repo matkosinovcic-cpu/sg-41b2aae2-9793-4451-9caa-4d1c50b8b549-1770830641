@@ -607,7 +607,7 @@ export default function TVScreen() {
 
   const shouldShowWinnerScreen = useMemo(() => {
     return event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
-  }, [event, tickets]);
+  }, [event?.status, tickets]);
 
   return (
     <>
