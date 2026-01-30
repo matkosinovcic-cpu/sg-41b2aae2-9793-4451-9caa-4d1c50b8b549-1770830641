@@ -299,6 +299,22 @@ export default function TVScreen() {
     }
   }, [event?.status, tickets, animatedCount]);
 
+  // Audio effect for winner count
+  useEffect(() => {
+    if (!event || event.status !== "finished") return;
+    
+    const actualCount = tickets.filter(t => t.is_winner).length;
+    
+    // Play tick for each increment (except 0)
+    if (animatedCount > 0 && animatedCount < actualCount) {
+      playWinnerTick();
+    } 
+    // Play fanfare on completion
+    else if (animatedCount > 0 && animatedCount === actualCount) {
+      playWinnerFanfare();
+    }
+  }, [animatedCount, event?.status, tickets]);
+
   const loadStats = async () => {
     if (!event || tickets.length === 0) return;
     
@@ -476,7 +492,6 @@ export default function TVScreen() {
 
   const playWinnerTick = () => {
     if (!audioContextRef.current) return;
-    
     try {
       const ctx = audioContextRef.current;
       const osc = ctx.createOscillator();
@@ -485,56 +500,45 @@ export default function TVScreen() {
       osc.connect(gain);
       gain.connect(ctx.destination);
       
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      // Rising pitch based on count
+      const pitch = 600 + (animatedCount * 50); 
+      
+      osc.frequency.setValueAtTime(pitch, ctx.currentTime);
       gain.gain.setValueAtTime(0.1, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+      
       osc.start();
       osc.stop(ctx.currentTime + 0.1);
-    } catch (error) {
-      console.warn("[TV] Audio playback failed:", error);
-    }
-  };
-
-  const playWinnerDing = () => {
-    if (!audioContextRef.current) return;
-    
-    try {
-      const ctx = audioContextRef.current;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.1);
-    } catch (error) {
-      console.warn("[TV] Audio playback failed:", error);
-    }
+    } catch (e) { console.error(e); }
   };
 
   const playWinnerFanfare = () => {
     if (!audioContextRef.current) return;
-    
     try {
       const ctx = audioContextRef.current;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      // C Major Arpeggio: C5, E5, G5, C6
+      const notes = [523.25, 659.25, 783.99, 1046.50]; 
       
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      
-      osc.frequency.setValueAtTime(220, ctx.currentTime);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1);
-      osc.start();
-      osc.stop(ctx.currentTime + 1);
-    } catch (error) {
-      console.warn("[TV] Audio playback failed:", error);
-    }
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        
+        osc.frequency.value = freq;
+        osc.type = 'triangle';
+        
+        const startTime = ctx.currentTime + (i * 0.05); // Staggered entry
+        
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(0.1, startTime + 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + 2);
+        
+        osc.start(startTime);
+        osc.stop(startTime + 2);
+      });
+    } catch (e) { console.error(e); }
   };
 
   const loadDetailedResults = async () => {
