@@ -165,11 +165,25 @@ export default function TVScreen() {
       });
     });
 
+    // Subscribe to tickets changes
+    const ticketsSubscription = eventService.subscribeToTickets(selectedEventId, async (payload) => {
+      console.log("[TV] Real-time tickets update received:", payload);
+      const updatedTickets = payload.new;
+      
+      // ✅ CRITICAL: Always update tickets state
+      setTickets(updatedTickets);
+      console.log("[TV] Tickets state updated:", {
+        count: updatedTickets.length,
+        winners: updatedTickets.filter(t => t.is_winner).length
+      });
+    });
+
     console.log("[TV] Subscription active");
 
     return () => {
       console.log("[TV] Cleaning up subscription");
       eventSubscription.unsubscribe();
+      ticketsSubscription.unsubscribe();
     };
   }, [selectedEventId]);
 
@@ -284,6 +298,13 @@ export default function TVScreen() {
     }
   }, [event?.status]);
 
+  // Load tickets when event finishes
+  useEffect(() => {
+    if (event?.status === "finished") {
+      loadTickets();
+    }
+  }, [event?.status]);
+
   // Counter animation for winner count
   useEffect(() => {
     if (event?.status === "finished" && tickets.length > 0) {
@@ -315,6 +336,13 @@ export default function TVScreen() {
       playWinnerFanfare();
     }
   }, [animatedCount, event?.status, tickets]);
+
+  // Reset animatedCount when status changes from finished
+  useEffect(() => {
+    if (event?.status !== "finished") {
+      setAnimatedCount(0);
+    }
+  }, [event?.status]);
 
   const loadStats = async () => {
     if (!event || tickets.length === 0) return;
@@ -563,6 +591,8 @@ export default function TVScreen() {
       console.error("[TV] Failed to load detailed results:", error);
     }
   };
+
+  const shouldShowWinnerScreen = event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
 
   return (
     <>
