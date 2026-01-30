@@ -33,7 +33,6 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
-  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -481,35 +480,6 @@ export default function TVScreen() {
     }
   };
 
-  const fetchWinnerSerial = async (ticketId: string) => {
-    try {
-      console.log("[TV] 🔍 Fetching winner serial for ticket:", ticketId);
-      const { data, error } = await supabase
-        .from('tickets')
-        .select('serial_number')
-        .eq('id', ticketId)
-        .single();
-      
-      if (error) throw error;
-      
-      const serial = data?.serial_number;
-      setWinnerSerial(serial || null);
-      console.log("[TV] ✅ Winner serial loaded:", serial);
-    } catch (error) {
-      console.error("[TV] ❌ Failed to load winner serial:", error);
-      setWinnerSerial(null);
-    }
-  };
-
-  useEffect(() => {
-    if (event?.winner_ticket_id) {
-      console.log("[TV] 🏆 Winner detected, fetching serial...");
-      fetchWinnerSerial(event.winner_ticket_id);
-    } else {
-      setWinnerSerial(null);
-    }
-  }, [event?.winner_ticket_id]);
-
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
@@ -606,12 +576,18 @@ export default function TVScreen() {
                 IMAMO POBJEDNIKA!
               </h1>
               
-              {/* Winning ticket display */}
-              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-12 shadow-2xl">
-                <div className="text-3xl text-yellow-300 mb-4 tracking-wider">
-                  SERIJSKI BROJ ULAZNICE
+              {/* Winner display box */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
+                <div 
+                  className="text-yellow-300 tracking-wider text-center leading-none mb-[1.5vh]"
+                  style={{ fontSize: "clamp(20px, 3vw, 36px)" }}
+                >
+                  Serijski broj ulaznice:
                 </div>
-                <div className="text-9xl font-black text-yellow-400 drop-shadow-2xl">
+                <div 
+                  className="font-extrabold text-yellow-400 text-center leading-none break-words"
+                  style={{ fontSize: "clamp(44px, 8.5vw, 120px)" }}
+                >
                   {/* 🔒 GUARANTEED: NEVER SHOWS UUID */}
                   {winnerSerial || "..."}
                   {/* Fallback hierarchy:
