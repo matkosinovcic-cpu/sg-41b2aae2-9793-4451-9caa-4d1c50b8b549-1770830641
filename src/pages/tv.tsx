@@ -456,6 +456,18 @@ export default function TVScreen() {
     return event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
   }, [event?.status, tickets]);
 
+  // 🐛 DEBUG OVERLAY CONTROL (hidden by default)
+  const showOverlay = useMemo(() => {
+    // Option A (primary): URL parameter ?debug=1
+    const urlDebug = typeof window !== 'undefined' 
+      && new URLSearchParams(window.location.search).get('debug') === '1';
+    
+    // Option B (secondary): Environment variable
+    const envDebug = process.env.NEXT_PUBLIC_TV_DEBUG === '1';
+    
+    return urlDebug || envDebug;
+  }, []);
+
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
@@ -682,8 +694,8 @@ export default function TVScreen() {
         </div>
       )}
 
-      {/* Debug overlay (dev only) */}
-      {process.env.NODE_ENV === 'development' && selectedEventId && (
+      {/* Debug overlay (hidden by default, show with ?debug=1) */}
+      {showOverlay && selectedEventId && (
         <div className="fixed bottom-4 left-4 bg-black/90 text-white p-3 rounded-lg text-xs font-mono border border-green-500 z-50">
           <div className="font-bold text-green-400 mb-2">🎯 TV DEBUG (POLLING ONLY)</div>
           <div className="space-y-1">
