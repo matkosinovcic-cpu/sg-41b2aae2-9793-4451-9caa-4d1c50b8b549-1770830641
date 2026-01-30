@@ -283,6 +283,22 @@ export default function TVScreen() {
     }
   }, [event?.status]);
 
+  // Counter animation for winner count
+  useEffect(() => {
+    if (event?.status === "finished" && tickets.length > 0) {
+      const actualCount = tickets.filter(t => t.is_winner).length;
+      
+      if (animatedCount < actualCount) {
+        const timer = setTimeout(() => {
+          setAnimatedCount(prev => prev + 1);
+        }, 100); // Increment every 100ms
+        return () => clearTimeout(timer);
+      }
+    } else {
+      setAnimatedCount(0);
+    }
+  }, [event?.status, tickets, animatedCount]);
+
   const loadStats = async () => {
     if (!event || tickets.length === 0) return;
     
@@ -453,6 +469,69 @@ export default function TVScreen() {
         osc.start();
         osc.stop(ctx.currentTime + 1);
       }
+    } catch (error) {
+      console.warn("[TV] Audio playback failed:", error);
+    }
+  };
+
+  const playWinnerTick = () => {
+    if (!audioContextRef.current) return;
+    
+    try {
+      const ctx = audioContextRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch (error) {
+      console.warn("[TV] Audio playback failed:", error);
+    }
+  };
+
+  const playWinnerDing = () => {
+    if (!audioContextRef.current) return;
+    
+    try {
+      const ctx = audioContextRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch (error) {
+      console.warn("[TV] Audio playback failed:", error);
+    }
+  };
+
+  const playWinnerFanfare = () => {
+    if (!audioContextRef.current) return;
+    
+    try {
+      const ctx = audioContextRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1);
+      osc.start();
+      osc.stop(ctx.currentTime + 1);
     } catch (error) {
       console.warn("[TV] Audio playback failed:", error);
     }
