@@ -33,6 +33,7 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  const [animatedCount, setAnimatedCount] = useState(0);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
