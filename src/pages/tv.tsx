@@ -52,7 +52,7 @@ export default function TVScreen() {
         return null;
       }
       
-      return data;
+      return data as unknown as Event;
     } catch (error) {
       console.error("[TV-FETCH] ❌ Exception:", error);
       return null;
