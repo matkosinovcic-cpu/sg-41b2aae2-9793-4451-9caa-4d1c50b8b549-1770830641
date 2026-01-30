@@ -141,8 +141,6 @@ export default function TVScreen() {
 
   // ⏰ POLLING TIMER - Check for new ACTIVE event every 2 seconds
   useEffect(() => {
-    if (!selectedEventId) return;
-
     console.log("[TV-POLL] ⏰ Starting polling timer (2s interval)...");
 
     const pollForActiveEvent = async () => {
@@ -218,7 +216,7 @@ export default function TVScreen() {
       console.log("[TV-POLL] 🧹 Cleaning up polling timer");
       clearInterval(pollInterval);
     };
-  }, [selectedEventId, event?.status, tickets, failCount]);
+  }, [event?.status, tickets, failCount]);
 
   // Timer countdown with sound effects
   useEffect(() => {
