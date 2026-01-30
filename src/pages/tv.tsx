@@ -33,6 +33,7 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -480,29 +481,32 @@ export default function TVScreen() {
     }
   };
 
-  const fetchWinnerSerial = async () => {
-    if (!event?.winner_ticket_id) return;
-    
+  const fetchWinnerSerial = async (ticketId: string) => {
     try {
+      console.log("[TV] 🔍 Fetching winner serial for ticket:", ticketId);
       const { data, error } = await supabase
-        .from("tickets")
-        .select("serial_number")
-        .eq("id", event.winner_ticket_id)
+        .from('tickets')
+        .select('serial_number')
+        .eq('id', ticketId)
         .single();
       
-      if (error) {
-        console.error("[TV] Failed to fetch winner serial number:", error);
-      } else {
-        console.log("[TV] ✅ Winner serial number fetched:", data?.serial_number);
-      }
+      if (error) throw error;
+      
+      const serial = data?.serial_number;
+      setWinnerSerial(serial || null);
+      console.log("[TV] ✅ Winner serial loaded:", serial);
     } catch (error) {
-      console.error("[TV] Failed to fetch winner serial number:", error);
+      console.error("[TV] ❌ Failed to load winner serial:", error);
+      setWinnerSerial(null);
     }
   };
 
   useEffect(() => {
     if (event?.winner_ticket_id) {
-      fetchWinnerSerial();
+      console.log("[TV] 🏆 Winner detected, fetching serial...");
+      fetchWinnerSerial(event.winner_ticket_id);
+    } else {
+      setWinnerSerial(null);
     }
   }, [event?.winner_ticket_id]);
 
@@ -608,7 +612,7 @@ export default function TVScreen() {
                   SERIJSKI BROJ ULAZNICE
                 </div>
                 <div className="text-9xl font-black text-yellow-400 drop-shadow-2xl">
-                  {event.winner_ticket_id || "???"}
+                  {winnerSerial || "..."}
                 </div>
               </div>
               
