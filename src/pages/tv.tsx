@@ -469,217 +469,202 @@ export default function TVScreen() {
     }
   };
 
-  // Error state
-  if (loadingError) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4">
-        <Card className="w-full max-w-2xl border-red-500 border-2">
-          <CardContent className="pt-6">
-            <h1 className="text-3xl font-bold mb-4 text-center text-red-500">⚠️ TV Display Error</h1>
-            <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
-              <p className="text-center text-red-800 font-mono text-sm whitespace-pre-wrap">
-                {loadingError}
-              </p>
-            </div>
-            <div className="space-y-3">
-              <button 
-                onClick={() => {
-                  setLoadingError(null);
-                  setSelectedEventId("");
-                  localStorage.removeItem("tv_event_id");
-                }} 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded font-semibold"
-              >
-                ← Back to Event Selection
-              </button>
-              <button 
-                onClick={() => {
-                  setLoadingError(null);
-                  if (selectedEventId) {
-                    loadEventData();
-                  }
-                }} 
-                className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded font-semibold"
-              >
-                🔄 Retry Loading Event
-              </button>
-              <button 
-                onClick={() => window.location.reload()} 
-                className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-3 rounded font-semibold"
-              >
-                ♻️ Reload Page
-              </button>
-            </div>
-            <div className="mt-4 p-3 bg-gray-100 rounded text-xs text-gray-600">
-              <p className="font-semibold mb-1">Troubleshooting:</p>
-              <ul className="list-disc list-inside space-y-1">
-                <li>Check that the event exists in Admin panel</li>
-                <li>Verify Supabase connection is active</li>
-                <li>Check browser console for detailed error logs</li>
-                <li>Try selecting a different event</li>
-              </ul>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  // Event selection screen
-  if (!selectedEventId) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6">
-            <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
-            <Select onValueChange={setSelectedEventId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select an event" />
-              </SelectTrigger>
-              <SelectContent>
-                {events.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.name} ({e.status})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  // Loading state
-  if (!event) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-white text-2xl">Loading event...</div>
-      </div>
-    );
-  }
-
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900 text-white p-8">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-7xl font-extrabold text-white tracking-wide">
-            PITALICA SKITALICA
-          </h1>
+      
+      {/* Error state */}
+      {loadingError ? (
+        <div className="min-h-screen bg-black flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl border-red-500 border-2">
+            <CardContent className="pt-6">
+              <h1 className="text-3xl font-bold mb-4 text-center text-red-500">⚠️ TV Display Error</h1>
+              <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
+                <p className="text-center text-red-800 font-mono text-sm whitespace-pre-wrap">
+                  {loadingError}
+                </p>
+              </div>
+              <div className="space-y-3">
+                <button 
+                  onClick={() => {
+                    setLoadingError(null);
+                    setSelectedEventId("");
+                    localStorage.removeItem("tv_event_id");
+                  }} 
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded font-semibold"
+                >
+                  ← Back to Event Selection
+                </button>
+                <button 
+                  onClick={() => {
+                    setLoadingError(null);
+                    if (selectedEventId) {
+                      loadEventData();
+                    }
+                  }} 
+                  className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded font-semibold"
+                >
+                  🔄 Retry Loading Event
+                </button>
+                <button 
+                  onClick={() => window.location.reload()} 
+                  className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-3 rounded font-semibold"
+                >
+                  ♻️ Reload Page
+                </button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
-      </div>
-      {/* Main Content */}
-      {!event ? (
-        <div className="text-center py-20">
-          <div className="text-3xl text-gray-300">
-            {selectedEventId ? "Loading event..." : "Select an event to display"}
-          </div>
+      ) : !selectedEventId ? (
+        /* Event selection */
+        <div className="min-h-screen bg-black flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="pt-6">
+              <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
+              <Select onValueChange={setSelectedEventId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an event" />
+                </SelectTrigger>
+                <SelectContent>
+                  {events.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.name} ({e.status})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </CardContent>
+          </Card>
+        </div>
+      ) : !event ? (
+        /* Loading */
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <div className="text-white text-2xl">Loading event...</div>
         </div>
       ) : (
-        <>
-          {/* ✅ MAIN TV DISPLAY */}
-          <div className="min-h-screen bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900 flex items-center justify-center p-4">
-            <div className="w-full max-w-[1920px] aspect-[16/9] relative overflow-hidden">
-              <div className="absolute inset-0 overflow-y-auto overflow-x-hidden">
-                <div className="min-h-full flex flex-col p-4 sm:p-6 lg:p-8 text-white">
+        /* ✅ MAIN TV DISPLAY - PROPER 16:9 LAYOUT */
+        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+          
+          {/* Background gradient (fills entire screen) */}
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
+          
+          {/* 16:9 Container (constrained, centered, letterboxed if needed) */}
+          <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
+            
+            {/* Content wrapper with padding */}
+            <div className="absolute inset-0 flex flex-col p-6">
+              
+              {/* 1️⃣ HEADER (12% height) */}
+              <div className="flex-none h-[12%] flex items-center justify-between px-4">
+                {/* Event name - top left corner */}
+                <div className="text-lg text-gray-400 font-medium">
+                  {event.name}
+                </div>
+                
+                {/* Main title - centered */}
+                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-6xl font-black tracking-wider text-white drop-shadow-2xl">
+                  PITALICA SKITALICA
+                </h1>
+              </div>
+              
+              {/* 2️⃣ MAIN CONTENT AREA (76% height) - 2 columns */}
+              <div className="flex-none h-[76%] grid grid-cols-[58%_38%] gap-[4%] py-4">
+                
+                {/* LEFT COLUMN: Question Panel (58%) */}
+                <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-6 flex flex-col justify-center shadow-2xl overflow-hidden">
                   
-                  {/* 1️⃣ HEADER */}
-                  <div className="text-center mb-6">
-                    <h1 className="text-6xl lg:text-7xl font-extrabold tracking-wide">
-                      PITALICA SKITALICA
-                    </h1>
-                  </div>
-                  
-                  {/* 2️⃣ BOARD (1-90) */}
-                  <div className="mb-6">
-                    <div className="grid grid-cols-10 gap-2 max-w-6xl mx-auto">
-                      {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
-                        const isDrawn = drawnNumbers.has(num);
-                        const isCurrent = event.current_drawn_number === num;
-                        
-                        return (
-                          <div
-                            key={num}
-                            className={`
-                              aspect-square rounded-lg flex items-center justify-center 
-                              text-xl lg:text-2xl font-bold transition-all duration-300 border-2
-                              ${
-                                isCurrent
-                                  ? "bg-yellow-400 text-gray-900 border-yellow-500 scale-110 shadow-2xl animate-pulse"
-                                  : isDrawn
-                                  ? "bg-indigo-600 text-white border-indigo-400"
-                                  : "bg-gray-800/50 text-gray-500 border-gray-700"
-                              }
-                            `}
-                          >
-                            {num}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  
-                  {/* 3️⃣ QUESTION OR WAITING */}
                   {event.current_drawn_number ? (
-                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-6 lg:p-8 shadow-2xl max-w-4xl mx-auto mb-6">
-                      <div className="text-center">
-                        <div className="text-lg lg:text-xl text-indigo-200 mb-2">
-                          Trenutno pitanje
-                        </div>
-                        <div className="text-7xl lg:text-9xl font-black text-white mb-4">
-                          #{event.current_drawn_number}
-                        </div>
-                        {timeRemaining > 0 && (
-                          <div className="text-5xl lg:text-6xl font-bold text-yellow-300 animate-pulse">
-                            {timeRemaining}s
-                          </div>
-                        )}
+                    /* Active question state */
+                    <div className="text-center space-y-4">
+                      <div className="text-lg text-indigo-300 tracking-wide uppercase">
+                        Trenutno pitanje
                       </div>
-                      
+                      <div className="text-8xl font-black text-white drop-shadow-2xl">
+                        #{event.current_drawn_number}
+                      </div>
+                      {timeRemaining > 0 && (
+                        <div className="text-5xl font-bold text-yellow-300 animate-pulse">
+                          {timeRemaining}s
+                        </div>
+                      )}
                       {questionText && (
-                        <div className="mt-6 bg-white/10 rounded-xl p-4 lg:p-6 backdrop-blur-sm">
-                          <p className="text-xl lg:text-2xl text-white font-medium text-center">
+                        <div className="mt-6 bg-white/10 rounded-2xl p-5 backdrop-blur max-h-[40vh] overflow-y-auto">
+                          <p className="text-xl text-white leading-relaxed">
                             {questionText}
                           </p>
                         </div>
                       )}
                     </div>
                   ) : (
-                    <div className="text-center py-10 lg:py-20 mb-6">
-                      <div className="inline-block animate-pulse">
-                        <div className="text-6xl lg:text-8xl mb-4">⏳</div>
-                      </div>
-                      <p className="text-2xl lg:text-3xl text-gray-300">
+                    /* Waiting state */
+                    <div className="text-center">
+                      <div className="text-6xl mb-4 animate-pulse">⏳</div>
+                      <p className="text-3xl text-gray-300 animate-pulse">
                         Čekam sljedeće pitanje...
                       </p>
                     </div>
                   )}
                   
-                  {/* 4️⃣ BOTTOM STATS */}
-                  <div className="mt-auto">
-                    <div className="grid grid-cols-3 gap-4 lg:gap-6 max-w-4xl mx-auto">
-                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 lg:p-6 text-center">
-                        <div className="text-3xl lg:text-4xl font-bold text-yellow-300">90</div>
-                        <div className="text-sm lg:text-lg text-gray-300 mt-2">90 pitanja</div>
-                      </div>
-                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 lg:p-6 text-center">
-                        <div className="text-3xl lg:text-4xl font-bold text-green-300">15</div>
-                        <div className="text-sm lg:text-lg text-gray-300 mt-2">15 za pobjedu</div>
-                      </div>
-                      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 lg:p-6 text-center">
-                        <div className="text-3xl lg:text-4xl font-bold text-pink-300">🍀</div>
-                        <div className="text-sm lg:text-lg text-gray-300 mt-2">Sretno</div>
-                      </div>
-                    </div>
+                </div>
+                
+                {/* RIGHT COLUMN: Numbers Board (38%) */}
+                <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-4 flex items-center justify-center shadow-2xl overflow-hidden">
+                  
+                  {/* Board grid - scaled down for better fit */}
+                  <div className="grid grid-cols-10 gap-1 w-full h-full max-h-full" style={{ aspectRatio: '10/9' }}>
+                    {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
+                      const isDrawn = drawnNumbers.has(num);
+                      const isCurrent = event.current_drawn_number === num;
+                      
+                      return (
+                        <div
+                          key={num}
+                          className={`
+                            aspect-square rounded-md flex items-center justify-center 
+                            text-sm font-bold transition-all duration-300
+                            ${
+                              isCurrent
+                                ? "bg-yellow-400 text-gray-900 scale-110 shadow-[0_0_15px_rgba(250,204,21,0.6)] animate-pulse"
+                                : isDrawn
+                                ? "bg-indigo-500 text-white shadow-[0_0_8px_rgba(99,102,241,0.4)] scale-105"
+                                : "bg-gray-800/60 text-gray-400 border border-gray-700/50"
+                            }
+                          `}
+                        >
+                          {num}
+                        </div>
+                      );
+                    })}
                   </div>
                   
                 </div>
+                
               </div>
+              
+              {/* 3️⃣ FOOTER (12% height) */}
+              <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-yellow-300">90</div>
+                  <div className="text-sm text-gray-300 mt-1">pitanja</div>
+                </div>
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-green-300">15</div>
+                  <div className="text-sm text-gray-300 mt-1">za pobjedu</div>
+                </div>
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-pink-300">🍀</div>
+                  <div className="text-sm text-gray-300 mt-1">Sretno</div>
+                </div>
+                
+              </div>
+              
             </div>
           </div>
-        </>
+        </div>
       )}
     </>
   );
