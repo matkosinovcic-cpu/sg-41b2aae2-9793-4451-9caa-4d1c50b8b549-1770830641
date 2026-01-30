@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
@@ -167,15 +167,8 @@ export default function TVScreen() {
 
     // Subscribe to tickets changes
     const ticketsSubscription = eventService.subscribeToTickets(selectedEventId, async (payload) => {
-      console.log("[TV] Real-time tickets update received:", payload);
-      const updatedTickets = payload.new;
-      
-      // ✅ CRITICAL: Always update tickets state
-      setTickets(updatedTickets);
-      console.log("[TV] Tickets state updated:", {
-        count: updatedTickets.length,
-        winners: updatedTickets.filter(t => t.is_winner).length
-      });
+      console.log("[TV] Real-time tickets update received, reloading all tickets...");
+      await loadTickets();
     });
 
     console.log("[TV] Subscription active");
@@ -296,12 +289,16 @@ export default function TVScreen() {
     if (event?.status === "finished") {
       loadStats();
     }
-  }, [event?.status]);
-
-  // Load tickets when event finishes
-  useEffect(() => {
-    if (event?.status === "finished") {
+    // Always try to load tickets if event exists to keep count updated
+    if (event) {
       loadTickets();
+    }
+  }, [event?.status, event?.id]);
+
+  // Reset animation when status changes from finished
+  useEffect(() => {
+    if (event?.status !== "finished") {
+      setAnimatedCount(0);
     }
   }, [event?.status]);
 
@@ -337,13 +334,6 @@ export default function TVScreen() {
     }
   }, [animatedCount, event?.status, tickets]);
 
-  // Reset animatedCount when status changes from finished
-  useEffect(() => {
-    if (event?.status !== "finished") {
-      setAnimatedCount(0);
-    }
-  }, [event?.status]);
-
   const loadStats = async () => {
     if (!event || tickets.length === 0) return;
     
@@ -354,6 +344,29 @@ export default function TVScreen() {
     } catch (error) {
       console.error("[TV] Failed to load stats:", error);
       setTicketStats([]);
+    }
+  };
+
+  const loadTickets = async () => {
+    if (!selectedEventId) return;
+    try {
+      const { data, error } = await supabase
+        .from('tickets')
+        .select(`
+          id,
+          serial_number,
+          event_id,
+          is_winner,
+          ticket_questions (
+            question_number
+          )
+        `)
+        .eq('event_id', selectedEventId);
+
+      if (error) throw error;
+      setTickets(data as any || []);
+    } catch (error) {
+      console.error("[TV] Failed to load tickets:", error);
     }
   };
 
@@ -592,7 +605,9 @@ export default function TVScreen() {
     }
   };
 
-  const shouldShowWinnerScreen = event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
+  const shouldShowWinnerScreen = useMemo(() => {
+    return event?.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
+  }, [event, tickets]);
 
   return (
     <>
@@ -667,7 +682,7 @@ export default function TVScreen() {
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-white text-2xl">Loading event...</div>
         </div>
-      ) : event.winner_ticket_id || event.status === "finished" ? (
+      ) : shouldShowWinnerScreen ? (
         /* ✅ WINNER SCREEN - TV DISPLAY */
         <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
