@@ -579,23 +579,10 @@ export default function TVScreen() {
               {/* Winner display box */}
               <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
                 <div 
-                  className="text-yellow-300 tracking-wider text-center leading-none mb-[1.5vh]"
-                  style={{ fontSize: "clamp(20px, 3vw, 36px)" }}
+                  className="font-extrabold text-yellow-400 text-center leading-none"
+                  style={{ fontSize: "clamp(52px, 11vw, 160px)" }}
                 >
-                  Serijski broj ulaznice:
-                </div>
-                <div 
-                  className="font-extrabold text-yellow-400 text-center leading-none break-words"
-                  style={{ fontSize: "clamp(44px, 8.5vw, 120px)" }}
-                >
-                  {/* 🔒 GUARANTEED: NEVER SHOWS UUID */}
-                  {winnerSerial || "..."}
-                  {/* Fallback hierarchy:
-                      1. winnerSerial (T1769710949158-0004)
-                      2. "N/A" (if serial missing)
-                      3. "..." (loading)
-                      NEVER: event.winner_ticket_id (UUID)
-                  */}
+                  POBJEDNIK
                 </div>
               </div>
               
