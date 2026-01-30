@@ -36,6 +36,8 @@ export default function TVScreen() {
   const [tvKey, setTvKey] = useState(0);
   const [failCount, setFailCount] = useState(0);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const lastPolledStateRef = useRef<Event | null>(null);
+  const lastRealtimeUpdateRef = useRef<Event | null>(null);
 
   // 🎯 FETCH ACTIVE EVENT (polling function)
   const fetchActiveEvent = async (): Promise<Event | null> => {
@@ -62,7 +64,7 @@ export default function TVScreen() {
 
   // 📡 HANDLE REALTIME UPDATES
   const handleRealtimeUpdate = async (newEventData: Event) => {
-    // console.log('[TV-RT] 🔄 Processing realtime update...');
+    console.log('[TV-RT] 🔄 Processing realtime update...');
     
     // Update drawn numbers
     if (newEventData.drawn_numbers) {
@@ -222,7 +224,7 @@ export default function TVScreen() {
         setFailCount(0);
       }
       
-      // 🔄 NEW ACTIVE EVENT DETECTED?
+      // 🆕 NEW ACTIVE EVENT DETECTED?
       if (activeEvent.id !== selectedEventId) {
         console.log("[TV-POLL] 🆕 NEW ACTIVE EVENT DETECTED!");
         console.log("[TV-POLL] Current:", selectedEventId.slice(0, 8));
@@ -254,6 +256,18 @@ export default function TVScreen() {
             await loadCurrentQuestion(activeEvent.id, activeEvent.current_drawn_number);
           }
         }
+        
+        // 🐛 Console debug logging (always active)
+        console.debug('[TV-STATUS]', {
+          eventId: activeEvent.id.slice(0, 8),
+          name: activeEvent.name,
+          status: activeEvent.status,
+          currentNumber: activeEvent.current_drawn_number,
+          drawnCount: activeEvent.drawn_numbers?.length || 0,
+          winnersCount: tickets.filter(t => t.is_winner).length,
+          source: 'polling',
+          failCount
+        });
       }
     };
 
@@ -599,7 +613,7 @@ export default function TVScreen() {
         </div>
       ) : shouldShowWinnerScreen ? (
         /* ✅ WINNER SCREEN - TV DISPLAY */
-        <div key={`tv-winner-${tvKey}-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+        <div key={`tv-winner-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
           {/* Background gradient */}
           <div className="absolute inset-0 bg-gradient-to-br from-yellow-900 via-orange-900 to-red-900" />
@@ -656,7 +670,7 @@ export default function TVScreen() {
         </div>
       ) : (
         /* ✅ MAIN TV DISPLAY - NORMAL GAME SCREEN */
-        <div key={`tv-game-${tvKey}-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+        <div key={`tv-game-${event.id}`} className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
           {/* Background gradient (fills entire screen) */}
           <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
