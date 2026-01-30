@@ -564,33 +564,49 @@ export default function TVScreen() {
           <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
             
             {/* Content wrapper */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
-              
-              {/* Trophy icon */}
-              <div className="mb-8 animate-bounce">
-                <Trophy className="w-32 h-32 text-yellow-300" />
-              </div>
-              
-              {/* Winner title */}
-              <h1 className="text-8xl font-black text-white mb-12 drop-shadow-2xl animate-pulse">
-                IMAMO POBJEDNIKA!
-              </h1>
-              
-              {/* Winner display box */}
-              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
-                <div 
-                  className="font-extrabold text-yellow-400 text-center leading-none"
-                  style={{ fontSize: "clamp(52px, 11vw, 160px)" }}
-                >
-                  POBJEDNIK
+            <div className="absolute inset-0 flex items-center justify-center p-[5vh]">
+              <div className="w-full max-w-[92vw] max-h-[86vh] flex flex-col items-center justify-center text-center gap-[2vh]">
+                
+                {/* Trophy icon */}
+                <div className="animate-bounce">
+                  <Trophy className="w-20 h-20 text-yellow-300" />
                 </div>
+                
+                {/* Winner title */}
+                <h1 
+                  className="text-white font-extrabold tracking-wide text-center leading-tight drop-shadow-2xl animate-pulse"
+                  style={{ fontSize: "clamp(40px, 6vw, 84px)" }}
+                >
+                  IMAMO {(() => {
+                    const winnerCount = tickets.filter(t => t.is_winner).length;
+                    return winnerCount === 1 ? "POBJEDNIKA" : "POBJEDNIKE";
+                  })()}!
+                </h1>
+                
+                {/* Winner display box */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
+                  <div 
+                    className="font-extrabold text-yellow-400 text-center leading-none"
+                    style={{ fontSize: "clamp(52px, 11vw, 160px)" }}
+                  >
+                    {(() => {
+                      const winnerCount = tickets.filter(t => t.is_winner).length;
+                      return winnerCount === 1 
+                        ? "POBJEDNIK"
+                        : `${winnerCount} POBJEDNIKA`;
+                    })()}
+                  </div>
+                </div>
+                
+                {/* Confetti effect */}
+                <div 
+                  className="animate-pulse"
+                  style={{ fontSize: "clamp(32px, 4.5vw, 56px)" }}
+                >
+                  🎉 🎊 🏆 🎊 🎉
+                </div>
+                
               </div>
-              
-              {/* Confetti effect */}
-              <div className="mt-12 text-6xl animate-pulse">
-                🎉 🎊 🏆 🎊 🎉
-              </div>
-              
             </div>
           </div>
         </div>
