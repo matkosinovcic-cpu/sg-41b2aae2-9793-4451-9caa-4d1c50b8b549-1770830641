@@ -35,6 +35,7 @@ export default function TVScreen() {
   const [animatedCount, setAnimatedCount] = useState(0);
   const [tvKey, setTvKey] = useState(0);
   const [failCount, setFailCount] = useState(0);
+  const channelRef = useRef<SupabaseRealtimeChannel | null>(null);
 
   // 🎯 FETCH ACTIVE EVENT (polling function)
   const fetchActiveEvent = async (): Promise<Event | null> => {
