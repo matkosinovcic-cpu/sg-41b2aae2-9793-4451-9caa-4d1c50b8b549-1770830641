@@ -105,7 +105,6 @@ export default function TVScreen() {
         filter: `id=eq.${eventId}`
       }, async (payload) => {
         console.log("[TV] ⚡ Realtime UPDATE received");
-        lastRealtimeMessageRef.current = Date.now();
         
         const newEvent = payload.new as Event;
         
@@ -138,16 +137,6 @@ export default function TVScreen() {
       })
       .subscribe((status) => {
         console.log("[TV] 📡 Event subscription status:", status);
-        realtimeConnectedRef.current = status === 'SUBSCRIBED';
-        
-        if (status === 'SUBSCRIBED') {
-          // Stop polling when realtime connected
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-            console.log("[TV] ✅ Realtime connected, polling stopped");
-          }
-        }
       });
     
     eventChannelRef.current = channel;

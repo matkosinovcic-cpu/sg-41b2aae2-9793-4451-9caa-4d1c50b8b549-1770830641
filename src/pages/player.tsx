@@ -54,9 +54,6 @@ export default function PlayerScreen() {
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
   const lastUpdatedAtRef = useRef<string | null>(null);
-  const realtimeConnectedRef = useRef<boolean>(false);
-  const lastRealtimeMessageRef = useRef<number>(Date.now());
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 🚀 RESOLVE ACTIVE EVENT
   const resolveActiveEvent = async (): Promise<Event | null> => {
@@ -126,7 +123,6 @@ export default function PlayerScreen() {
         filter: `id=eq.${eventId}`
       }, async (payload) => {
         console.log("[Player] ⚡ Realtime UPDATE received");
-        lastRealtimeMessageRef.current = Date.now();
         
         const newEvent = payload.new as Event;
         
@@ -157,16 +153,6 @@ export default function PlayerScreen() {
       })
       .subscribe((status) => {
         console.log("[Player] 📡 Event subscription status:", status);
-        realtimeConnectedRef.current = status === 'SUBSCRIBED';
-        
-        if (status === 'SUBSCRIBED') {
-          // Stop polling when realtime connected
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-            console.log("[Player] ✅ Realtime connected, polling stopped");
-          }
-        }
       });
     
     eventChannelRef.current = channel;
