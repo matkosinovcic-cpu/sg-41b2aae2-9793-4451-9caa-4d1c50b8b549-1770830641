@@ -260,61 +260,84 @@ export default function TVScreen() {
     console.log("[TV] ✅ Switched to new active event successfully");
   };
 
-  // 🚀 INITIAL LOAD
+  // 🚀 CRITICAL FIX: INITIALIZE REALTIME SYNC IMMEDIATELY ON MOUNT
   useEffect(() => {
-    const initializeTV = async () => {
-      console.log("[TV] 🚀 Initializing TV screen...");
-      
-      // 1. Determine event ID (URL param OR active event)
-      let targetEventId = urlEventId;
-      
-      if (!targetEventId) {
-        console.log("[TV] 🔍 No eventId in URL, resolving active event...");
-        const activeEvent = await resolveActiveEvent();
-        
-        if (activeEvent) {
-          targetEventId = activeEvent.id;
-          console.log("[TV] ✅ Using active event:", targetEventId.slice(0, 8));
-        } else {
-          console.log("[TV] ⚠️ No active event found");
-          setNoActiveEvent(true);
-          setIsLoadingEvent(false);
-          return;
-        }
-      } else {
-        console.log("[TV] ✅ Using eventId from URL:", targetEventId.slice(0, 8));
-      }
-      
-      // 2. Load event data
-      await loadEventData(targetEventId);
-      
-      // 3. Subscribe to event updates (REALTIME PRIMARY)
-      subscribeToEventUpdates(targetEventId);
-      
-      // 4. Subscribe to active event tracker (for auto-switch)
-      subscribeToActiveEventTracker();
-      
-      setIsLoadingEvent(false);
-      setNoActiveEvent(false);
+    console.log("[TV] 🚀 TV Screen mounted - initializing realtime sync");
+    
+    // ✅ EXPOSE __TV_SYNC_STATUS__ IMMEDIATELY (before async operations)
+    (window as any).__TV_SYNC_STATUS__ = () => {
+      const currentEvent = event;
+      return {
+        activeEventId: currentEvent?.id?.slice(0, 8) || 'none',
+        eventName: currentEvent?.name || 'none',
+        status: currentEvent?.status || 'none',
+        realtimeConnected: eventChannelRef.current !== null,
+        lastRealtimeAt: lastRealtimeUpdateRef.current,
+        lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
+        mode: 'realtime',
+        currentQuestionNumber: currentEvent?.current_question_number || null,
+        currentDrawnNumber: currentEvent?.current_drawn_number || null,
+        drawnCount: currentEvent?.drawn_numbers?.length || 0,
+        timeRemaining,
+        channelState: eventChannelRef.current?.state || 'not_connected',
+        isLoadingEvent,
+        noActiveEvent
+      };
     };
     
-    initializeTV();
+    console.log("[TV] ✅ __TV_SYNC_STATUS__ exposed on window");
     
-    // 🔍 SYNC DIAGNOSTIC: Expose __SYNC_STATUS__ helper
-    (window as any).__TV_SYNC_STATUS__ = () => ({
-      activeEventId: event?.id.slice(0, 8),
-      eventName: event?.name,
-      status: event?.status,
-      realtimeConnected: eventChannelRef.current !== null,
-      lastRealtimeAt: lastRealtimeUpdateRef.current,
-      lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
-      mode: 'realtime',
-      currentQuestionNumber: event?.current_question_number,
-      currentDrawnNumber: event?.current_drawn_number,
-      drawnCount: event?.drawn_numbers?.length || 0,
-      timeRemaining,
-      channelState: eventChannelRef.current?.state
-    });
+    // ✅ START ASYNC INITIALIZATION (doesn't block __TV_SYNC_STATUS__)
+    const initializeTV = async () => {
+      try {
+        console.log("[TV] 🔍 Starting async initialization...");
+        
+        // 1. Determine event ID (URL param OR active event)
+        let targetEventId = urlEventId;
+        
+        if (!targetEventId) {
+          console.log("[TV] 🔍 No eventId in URL, resolving active event...");
+          const activeEvent = await resolveActiveEvent();
+          
+          if (activeEvent) {
+            targetEventId = activeEvent.id;
+            console.log("[TV] ✅ Using active event:", targetEventId.slice(0, 8));
+          } else {
+            console.log("[TV] ⚠️ No active event found");
+            setNoActiveEvent(true);
+            setIsLoadingEvent(false);
+            // ✅ STILL SUBSCRIBE TO ACTIVE EVENT TRACKER (wait for new event)
+            subscribeToActiveEventTracker();
+            return;
+          }
+        } else {
+          console.log("[TV] ✅ Using eventId from URL:", targetEventId.slice(0, 8));
+        }
+        
+        // 2. Load event data
+        await loadEventData(targetEventId);
+        
+        // 3. Subscribe to event updates (REALTIME PRIMARY)
+        subscribeToEventUpdates(targetEventId);
+        
+        // 4. Subscribe to active event tracker (for auto-switch)
+        subscribeToActiveEventTracker();
+        
+        setIsLoadingEvent(false);
+        setNoActiveEvent(false);
+        
+        console.log("[TV] ✅ Async initialization complete");
+      } catch (error) {
+        console.error("[TV] ❌ Failed to initialize TV:", error);
+        setIsLoadingEvent(false);
+        
+        // ✅ STILL SUBSCRIBE TO ACTIVE EVENT TRACKER (wait for new event)
+        subscribeToActiveEventTracker();
+      }
+    };
+    
+    // ✅ KICK OFF ASYNC INIT (non-blocking)
+    initializeTV();
     
     // Cleanup on unmount
     return () => {
@@ -325,8 +348,11 @@ export default function TVScreen() {
       if (activeEventTrackerRef.current) {
         activeEventTrackerRef.current.unsubscribe();
       }
+      
+      // ✅ CLEANUP __TV_SYNC_STATUS__
+      delete (window as any).__TV_SYNC_STATUS__;
     };
-  }, [urlEventId]);
+  }, [urlEventId]); // Re-run if URL eventId changes
 
   // Initialize AudioContext
   useEffect(() => {
