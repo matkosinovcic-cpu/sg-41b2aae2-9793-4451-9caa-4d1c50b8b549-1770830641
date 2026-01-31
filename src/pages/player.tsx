@@ -757,69 +757,6 @@ export default function PlayerScreen() {
     );
   }
 
-  // Winner screen
-  if (event?.status === "finished" && event.winner_ticket_id) {
-    const isWinner = ticket.id === event.winner_ticket_id;
-    
-    return (
-      <>
-        <SEO title={isWinner ? "Pobjeda!" : "Kraj igre"} />
-        <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4">
-          <div className="container mx-auto max-w-4xl">
-            <div className="text-center mb-8">
-              <Trophy className={`w-32 h-32 mx-auto mb-4 ${isWinner ? 'text-yellow-400' : 'text-white'}`} />
-              <h1 className="text-4xl font-black text-white mb-4">
-                {isWinner ? "🎉 POBJEDNIK! 🎉" : "KRAJ IGRE"}
-              </h1>
-              {isWinner && (
-                <p className="text-white text-xl">Čestitamo! Osvojili ste nagradu!</p>
-              )}
-            </div>
-
-            {/* Ticket with stats */}
-            <Card className={isWinner ? "border-4 border-yellow-400" : ""}>
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <Badge className="bg-purple-600 text-white">
-                    {ticket.serial_number}
-                  </Badge>
-                  {isWinner && (
-                    <Badge className="bg-yellow-400 text-gray-900">
-                      POBJEDNIK!
-                    </Badge>
-                  )}
-                </div>
-                
-                {renderTicketGrid(ticket)}
-                
-                {stats && stats.ticket_stats && (() => {
-                  const tStats = stats.ticket_stats.find(s => s.ticket_serial === ticket.serial_number);
-                  if (!tStats) return null;
-                  return (
-                    <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
-                      <div className="text-center">
-                        <div className="font-bold text-green-600">{tStats.correct}</div>
-                        <div className="text-gray-600">Točno</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="font-bold text-red-600">{tStats.incorrect}</div>
-                        <div className="text-gray-600">Netočno</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="font-bold text-blue-600">{tStats.percentage}%</div>
-                        <div className="text-gray-600">Točnost</div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </>
-    );
-  }
-
   // Multi-ticket display
   return (
     <>
@@ -851,15 +788,6 @@ export default function PlayerScreen() {
           )}
 
           {/* Header */}
-          <div className="text-center mb-6">
-            <h1 className="text-4xl font-black text-white mb-2">
-              Pitanje {event?.drawn_numbers?.length || 0} / 90
-            </h1>
-            <Badge className="bg-gradient-to-r from-blue-600 to-purple-600 text-white text-lg px-4 py-2">
-              #{event?.current_drawn_number}
-            </Badge>
-          </div>
-
           <div className="mb-4 space-y-2">
             <div className="flex gap-2">
               <Input
@@ -889,50 +817,31 @@ export default function PlayerScreen() {
           </div>
 
           {/* CRITICAL: Final Statistics - ONLY when event is finished */}
-          {event?.status === "finished" && stats && (() => {
-            // Logic: Use Winner ticket if player has it, otherwise use First ticket
-            const winnerTicket = tickets.find(t => t.id === event.winner_ticket_id);
-            const targetTicket = winnerTicket || tickets[0];
-            const targetStats = stats.ticket_stats.find(s => s.ticket_serial === targetTicket.serial_number);
-            
-            if (!targetStats) return null;
-
-            return (
-              <Card className="bg-white/95 backdrop-blur-sm mb-4">
-                <CardContent className="p-6 text-center space-y-3">
-                  <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
-                    Hvala na sudjelovanju!
-                  </h2>
-                  
-                  {/* Single ticket stats */}
-                  <div className="text-2xl font-bold text-gray-700">
-                    Ukupno točno: {targetStats.correct} / {stats.drawn_in_game}
+          {event?.status === "finished" && stats && (
+            <Card className="bg-white/95 backdrop-blur-sm mb-4">
+              <CardContent className="p-6 text-center space-y-3">
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
+                  Hvala na sudjelovanju!
+                </h2>
+                
+                {/* ✅ FIX: Use drawn_in_game as denominator (SOURCE OF TRUTH) */}
+                <div className="text-2xl font-bold text-gray-700">
+                  Ukupno točno: {stats.total_correct} / {stats.drawn_in_game}
+                </div>
+                
+                {/* ✅ FIX: Accuracy based on drawnInGame, not answered */}
+                {stats.drawn_in_game > 0 && (
+                  <div className="text-lg text-gray-600">
+                    Točnost: {Math.round((stats.total_correct / stats.drawn_in_game) * 100)}%
                   </div>
-                  
-                  {stats.drawn_in_game > 0 && (
-                    <div className="text-lg text-gray-600">
-                      Točnost: {targetStats.percentage}%
-                    </div>
-                  )}
-                  
-                  <div className="text-sm text-gray-500 mt-2">
-                    Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
-                  </div>
-                  
-                  {winnerTicket && (
-                    <div className="text-sm font-bold text-yellow-600 mt-2">
-                      (Prikazani rezultati za pobjednički tiket: {targetTicket.serial_number})
-                    </div>
-                  )}
-                  {!winnerTicket && tickets.length > 1 && (
-                    <div className="text-xs text-gray-400 mt-1">
-                      (Prikazani rezultati za tiket: {targetTicket.serial_number})
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })()}
+                )}
+                
+                <div className="text-sm text-gray-500 mt-2">
+                  Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Tickets Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
