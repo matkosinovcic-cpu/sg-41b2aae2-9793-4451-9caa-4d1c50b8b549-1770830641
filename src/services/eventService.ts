@@ -4,6 +4,7 @@ export interface Question {
   id: string;
   text: string;
   correct_answer: boolean;
+  question_type?: string; // 'yes_no' by default
 }
 
 export interface Event {

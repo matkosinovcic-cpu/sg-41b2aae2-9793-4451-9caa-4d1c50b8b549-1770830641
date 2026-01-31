@@ -700,7 +700,7 @@ export default function PlayerScreen() {
               <div className="h-2 bg-gray-100 w-full">
                 <div 
                   className="h-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-100 ease-linear"
-                  style={{ width: `${(timeRemaining / 10) * 100}%` }}
+                  style={{ width: `${(timeRemaining / 9) * 100}%` }}
                 />
               </div>
               <CardContent className="p-6 space-y-6 text-center">

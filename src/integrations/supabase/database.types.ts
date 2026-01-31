@@ -257,18 +257,21 @@ export type Database = {
           correct_answer: boolean
           created_at: string | null
           id: string
+          question_type: string | null
           text: string
         }
         Insert: {
           correct_answer: boolean
           created_at?: string | null
           id?: string
+          question_type?: string | null
           text: string
         }
         Update: {
           correct_answer?: boolean
           created_at?: string | null
           id?: string
+          question_type?: string | null
           text?: string
         }
         Relationships: []
