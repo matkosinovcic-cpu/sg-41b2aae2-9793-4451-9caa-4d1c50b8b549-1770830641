@@ -639,36 +639,46 @@ export default function PlayerScreen() {
                     {currentQuestion.questions?.text}
                   </h2>
                 </div>
+                
+                {/* Countdown Timer Display */}
+                {timeRemaining > 0 && (
+                  <div className="text-5xl font-black text-orange-600 animate-pulse">
+                    ⏱️ {timeRemaining}s
+                  </div>
+                )}
 
-                {timeRemaining > 0 ? (
-                  <div className="grid grid-cols-2 gap-4 pt-2">
-                    <Button
-                      onClick={() => handleSubmitAnswer(true)}
-                      disabled={hasAnswered}
-                      className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
-                        hasAnswered && answer === true 
-                          ? "bg-green-600 ring-4 ring-green-200" 
-                          : "bg-green-500 hover:bg-green-600 shadow-[0_4px_0_rgb(21,128,61)]"
-                      }`}
-                    >
-                      DA
-                    </Button>
-                    <Button
-                      onClick={() => handleSubmitAnswer(false)}
-                      disabled={hasAnswered}
-                      className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
-                        hasAnswered && answer === false
-                          ? "bg-red-600 ring-4 ring-red-200"
-                          : "bg-red-500 hover:bg-red-600 shadow-[0_4px_0_rgb(185,28,28)]"
-                      }`}
-                    >
-                      NE
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="bg-gray-100 rounded-xl p-4 font-bold text-gray-500">
-                    Vrijeme je isteklo! ⏱️
-                  </div>
+                {(currentQuestion?.questions?.question_type === 'yes_no' || 
+                  !currentQuestion?.questions?.question_type) && (
+                  timeRemaining > 0 ? (
+                    <div className="grid grid-cols-2 gap-4 pt-2">
+                      <Button
+                        onClick={() => handleSubmitAnswer(true)}
+                        disabled={hasAnswered}
+                        className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                          hasAnswered && answer === true 
+                            ? "bg-green-600 ring-4 ring-green-200" 
+                            : "bg-green-500 hover:bg-green-600 shadow-[0_4px_0_rgb(21,128,61)]"
+                        }`}
+                      >
+                        DA
+                      </Button>
+                      <Button
+                        onClick={() => handleSubmitAnswer(false)}
+                        disabled={hasAnswered}
+                        className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                          hasAnswered && answer === false
+                            ? "bg-red-600 ring-4 ring-red-200"
+                            : "bg-red-500 hover:bg-red-600 shadow-[0_4px_0_rgb(185,28,28)]"
+                        }`}
+                      >
+                        NE
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 rounded-xl p-4 font-bold text-gray-500">
+                      Vrijeme je isteklo! ⏱️
+                    </div>
+                  )
                 )}
                 
                 {hasAnswered && (

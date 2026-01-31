@@ -638,6 +638,18 @@ export default function TVScreen() {
                         </p>
                       </div>
                     )}
+                    
+                    {/* DA/NE Display for Yes/No Questions */}
+                    {currentQuestion?.questions?.question_type === 'yes_no' && timeRemaining > 0 && (
+                      <div className="mt-6 grid grid-cols-2 gap-6">
+                        <div className="bg-green-500/20 border-2 border-green-400 rounded-2xl p-6 backdrop-blur">
+                          <div className="text-4xl font-black text-green-300">DA</div>
+                        </div>
+                        <div className="bg-red-500/20 border-2 border-red-400 rounded-2xl p-6 backdrop-blur">
+                          <div className="text-4xl font-black text-red-300">NE</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center">
