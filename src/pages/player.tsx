@@ -444,7 +444,7 @@ export default function PlayerScreen() {
               {event?.name || "PITALICA SKITALICA"}
             </h1>
             <div className="text-white/80">
-              Pitanje {event?.current_question_number || 0} / 90
+              Pitanje {event?.current_question_number || event?.drawn_numbers?.length || 0} / 90
             </div>
           </div>
 
