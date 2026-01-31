@@ -1,5 +1,6 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect } from "react";
+import { useRouter } from "next/router";
 import { eventService, Event } from "@/services/eventService";
 import { answerService, PlayerSession, SessionStats, TicketDetailedResults } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
@@ -9,9 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { useActiveEvent } from "@/hooks/useActiveEvent";
 
-// Helper to normalize answers for local comparison (matches service logic)
+// Helper to normalize answers
 function normalizeAnswer(value: any): boolean | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "boolean") return value;
@@ -32,17 +32,16 @@ interface TicketData {
   ticket_questions: Array<{ question_number: number }>;
 }
 
-// Interface for aggregated stats used in the UI
 interface AggregatedStats {
   ticket_stats: Array<SessionStats & { ticket_serial: string }>;
   total_correct: number;
-  total_answered: number;    // Sum of answered across all tickets
-  drawn_in_game: number;     // Event-level: unique drawn questions (NOT per-ticket sum)
+  total_answered: number;
+  drawn_in_game: number;
 }
 
 export default function PlayerScreen() {
-  // 🚀 USE ACTIVE EVENT HOOK (replaces localStorage + manual fetch)
-  const { event: activeEventFromHook, isLoading: loadingActiveEvent, realtimeStatus } = useActiveEvent();
+  const router = useRouter();
+  const eventId = router.query.eventId as string;
   
   const [serialInput, setSerialInput] = useState("");
   const [tickets, setTickets] = useState<TicketData[]>([]);
@@ -60,78 +59,90 @@ export default function PlayerScreen() {
   const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
   const { toast } = useToast();
 
-  // 🎯 SYNC WITH ACTIVE EVENT from hook
+  // Fetch initial event state
   useEffect(() => {
-    if (loadingActiveEvent) return;
+    if (!eventId) return;
     
-    if (activeEventFromHook && !event) {
-      console.log("[Player] ✅ Active event from hook:", {
-        id: activeEventFromHook.id.slice(0, 8),
-        name: activeEventFromHook.name,
-        status: activeEventFromHook.status
-      });
-      
-      // If we have tickets for this event, use it
-      const storedSerials = localStorage.getItem("ticket_serials");
-      if (storedSerials) {
-        try {
-          const serials: string[] = JSON.parse(storedSerials);
-          if (serials.length > 0) {
-            // Load tickets for active event
-            Promise.all(
-              serials.map(serial => eventService.getTicketBySerial(serial))
-            ).then(loadedTickets => {
-              const validTickets = loadedTickets.filter(t => t !== null && t.event_id === activeEventFromHook.id);
-              if (validTickets.length > 0) {
-                setTickets(validTickets);
-                setTicket(validTickets[0]);
-                setEvent(activeEventFromHook);
-                setDrawnNumbers(new Set(activeEventFromHook.drawn_numbers || []));
-                
-                // Initialize session
-                answerService.getOrCreateSession(activeEventFromHook.id).then(sessionData => {
-                  setSession(sessionData);
-                });
-                
-                console.log("[Player] ✅ Restored tickets for active event");
-              }
-            });
-          }
-        } catch (err) {
-          console.error("[Player] Failed to parse stored tickets:", err);
+    const fetchEvent = async () => {
+      try {
+        console.log("[Player] 📥 Fetching initial event state for:", eventId.slice(0, 8));
+        const eventData = await eventService.getEvent(eventId);
+        
+        setEvent(eventData);
+        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+        
+        // Create session
+        const sessionData = await answerService.getOrCreateSession(eventData.id);
+        setSession(sessionData);
+        
+        if (eventData.current_question_number) {
+          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
         }
+        
+        console.log("[Player] ✅ Initial state loaded:", {
+          currentNumber: eventData.current_question_number,
+          status: eventData.status
+        });
+      } catch (error) {
+        console.error("[Player] ❌ Failed to fetch initial event:", error);
       }
-    }
-  }, [activeEventFromHook, loadingActiveEvent, event]);
-
-  // 🔄 SYNC EVENT STATE when active event updates
-  useEffect(() => {
-    if (!activeEventFromHook || !event) return;
+    };
     
-    // Only update if it's the same event we're watching
-    if (activeEventFromHook.id === event.id) {
-      console.log("[Player] 📊 Active event updated:", {
-        currentNumber: activeEventFromHook.current_drawn_number,
-        drawnCount: activeEventFromHook.drawn_numbers?.length || 0,
-        status: activeEventFromHook.status
-      });
-      
-      setEvent(activeEventFromHook);
-      setDrawnNumbers(new Set(activeEventFromHook.drawn_numbers || []));
-      
-      if (activeEventFromHook.current_question_number) {
-        loadCurrentQuestion(activeEventFromHook.id, activeEventFromHook.current_question_number);
-      }
-      
-      // Load stats when event finishes
-      if (activeEventFromHook.status === "finished" && session && tickets.length > 0) {
-        loadStats();
-        loadDetailedResults();
-      }
-    }
-  }, [activeEventFromHook]);
+    fetchEvent();
+  }, [eventId]);
 
-  // CRITICAL: Load statistics ONLY when event is finished
+  // Realtime subscription
+  useEffect(() => {
+    if (!eventId) return;
+    
+    console.log("[Player] 📡 Setting up realtime subscription for event:", eventId.slice(0, 8));
+    
+    const channel = supabase
+      .channel(`player-event-${eventId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'events',
+        filter: `id=eq.${eventId}`
+      }, async (payload) => {
+        console.log("[Player] ⚡ Realtime UPDATE received:", payload);
+        
+        const newEvent = payload.new as Event;
+        
+        // Update drawn numbers
+        setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
+        
+        // Load current question if changed
+        if (newEvent.current_question_number && 
+            newEvent.current_question_number !== currentQuestion?.question_number) {
+          await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
+        }
+        
+        // Update event state
+        setEvent(newEvent);
+        
+        // Load stats when finished
+        if (newEvent.status === "finished" && session && tickets.length > 0) {
+          loadStats();
+          loadDetailedResults();
+        }
+        
+        console.log("[Player] ✅ State updated:", {
+          currentNumber: newEvent.current_question_number,
+          status: newEvent.status
+        });
+      })
+      .subscribe((status) => {
+        console.log("[Player] 📡 Subscription status:", status);
+      });
+    
+    return () => {
+      console.log("[Player] 🧹 Cleaning up realtime subscription");
+      channel.unsubscribe();
+    };
+  }, [eventId, currentQuestion, session, tickets]);
+
+  // Load stats when event finishes
   useEffect(() => {
     if (session && tickets.length > 0 && event?.status === "finished") {
       loadStats();
@@ -139,39 +150,7 @@ export default function PlayerScreen() {
     }
   }, [session?.id, tickets.length, event?.status]);
 
-  // Real-time subscriptions (for tickets and answers only - event comes from hook)
-  useEffect(() => {
-    if (!event) return;
-
-    console.log("[Player] Setting up ticket subscriptions for event:", event.id);
-
-    const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
-      console.log("[Player] Ticket update:", payload);
-      if (payload.new) {
-        setTickets(prevTickets => 
-          prevTickets.map(t => t.id === payload.new.id ? payload.new : t)
-        );
-        if (ticket && payload.new.id === ticket.id) {
-          setTicket(payload.new);
-        }
-      }
-    });
-
-    // Subscribe to answers for stats updates (only when finished)
-    const answersSubscription = session && event.status === "finished"
-      ? answerService.subscribeToEventAnswers(event.id, () => {
-          loadStats();
-          loadDetailedResults();
-        })
-      : null;
-
-    return () => {
-      ticketsSubscription.unsubscribe();
-      if (answersSubscription) answersSubscription.unsubscribe();
-    };
-  }, [event?.id, ticket?.id, session?.id, event?.status]);
-
-  // Timer countdown with timeout handling
+  // Timer countdown
   useEffect(() => {
     if (!event?.question_open_until || !session || !currentQuestion) {
       setTimeRemaining(0);
@@ -184,7 +163,6 @@ export default function PlayerScreen() {
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
       setTimeRemaining(remaining);
       
-      // TIMEOUT HANDLING: Mark as wrong if time expires and not answered
       if (remaining === 0 && !hasAnswered) {
         handleTimeout();
       }
@@ -196,21 +174,15 @@ export default function PlayerScreen() {
   const handleTimeout = async () => {
     if (!session || !currentQuestion || !event) return;
     
-    console.log("[Player] ⏱️ TIMEOUT - marking question as missed:", {
-      sessionId: session.id,
-      eventId: event.id,
-      questionNumber: currentQuestion.question_number,
-      trackedTickets: tickets.map(t => t.serial_number)
-    });
+    console.log("[Player] ⏱️ TIMEOUT - marking question as missed");
     
     try {
-      // CRITICAL: Mark as missed for ALL tracked tickets
       for (const ticket of tickets) {
         await answerService.markUnansweredAsWrong(
           session.id,
           event.id,
           currentQuestion.question_number,
-          ticket.serial_number // NEW: Pass exact ticket identifier
+          ticket.serial_number
         );
       }
       setHasAnswered(true);
@@ -224,7 +196,6 @@ export default function PlayerScreen() {
     if (!session || tickets.length === 0 || !event) return;
     
     try {
-      // Fetch stats for each ticket individually
       const promises = tickets.map(async (t) => {
         const singleStats = await answerService.getSessionStats(
           session.id, 
@@ -235,40 +206,9 @@ export default function PlayerScreen() {
       });
 
       const results = await Promise.all(promises);
-
-      // Aggregate results
       const totalCorrect = results.reduce((sum, r) => sum + r.correct, 0);
       const totalAnswered = results.reduce((sum, r) => sum + r.answered, 0);
-      
-      // ✅ FIX: Use event-level drawn count, NOT per-ticket sum
       const drawnInGame = event.drawn_numbers?.length || 0;
-
-      // 🔍 DEBUG LOGGING: Verify stats calculation
-      console.log("═══════════════════════════════════════════");
-      console.log("📊 [Player Stats Debug]");
-      console.log("═══════════════════════════════════════════");
-      console.log("Event ID:", event.id);
-      console.log("Event Status:", event.status);
-      console.log("Event drawn_numbers:", event.drawn_numbers);
-      console.log("───────────────────────────────────────────");
-      console.log("🎯 AGGREGATED STATS:");
-      console.log("  • Total Correct:", totalCorrect);
-      console.log("  • Total Answered:", totalAnswered);
-      console.log("  • Drawn In Game:", drawnInGame, "← SOURCE OF TRUTH (event-level)");
-      console.log("───────────────────────────────────────────");
-      console.log("🎫 PER-TICKET BREAKDOWN:");
-      results.forEach((r, idx) => {
-        console.log(`  Ticket ${idx + 1} (${r.ticket_serial}):`);
-        console.log(`    ✓ Correct: ${r.correct}`);
-        console.log(`    📝 Answered: ${r.answered}`);
-        console.log(`    🎲 Drawn on ticket: ${r.drawnOnTicket}`);
-        console.log(`    📊 Accuracy: ${r.accuracy}%`);
-      });
-      console.log("═══════════════════════════════════════════");
-      console.log("🎨 UI WILL DISPLAY:");
-      console.log(`  Header: "Ukupno točno: ${totalCorrect} / ${drawnInGame}"`);
-      console.log(`  Accuracy: "${Math.round((totalCorrect / drawnInGame) * 100)}%"`);
-      console.log("═══════════════════════════════════════════");
 
       setStats({
         ticket_stats: results,
@@ -305,7 +245,6 @@ export default function PlayerScreen() {
 
   const fetchWinnerSerial = async (ticketId: string) => {
     try {
-      console.log("[Player] 🔍 Fetching winner serial for ticket:", ticketId);
       const { data, error } = await supabase
         .from('tickets')
         .select('serial_number')
@@ -313,19 +252,15 @@ export default function PlayerScreen() {
         .single();
       
       if (error) throw error;
-      
-      const serial = data?.serial_number;
-      setWinnerSerial(serial || null);
-      console.log("[Player] ✅ Winner serial loaded:", serial);
+      setWinnerSerial(data?.serial_number || null);
     } catch (error) {
-      console.error("[Player] ❌ Failed to load winner serial:", error);
+      console.error("[Player] Failed to load winner serial:", error);
       setWinnerSerial(null);
     }
   };
 
   useEffect(() => {
     if (event?.winner_ticket_id) {
-      console.log("[Player] 🏆 Winner detected, fetching serial...");
       fetchWinnerSerial(event.winner_ticket_id);
     } else {
       setWinnerSerial(null);
@@ -384,17 +319,13 @@ export default function PlayerScreen() {
         return;
       }
 
-      if (!event) {
-        const eventData = await eventService.getEvent(ticketData.event_id);
-        setEvent(eventData);
-        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-        
-        const sessionData = await answerService.getOrCreateSession(eventData.id);
-        setSession(sessionData);
-        
-        if (eventData.current_question_number) {
-          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
-        }
+      if (!event && eventId && ticketData.event_id !== eventId) {
+        toast({
+          title: "Error",
+          description: "This ticket does not belong to this event.",
+          variant: "destructive"
+        });
+        return;
       }
 
       const newTickets = [...tickets, ticketData];
@@ -403,9 +334,6 @@ export default function PlayerScreen() {
       if (!ticket) {
         setTicket(ticketData);
       }
-
-      const serials = newTickets.map(t => t.serial_number);
-      localStorage.setItem("ticket_serials", JSON.stringify(serials));
 
       setSerialInput("");
       
@@ -425,13 +353,6 @@ export default function PlayerScreen() {
   const handleClearTickets = () => {
     setTickets([]);
     setTicket(null);
-    setEvent(null);
-    setSession(null);
-    setStats(null);
-    setDetailedResults(new Map());
-    localStorage.removeItem("ticket_serials");
-    localStorage.removeItem("ticket_serial");
-    localStorage.removeItem("event_id");
     window.location.reload();
   };
 
@@ -447,9 +368,6 @@ export default function PlayerScreen() {
     if (ticket?.id === ticketId) {
       setTicket(newTickets[0]);
     }
-
-    const serials = newTickets.map(t => t.serial_number);
-    localStorage.setItem("ticket_serials", JSON.stringify(serials));
 
     toast({
       title: "Ticket Removed",
@@ -486,29 +404,18 @@ export default function PlayerScreen() {
   const handleSubmitAnswer = async (answerValue: boolean) => {
     if (!session || !currentQuestion || hasAnswered || !event) return;
 
-    console.log("[Player] Submitting answer:", {
-      sessionId: session.id,
-      eventId: event.id,
-      questionNumber: currentQuestion.question_number,
-      answer: answerValue ? "DA" : "NE",
-      trackedTickets: tickets.map(t => ({ id: t.id, serial: t.serial_number }))
-    });
+    console.log("[Player] Submitting answer:", answerValue ? "DA" : "NE");
 
     setAnswer(answerValue);
 
     try {
-      // Calculate correctness locally using normalization
-      // NOTE: Service now recalculates this securely, but we keep local for UI feedback if needed
-      // Actually, we should just let service do it.
-      
-      // CRITICAL: Submit answer for ALL tracked tickets
       for (const ticket of tickets) {
         await answerService.submitAnswer(
           session.id,
           event.id,
           currentQuestion.question_number,
-          answerValue, // Pass boolean directly
-          ticket.serial_number // Pass exact ticket identifier
+          answerValue,
+          ticket.serial_number
         );
       }
       
@@ -537,8 +444,6 @@ export default function PlayerScreen() {
       .sort((a, b) => a - b);
 
     const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
-    
-    // CRITICAL: Only show stats if event is finished
     const ticketStats = event?.status === "finished" 
       ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
       : null;
@@ -590,7 +495,6 @@ export default function PlayerScreen() {
             <div className="text-sm font-semibold text-gray-600">
               {drawnCount} / 15 izvučeno
             </div>
-            {/* CRITICAL: Only show stats when game is finished */}
             {event?.status === "finished" && ticketStats && (
               <>
                 <div className="text-center mb-2 space-y-1">
@@ -633,7 +537,6 @@ export default function PlayerScreen() {
             )}
           </div>
 
-          {/* CRITICAL: Detailed Results - Only when finished and expanded */}
           {isExpanded && details && event?.status === "finished" && (
             <div className="mt-4 space-y-2 border-t pt-4">
               <h4 className="font-bold text-sm text-gray-700 mb-3">Detalji po pitanjima:</h4>
@@ -686,15 +589,28 @@ export default function PlayerScreen() {
     );
   };
 
-  const getFinalMessage = () => {
-    if (!stats || stats.ticket_stats.length === 0) return "";
-    
-    const bestScore = Math.max(...stats.ticket_stats.map(ts => ts.correct));
-    
-    if (bestScore === 15) return "🎉 Čestitamo! Sve točno!";
-    if (bestScore >= 13) return "🌟 Odličan rezultat!";
-    return "👍 Hvala na sudjelovanju!";
-  };
+  // No eventId
+  if (!eventId) {
+    return (
+      <>
+        <SEO title="Player - Pitalica Skitalica" />
+        <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="pt-6 text-center">
+              <div className="text-6xl mb-4">⚠️</div>
+              <h1 className="text-2xl font-bold mb-2">Missing Event ID</h1>
+              <p className="text-gray-600 mb-4">
+                Please provide an event ID in the URL:
+              </p>
+              <code className="bg-gray-100 px-3 py-2 rounded text-sm">
+                /player?eventId=YOUR_EVENT_ID
+              </code>
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    );
+  }
 
   // Join screen
   if (tickets.length === 0) {
@@ -740,7 +656,6 @@ export default function PlayerScreen() {
             <p className="text-white/80">Odgovori na pitanja i osvoji nagradu!</p>
           </div>
 
-          {/* WINNER BANNER */}
           {event?.winner_ticket_id && (
             <Card className="mb-4 border-4 border-yellow-500 bg-yellow-50">
               <CardContent className="pt-6">
@@ -759,7 +674,6 @@ export default function PlayerScreen() {
             </Card>
           )}
 
-          {/* Header */}
           <div className="mb-4 space-y-2">
             <div className="flex gap-2">
               <Input
@@ -788,7 +702,6 @@ export default function PlayerScreen() {
             </Button>
           </div>
 
-          {/* CRITICAL: Final Statistics - ONLY when event is finished */}
           {event?.status === "finished" && stats && (
             <Card className="bg-white/95 backdrop-blur-sm mb-4">
               <CardContent className="p-6 text-center space-y-3">
@@ -796,12 +709,10 @@ export default function PlayerScreen() {
                   Hvala na sudjelovanju!
                 </h2>
                 
-                {/* ✅ FIX: Use drawn_in_game as denominator (SOURCE OF TRUTH) */}
                 <div className="text-2xl font-bold text-gray-700">
                   Ukupno točno: {stats.total_correct} / {stats.drawn_in_game}
                 </div>
                 
-                {/* ✅ FIX: Accuracy based on drawnInGame, not answered */}
                 {stats.drawn_in_game > 0 && (
                   <div className="text-lg text-gray-600">
                     Točnost: {Math.round((stats.total_correct / stats.drawn_in_game) * 100)}%
@@ -815,12 +726,10 @@ export default function PlayerScreen() {
             </Card>
           )}
 
-          {/* Tickets Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             {tickets.map(ticketData => renderTicketGrid(ticketData))}
           </div>
 
-          {/* Current Question - ONLY during active game */}
           {event?.status === "active" && currentQuestion && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 space-y-4">
@@ -879,7 +788,6 @@ export default function PlayerScreen() {
             </Card>
           )}
 
-          {/* Waiting state */}
           {event?.status === "active" && !currentQuestion && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 text-center">
@@ -890,7 +798,6 @@ export default function PlayerScreen() {
             </Card>
           )}
 
-          {/* Event not active */}
           {event?.status !== "active" && event?.status !== "finished" && (
             <Card className="bg-white/95 backdrop-blur-sm">
               <CardContent className="p-6 text-center">
