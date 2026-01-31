@@ -337,17 +337,6 @@ export default function PlayerPage() {
     const focusedTicket = tickets.find(t => t.id === focusedTicketId);
     if (!focusedTicket) return;
 
-    // Check if this question is on the focused ticket
-    const hasQuestion = focusedTicket.ticket_questions.some(tq => tq.question_number === currentDrawnNumber);
-    if (!hasQuestion) {
-      toast({
-        title: "Pitanje nije na tvom tiketu",
-        description: `Broj ${currentDrawnNumber} nije na tvom tiketu.`,
-        variant: "destructive"
-      });
-      return;
-    }
-
     // Check if already answered
     const existingAnswer = answers.find(a => a.ticket_id === focusedTicket.serial_number && a.question_number === currentDrawnNumber);
     if (existingAnswer) {
@@ -599,30 +588,55 @@ export default function PlayerPage() {
               </CardHeader>
               <CardContent>
                 {(() => {
-                  const hasQuestion = focusedTicket.ticket_questions.some(tq => tq.question_number === currentDrawnNumber);
-                  const existingAnswer = answers.find(a => a.ticket_id === focusedTicketId && a.question_number === currentDrawnNumber);
+                  // Check if already answered for focused ticket
+                  const existingAnswer = answers.find(
+                    (a) => a.ticket_id === focusedTicket?.serial_number && a.question_number === currentDrawnNumber
+                  );
 
-                  if (!hasQuestion) {
-                    return (
-                      <div className="text-center py-8 text-muted-foreground">
-                        <XCircle className="h-12 w-12 mx-auto mb-2" />
-                        <p>Ovo pitanje nije na tvom tiketu</p>
-                      </div>
-                    );
+                  // Check if question is on ANY of player's tickets (for info display only)
+                  const isOnAnyTicket = tickets.some(ticket =>
+                    ticket.ticket_questions.some(tq => Number(tq.question_number) === Number(currentDrawnNumber))
+                  );
+
+                  // Debug log in development
+                  if (process.env.NODE_ENV === 'development' && tickets.length > 0) {
+                    console.log('[Player Ticket Debug]', {
+                      currentDrawnNumber,
+                      questionNumberType: typeof currentDrawnNumber,
+                      sampleTicket: {
+                        serial: tickets[0].serial_number,
+                        questionNumbers: tickets[0].ticket_questions.map(tq => ({
+                          value: tq.question_number,
+                          type: typeof tq.question_number
+                        }))
+                      },
+                      isOnAnyTicket
+                    });
                   }
 
                   if (existingAnswer) {
-                    const isCorrect = normalizeAnswer(existingAnswer.answer) === normalizeAnswer(currentQuestion.correct_answer);
+                    const isCorrect =
+                      normalizeAnswer(existingAnswer.answer) ===
+                      normalizeAnswer(currentQuestion.correct_answer);
                     return (
-                      <div className="text-center py-8">
-                        {isCorrect ? (
-                          <CheckCircle2 className="h-16 w-16 mx-auto mb-4 text-green-500" />
-                        ) : (
-                          <XCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
-                        )}
-                        <p className="text-xl font-bold">{isCorrect ? "Točan odgovor!" : "Netočan odgovor"}</p>
-                        <p className="text-muted-foreground mt-2">
-                          Tvoj odgovor: {normalizeAnswer(existingAnswer.answer) ? "DA" : "NE"}
+                      <div className="text-center py-8 space-y-4">
+                        <div
+                          className={`text-6xl ${
+                            isCorrect ? "text-green-500" : "text-red-500"
+                          }`}
+                        >
+                          {isCorrect ? "✅" : "❌"}
+                        </div>
+                        <p className="text-xl font-bold">
+                          {isCorrect ? "Točan odgovor!" : "Netočan odgovor"}
+                        </p>
+                        <p className="text-muted-foreground">
+                          Tvoj odgovor:{" "}
+                          {existingAnswer.answer ? "DA" : "NE"}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Točan odgovor:{" "}
+                          {currentQuestion.correct_answer ? "DA" : "NE"}
                         </p>
                       </div>
                     );
@@ -630,31 +644,41 @@ export default function PlayerPage() {
 
                   if (timeLeft <= 0) {
                     return (
-                      <div className="text-center py-8 text-muted-foreground">
-                        <Clock className="h-12 w-12 mx-auto mb-2" />
-                        <p>Vrijeme je isteklo</p>
+                      <div className="text-center py-8 space-y-4">
+                        <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
+                        <p className="text-xl font-semibold text-muted-foreground">
+                          Vrijeme za odgovor je isteklo
+                        </p>
                       </div>
                     );
                   }
 
                   return (
-                    <div className="grid grid-cols-2 gap-4">
-                      <Button
-                        onClick={() => handleAnswer(true)}
-                        disabled={submitting}
-                        size="lg"
-                        className="h-24 text-2xl font-bold bg-green-600 hover:bg-green-700"
-                      >
-                        {submitting ? <Loader2 className="animate-spin" /> : "DA"}
-                      </Button>
-                      <Button
-                        onClick={() => handleAnswer(false)}
-                        disabled={submitting}
-                        size="lg"
-                        className="h-24 text-2xl font-bold bg-red-600 hover:bg-red-700"
-                      >
-                        {submitting ? <Loader2 className="animate-spin" /> : "NE"}
-                      </Button>
+                    <div className="space-y-4">
+                      {!isOnAnyTicket && (
+                        <Badge variant="secondary" className="mb-4">
+                          💡 Ovo pitanje nije na tvom tiketu
+                        </Badge>
+                      )}
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <Button
+                          size="lg"
+                          className="h-24 text-2xl font-bold"
+                          onClick={() => handleAnswer(true)}
+                          disabled={submitting}
+                        >
+                          {submitting ? "..." : "DA"}
+                        </Button>
+                        <Button
+                          size="lg"
+                          className="h-24 text-2xl font-bold"
+                          onClick={() => handleAnswer(false)}
+                          disabled={submitting}
+                        >
+                          {submitting ? "..." : "NE"}
+                        </Button>
+                      </div>
                     </div>
                   );
                 })()}
