@@ -386,9 +386,91 @@ export default function PlayerPage() {
 
   // Calculate stats for focused ticket
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
-  const focusedStats = focusedTicket && activeEvent
-    ? calculateSingleTicketStats(focusedTicket, answers, activeEvent.drawn_numbers || [])
-    : { totalQuestions: 15, drawnInGame: 0, drawnOnTicket: 0, answered: 0, correct: 0, accuracy: 0 };
+  
+  // GLOBAL STATISTICS (from event data)
+  const globalStats = useMemo(() => {
+    if (!activeEvent) {
+      return { drawnCount: 0, totalQuestions: 90, answeredCount: 0, accuracy: 0 };
+    }
+    
+    const drawnNumbers = activeEvent.drawn_numbers || [];
+    const drawnCount = drawnNumbers.length;
+    const totalQuestions = 90;
+    
+    // Get all player answers (across all tickets)
+    const playerAnswers = answers.filter(a => 
+      tickets.some(t => t.serial_number === a.ticket_id)
+    );
+    
+    // Count unique answered question numbers (that are in drawn_numbers)
+    const answeredQuestionNumbers = new Set(
+      playerAnswers
+        .map(a => Number(a.question_number))
+        .filter(qNum => drawnNumbers.includes(qNum))
+    );
+    const answeredCount = answeredQuestionNumbers.size;
+    
+    // Count correct answers
+    let correctCount = 0;
+    if (currentQuestion && currentDrawnNumber !== null) {
+      const correctAnswer = normalizeAnswer(currentQuestion.correct_answer);
+      
+      // Count unique question numbers that were answered correctly
+      const correctQuestionNumbers = new Set(
+        playerAnswers
+          .filter(a => {
+            const qNum = Number(a.question_number);
+            if (qNum === Number(currentDrawnNumber)) {
+              return normalizeAnswer(a.answer) === correctAnswer;
+            }
+            return false;
+          })
+          .map(a => Number(a.question_number))
+      );
+      correctCount = correctQuestionNumbers.size;
+    }
+    
+    const accuracy = answeredCount > 0 
+      ? Math.min(100, Math.round((correctCount / answeredCount) * 100))
+      : 0;
+    
+    return { drawnCount, totalQuestions, answeredCount, accuracy };
+  }, [activeEvent, answers, tickets, currentQuestion, currentDrawnNumber]);
+  
+  // PER-TICKET STATISTICS
+  const ticketStats = useMemo(() => {
+    if (!focusedTicket || !activeEvent) {
+      return { drawnOnTicket: 0, answeredOnTicket: 0, correctOnTicket: 0, ticketAccuracy: 0 };
+    }
+    
+    const drawnNumbers = activeEvent.drawn_numbers || [];
+    const ticketNumbers = focusedTicket.ticket_questions.map(tq => Number(tq.question_number));
+    
+    // Count drawn numbers on this ticket
+    const drawnOnTicket = ticketNumbers.filter(n => drawnNumbers.includes(n)).length;
+    
+    // Get answers for this ticket
+    const ticketAnswers = answers.filter(a => a.ticket_id === focusedTicket.serial_number);
+    const answeredOnTicket = ticketAnswers.length;
+    
+    // Count correct answers for this ticket
+    let correctOnTicket = 0;
+    if (currentQuestion && currentDrawnNumber !== null) {
+      const correctAnswer = normalizeAnswer(currentQuestion.correct_answer);
+      correctOnTicket = ticketAnswers.filter(a => {
+        if (Number(a.question_number) === Number(currentDrawnNumber)) {
+          return normalizeAnswer(a.answer) === correctAnswer;
+        }
+        return false;
+      }).length;
+    }
+    
+    const ticketAccuracy = answeredOnTicket > 0
+      ? Math.min(100, Math.round((correctOnTicket / answeredOnTicket) * 100))
+      : 0;
+    
+    return { drawnOnTicket, answeredOnTicket, correctOnTicket, ticketAccuracy };
+  }, [focusedTicket, activeEvent, answers, currentQuestion, currentDrawnNumber]);
 
   const canAddTicket = activeEvent && tickets.length < 4;
 
@@ -532,15 +614,15 @@ Correct on Ticket: ${answers.filter(a => {
                 <div className="grid grid-cols-3 gap-2 text-center pt-2">
                   <div>
                     <p className="text-xs text-muted-foreground">Izvučeno</p>
-                    <p className="text-lg sm:text-xl font-bold">{focusedStats.drawnOnTicket}/{focusedStats.totalQuestions}</p>
+                    <p className="text-lg sm:text-xl font-bold">{globalStats.drawnCount}/{globalStats.totalQuestions}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg sm:text-xl font-bold">{focusedStats.answered}/{focusedStats.drawnOnTicket}</p>
+                    <p className="text-lg sm:text-xl font-bold">{globalStats.answeredCount}/{globalStats.drawnCount}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Točnost</p>
-                    <p className="text-lg sm:text-xl font-bold">{focusedStats.accuracy}%</p>
+                    <p className="text-lg sm:text-xl font-bold">{globalStats.accuracy}%</p>
                   </div>
                 </div>
               </CardHeader>
@@ -562,9 +644,33 @@ Correct on Ticket: ${answers.filter(a => {
                 >
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
-                    {stats && (
+                    {activeEvent && (
                       <div className="text-xs text-muted-foreground">
-                        {stats.drawnOnTicket}/{stats.totalQuestions} izvučeno • {stats.accuracy}% točno
+                        {(() => {
+                          const drawnNumbers = activeEvent.drawn_numbers || [];
+                          const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
+                          const drawnOnThisTicket = ticketNumbers.filter(n => drawnNumbers.includes(n)).length;
+                          
+                          const thisTicketAnswers = answers.filter(a => a.ticket_id === ticket.serial_number);
+                          const answeredOnThisTicket = thisTicketAnswers.length;
+                          
+                          let correctOnThisTicket = 0;
+                          if (currentQuestion && currentDrawnNumber !== null) {
+                            const correctAnswer = normalizeAnswer(currentQuestion.correct_answer);
+                            correctOnThisTicket = thisTicketAnswers.filter(a => {
+                              if (Number(a.question_number) === Number(currentDrawnNumber)) {
+                                return normalizeAnswer(a.answer) === correctAnswer;
+                              }
+                              return false;
+                            }).length;
+                          }
+                          
+                          const thisTicketAccuracy = answeredOnThisTicket > 0
+                            ? Math.min(100, Math.round((correctOnThisTicket / answeredOnThisTicket) * 100))
+                            : 0;
+                          
+                          return `${drawnOnThisTicket}/15 izvučeno • ${thisTicketAccuracy}% točno`;
+                        })()}
                       </div>
                     )}
                   </CardHeader>
