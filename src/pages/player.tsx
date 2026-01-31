@@ -83,7 +83,6 @@ export default function PlayerPage() {
           const ticket = await ticketService.getTicketBySerial(ticketSerial);
           if (ticket) {
              eventId = ticket.event_id;
-             // Also load other stored tickets for this event
              const storedTickets = getStoredFreeTickets(eventId);
              ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
           }
@@ -92,10 +91,6 @@ export default function PlayerPage() {
         else if (eventIdParam) {
           eventId = eventIdParam;
           ticketsToLoad = getStoredFreeTickets(eventId);
-        } else {
-             // Fallback: check localStorage for any tickets? 
-             // For now, if no params, maybe just try to load generic stored ones?
-             // Let's stick to current logic: if no tickets to load, we stop.
         }
 
         if (ticketsToLoad.length === 0) {
@@ -108,7 +103,7 @@ export default function PlayerPage() {
         const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
         setTickets(loadedTickets);
 
-        // Set focused ticket (newly created or first one)
+        // Set focused ticket
         if (ticketSerial) {
           const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
           setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
@@ -119,52 +114,10 @@ export default function PlayerPage() {
         // Load event
         if (eventId || loadedTickets[0]?.event_id) {
           const currentEventId = eventId || loadedTickets[0].event_id;
-          const event = await eventService.getEventById(currentEventId);
-          setActiveEvent(event);
-          setCurrentDrawnNumber(event.current_drawn_number);
+          await refetchEventData(currentEventId, loadedTickets);
           
-          // Handle winner serial
-          if (event.winner_ticket_id) {
-             const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
-             setWinnerSerial(winnerTicket?.serial_number || null);
-          } else {
-             setWinnerSerial(null);
-          }
-
-          // Create/Get session
-          const session = await answerService.getOrCreateSession(currentEventId);
-          setSessionId(session.id);
-
-          // Load current question if exists
-          if (event.current_drawn_number) {
-            const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
-            if (questionData && questionData.questions) {
-              setCurrentQuestion({
-                 id: questionData.question_id,
-                 text: questionData.questions.text,
-                 correct_answer: questionData.questions.correct_answer
-              });
-              const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
-              const now = Date.now();
-              const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
-              setTimeLeft(remaining);
-            }
-          }
-
-          // Load answers for all tickets
-          const allAnswers: Answer[] = [];
-          for (const ticket of loadedTickets) {
-            // Use serial_number if getAnswersForTicket expects serial (as per my update plan)
-            // But wait, my update to answerService.getAnswersForTicket took ticketId but I suspected it should take serial.
-            // Let's check submitAnswer usage. It uses ticketSerial.
-            // So we should pass ticket.serial_number to getAnswersForTicket.
-            const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
-            allAnswers.push(...ticketAnswers);
-          }
-          setAnswers(allAnswers);
-
-          // Subscribe to real-time updates
-          subscribeToEvent(event.id);
+          // Subscribe to real-time updates with reconnection
+          setupRealtimeSubscription(currentEventId);
         }
       } catch (error) {
         console.error("[Player] Failed to load tickets:", error);
@@ -183,48 +136,190 @@ export default function PlayerPage() {
     }
   }, [router.isReady, router.query.ticket, router.query.event]);
 
-  // Real-time subscription
-  const subscribeToEvent = (eventId: string) => {
-    const channel = supabase
-      .channel(`event_${eventId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "events", filter: `id=eq.${eventId}` }, async (payload) => {
-        const updatedEvent = payload.new as Event;
-        setActiveEvent(updatedEvent);
-        setCurrentDrawnNumber(updatedEvent.current_drawn_number);
-        
-        // Update winner
-        if (updatedEvent.winner_ticket_id) {
-            ticketService.getTicket(updatedEvent.winner_ticket_id).then(t => {
+  // Refetch event data (used for initial load + resync)
+  const refetchEventData = async (eventId: string, loadedTickets: TicketData[]) => {
+    try {
+      const event = await eventService.getEventById(eventId);
+      // CRITICAL: Create NEW object to force React re-render
+      setActiveEvent({ ...event });
+      setCurrentDrawnNumber(event.current_drawn_number);
+      
+      // Handle winner serial
+      if (event.winner_ticket_id) {
+        const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
+        setWinnerSerial(winnerTicket?.serial_number || null);
+      } else {
+        setWinnerSerial(null);
+      }
+
+      // Create/Get session
+      const session = await answerService.getOrCreateSession(eventId);
+      setSessionId(session.id);
+
+      // Load current question if exists
+      if (event.current_drawn_number) {
+        const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
+        if (questionData && questionData.questions) {
+          setCurrentQuestion({
+            id: questionData.question_id,
+            text: questionData.questions.text,
+            correct_answer: questionData.questions.correct_answer
+          });
+          const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
+          const now = Date.now();
+          const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+          setTimeLeft(remaining);
+        }
+      }
+
+      // Load answers for all tickets
+      const allAnswers: Answer[] = [];
+      for (const ticket of loadedTickets) {
+        const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
+        allAnswers.push(...ticketAnswers);
+      }
+      setAnswers([...allAnswers]); // Force new array
+      
+      console.log("[Player] ✅ Event data refetched:", event.current_drawn_number, "drawn:", event.drawn_numbers?.length);
+    } catch (error) {
+      console.error("[Player] Failed to refetch event data:", error);
+    }
+  };
+
+  // Setup realtime subscription with reconnection logic
+  const setupRealtimeSubscription = (eventId: string) => {
+    let reconnectAttempts = 0;
+    const maxReconnects = 10;
+    let channel: any = null;
+
+    const subscribe = () => {
+      console.log("[Player] 🔌 Subscribing to event:", eventId);
+      
+      channel = supabase
+        .channel(`player_event_${eventId}_${Date.now()}`) // Unique channel per mount
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "events",
+            filter: `id=eq.${eventId}`
+          },
+          async (payload) => {
+            console.log("[Player] 🔔 Realtime update received:", payload.eventType);
+            const updatedEvent = payload.new as Event;
+            
+            // CRITICAL: Force React re-render with new objects
+            setActiveEvent({ ...updatedEvent });
+            setCurrentDrawnNumber(updatedEvent.current_drawn_number);
+            
+            // Update winner
+            if (updatedEvent.winner_ticket_id) {
+              ticketService.getTicket(updatedEvent.winner_ticket_id).then(t => {
                 setWinnerSerial(t?.serial_number || null);
-            });
-        } else {
-            setWinnerSerial(null);
-        }
+              });
+            } else {
+              setWinnerSerial(null);
+            }
 
-        if (updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
-          const questionData = await eventService.getQuestionForNumber(eventId, updatedEvent.current_drawn_number);
-          if (questionData && questionData.questions) {
-            setCurrentQuestion({
-                id: questionData.question_id,
-                text: questionData.questions.text,
-                correct_answer: questionData.questions.correct_answer
-            });
-            const expiresAt = new Date(updatedEvent.question_open_until).getTime();
-            const now = Date.now();
-            const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
-            setTimeLeft(remaining);
+            // Load new question
+            if (updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
+              const questionData = await eventService.getQuestionForNumber(eventId, updatedEvent.current_drawn_number);
+              if (questionData && questionData.questions) {
+                setCurrentQuestion({
+                  id: questionData.question_id,
+                  text: questionData.questions.text,
+                  correct_answer: questionData.questions.correct_answer
+                });
+                const expiresAt = new Date(updatedEvent.question_open_until).getTime();
+                const now = Date.now();
+                const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+                setTimeLeft(remaining);
+                console.log("[Player] ✅ Question updated:", updatedEvent.current_drawn_number, "time:", remaining);
+              }
+            } else {
+              setCurrentQuestion(null);
+              setTimeLeft(0);
+            }
           }
-        } else {
-          setCurrentQuestion(null);
-          setTimeLeft(0);
-        }
-      })
-      .subscribe();
+        )
+        .subscribe((status) => {
+          console.log("[Player] Subscription status:", status);
+          
+          if (status === "CHANNEL_ERROR" && reconnectAttempts < maxReconnects) {
+            reconnectAttempts++;
+            console.log(`[Player] ⚠️ Channel error, reconnecting... (attempt ${reconnectAttempts}/${maxReconnects})`);
+            setTimeout(() => {
+              supabase.removeChannel(channel);
+              subscribe();
+            }, 1500);
+          }
+        });
+    };
 
+    subscribe();
+
+    // Cleanup function
     return () => {
-      supabase.removeChannel(channel);
+      console.log("[Player] 🔌 Unsubscribing from event:", eventId);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   };
+
+  // Fallback polling for active events (1s interval)
+  useEffect(() => {
+    if (!activeEvent || activeEvent.status !== "active" || !tickets.length) return;
+
+    console.log("[Player] 🔄 Starting fallback polling...");
+    const pollInterval = setInterval(async () => {
+      try {
+        const event = await eventService.getEventById(activeEvent.id);
+        
+        // Only update if something actually changed
+        if (
+          event.current_drawn_number !== currentDrawnNumber ||
+          event.drawn_numbers?.length !== activeEvent.drawn_numbers?.length
+        ) {
+          console.log("[Player] 🔄 Fallback polling detected change, updating...");
+          await refetchEventData(activeEvent.id, tickets);
+        }
+      } catch (error) {
+        console.error("[Player] Polling error:", error);
+      }
+    }, 1000);
+
+    return () => {
+      console.log("[Player] 🔄 Stopping fallback polling");
+      clearInterval(pollInterval);
+    };
+  }, [activeEvent?.id, activeEvent?.status, currentDrawnNumber, tickets.length]);
+
+  // Resync on window focus (handles tab switching)
+  useEffect(() => {
+    if (!activeEvent || !tickets.length) return;
+
+    const handleFocus = () => {
+      console.log("[Player] 🔍 Window focused, resyncing...");
+      refetchEventData(activeEvent.id, tickets);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        console.log("[Player] 👁️ Tab visible, resyncing...");
+        refetchEventData(activeEvent.id, tickets);
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeEvent?.id, tickets]);
 
   // Countdown timer
   useEffect(() => {
