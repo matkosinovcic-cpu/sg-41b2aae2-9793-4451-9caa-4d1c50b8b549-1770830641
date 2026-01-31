@@ -7,23 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Trophy, X, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { RealtimeChannel } from "@supabase/supabase-js";
-
-// Helper to normalize answers
-function normalizeAnswer(value: any): boolean | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1;
-  if (typeof value === "string") {
-    const v = value.trim().toUpperCase();
-    if (["DA", "YES", "Y", "TRUE", "1"].includes(v)) return true;
-    if (["NE", "NO", "N", "FALSE", "0"].includes(v)) return false;
-  }
-  return null;
-}
 
 interface TicketData {
   id: string;
@@ -67,6 +54,9 @@ export default function PlayerScreen() {
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
   const lastUpdatedAtRef = useRef<string | null>(null);
+  const realtimeConnectedRef = useRef<boolean>(false);
+  const lastRealtimeMessageRef = useRef<number>(Date.now());
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 🚀 RESOLVE ACTIVE EVENT
   const resolveActiveEvent = async (): Promise<Event | null> => {
@@ -116,7 +106,7 @@ export default function PlayerScreen() {
     }
   };
 
-  // 🔄 SUBSCRIBE TO EVENT UPDATES
+  // 🔄 SUBSCRIBE TO EVENT UPDATES (REALTIME PRIMARY)
   const subscribeToEventUpdates = (eventId: string) => {
     // Unsubscribe from old channel if exists
     if (eventChannelRef.current) {
@@ -135,6 +125,9 @@ export default function PlayerScreen() {
         table: 'events',
         filter: `id=eq.${eventId}`
       }, async (payload) => {
+        console.log("[Player] ⚡ Realtime UPDATE received");
+        lastRealtimeMessageRef.current = Date.now();
+        
         const newEvent = payload.new as Event;
         
         // 🎯 COMPARE GUARD - Prevent unnecessary updates
@@ -162,7 +155,19 @@ export default function PlayerScreen() {
           loadDetailedResults();
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("[Player] 📡 Event subscription status:", status);
+        realtimeConnectedRef.current = status === 'SUBSCRIBED';
+        
+        if (status === 'SUBSCRIBED') {
+          // Stop polling when realtime connected
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+            console.log("[Player] ✅ Realtime connected, polling stopped");
+          }
+        }
+      });
     
     eventChannelRef.current = channel;
   };
@@ -186,7 +191,11 @@ export default function PlayerScreen() {
           }
           
           console.log("[Player] 🆕 NEW ACTIVE EVENT detected:", newActiveEvent.id.slice(0, 8));
-          await handleNewActiveEvent(newActiveEvent);
+          
+          // Delay to avoid switching during transient states
+          setTimeout(async () => {
+            await handleNewActiveEvent(newActiveEvent);
+          }, 1000);
         }
       })
       .subscribe();
@@ -202,8 +211,6 @@ export default function PlayerScreen() {
     setDrawnNumbers(new Set());
     setCurrentQuestion(null);
     setTimeRemaining(0);
-    // Note: We keep tickets if they belong to this event (unlikely if it's new)
-    // but typically player would need to join new event
     
     // 2. Clear cache
     localStorage.removeItem('eventId');
@@ -216,12 +223,83 @@ export default function PlayerScreen() {
     subscribeToEventUpdates(newEvent.id);
   };
 
+  // 🔄 POLLING FALLBACK (ONLY when realtime fails)
+  useEffect(() => {
+    if (!event || !session) return;
+    
+    const startPollingFallback = () => {
+      if (pollingIntervalRef.current) return;
+      
+      console.log("[Player] ⚠️ Starting polling fallback (realtime inactive)");
+      
+      pollingIntervalRef.current = setInterval(async () => {
+        const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
+        
+        if (timeSinceLastMessage < 5000) {
+          return;
+        }
+        
+        console.log("[Player-POLL] 🔄 Polling event state...");
+        
+        try {
+          const { data, error } = await supabase
+            .from('events')
+            .select('current_question_number, drawn_numbers, updated_at, status, winner_ticket_id')
+            .eq('id', event.id)
+            .single();
+          
+          if (error) throw error;
+          
+          if (data.updated_at === lastUpdatedAtRef.current) {
+            return;
+          }
+          
+          console.log("[Player-POLL] ✅ New data detected, updating...");
+          
+          lastUpdatedAtRef.current = data.updated_at;
+          setDrawnNumbers(new Set(data.drawn_numbers || []));
+          
+          if (data.current_question_number && 
+              data.current_question_number !== currentQuestion?.question_number) {
+            await loadCurrentQuestion(event.id, data.current_question_number);
+          }
+          
+          setEvent(prev => prev ? { ...prev, ...data } as unknown as Event : prev);
+          
+          if (data.status === "finished" && tickets.length > 0) {
+            loadStats();
+            loadDetailedResults();
+          }
+          
+        } catch (error) {
+          console.error("[Player-POLL] ❌ Polling failed:", error);
+        }
+      }, 5000);
+    };
+    
+    const healthCheckInterval = setInterval(() => {
+      const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
+      
+      if (!realtimeConnectedRef.current || timeSinceLastMessage > 10000) {
+        console.log("[Player] ⚠️ Realtime inactive, starting fallback polling");
+        startPollingFallback();
+      }
+    }, 10000);
+    
+    return () => {
+      clearInterval(healthCheckInterval);
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [event?.id, session?.id, currentQuestion]);
+
   // 🚀 INITIAL LOAD
   useEffect(() => {
     const initializePlayer = async () => {
       console.log("[Player] 🚀 Initializing Player screen...");
       
-      // 1. Determine event ID (URL param OR active event)
       let targetEventId = urlEventId;
       
       if (!targetEventId) {
@@ -238,13 +316,8 @@ export default function PlayerScreen() {
         }
       }
       
-      // 2. Load event data
       await loadEventData(targetEventId);
-      
-      // 3. Subscribe to event updates
       subscribeToEventUpdates(targetEventId);
-      
-      // 4. Subscribe to active event tracker
       subscribeToActiveEventTracker();
       
       setIsLoadingEvent(false);
@@ -256,6 +329,7 @@ export default function PlayerScreen() {
     return () => {
       if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
       if (activeEventTrackerRef.current) activeEventTrackerRef.current.unsubscribe();
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
   }, [urlEventId]);
 
@@ -514,179 +588,184 @@ export default function PlayerScreen() {
     );
   };
 
-  // 1. Loading State
   if (isLoadingEvent) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center text-white">
-        <div className="text-center">
-          <div className="text-4xl mb-4 animate-spin">⏳</div>
-          <p>Tražim aktivni event...</p>
+      <>
+        <SEO title="Player - Pitalica Skitalica" />
+        <div className="min-h-screen bg-black flex items-center justify-center text-white">
+          <div className="text-center">
+            <div className="text-4xl mb-4 animate-spin">⏳</div>
+            <p>Tražim aktivni event...</p>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
-  // 2. No Active Event
   if (noActiveEvent) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 to-indigo-900 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md bg-white/10 backdrop-blur border-white/20 text-white">
-          <CardContent className="pt-6 text-center">
-            <div className="text-6xl mb-4 animate-pulse">📡</div>
-            <h1 className="text-2xl font-bold mb-2">Čekam aktivni event</h1>
-            <p className="text-gray-300">
-              Igra još nije počela. Pričekajte da admin pokrene event.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+      <>
+        <SEO title="Player - Pitalica Skitalica" />
+        <div className="min-h-screen bg-gradient-to-br from-purple-900 to-indigo-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md bg-white/10 backdrop-blur border-white/20 text-white">
+            <CardContent className="pt-6 text-center">
+              <div className="text-6xl mb-4 animate-pulse">📡</div>
+              <h1 className="text-2xl font-bold mb-2">Čekam aktivni event</h1>
+              <p className="text-gray-300">
+                Igra još nije počela. Pričekajte da admin pokrene event.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </>
     );
   }
 
-  // 3. Join Screen (if no tickets)
   if (tickets.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md shadow-2xl">
-          <CardContent className="pt-8 pb-8 space-y-6">
-            <div className="text-center">
-              <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
-                {event?.name || "PITALICA SKITALICA"}
-              </h1>
-              <p className="text-gray-600 font-medium">Unesi broj ulaznice za igru</p>
-            </div>
-            <div className="space-y-4">
-              <Input
-                placeholder="npr. T1234-5678"
-                value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                className="text-lg h-12 text-center font-mono uppercase tracking-wider"
-              />
-              <Button onClick={handleAddTicket} className="w-full h-12 text-lg font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg transition-all hover:scale-[1.02]">
-                PRIDRUŽI SE IGRI 🚀
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <>
+        <SEO title="Player - Pitalica Skitalica" />
+        <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md shadow-2xl">
+            <CardContent className="pt-8 pb-8 space-y-6">
+              <div className="text-center">
+                <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
+                  {event?.name || "PITALICA SKITALICA"}
+                </h1>
+                <p className="text-gray-600 font-medium">Unesi broj ulaznice za igru</p>
+              </div>
+              <div className="space-y-4">
+                <Input
+                  placeholder="npr. T1234-5678"
+                  value={serialInput}
+                  onChange={(e) => setSerialInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
+                  className="text-lg h-12 text-center font-mono uppercase tracking-wider"
+                />
+                <Button onClick={handleAddTicket} className="w-full h-12 text-lg font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg transition-all hover:scale-[1.02]">
+                  PRIDRUŽI SE IGRI 🚀
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </>
     );
   }
 
-  // 4. Game Screen
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4 pb-20">
-      <div className="container mx-auto max-w-4xl space-y-4">
-        <div className="flex justify-between items-center text-white">
-          <h1 className="text-xl font-bold truncate">{event?.name}</h1>
-          <Badge variant="outline" className="text-white border-white/30 bg-white/10">
-            {tickets.length} ulaznica
-          </Badge>
-        </div>
-
-        {event?.winner_ticket_id && (
-          <Card className="border-4 border-yellow-500 bg-yellow-50 animate-pulse">
-            <CardContent className="pt-6 flex items-center justify-center gap-3">
-              <Trophy className="w-8 h-8 text-yellow-600" />
-              <div className="text-center">
-                <p className="text-xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
-                <p className="font-mono text-yellow-800 font-bold">{winnerSerial || "..."}</p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* INPUT CONTROLS */}
-        {event?.status !== "finished" && (
-          <div className="flex gap-2 bg-white/10 p-2 rounded-lg backdrop-blur-sm">
-            <Input
-              placeholder="Dodaj još ulaznica..."
-              value={serialInput}
-              onChange={(e) => setSerialInput(e.target.value)}
-              disabled={tickets.length >= 4}
-              className="bg-white/90 border-0 focus-visible:ring-2 ring-white/50"
-            />
-            <Button onClick={handleAddTicket} disabled={tickets.length >= 4} variant="secondary">
-              Dodaj
-            </Button>
-            <Button onClick={handleClearTickets} variant="destructive" size="icon">
-              <X className="w-4 h-4" />
-            </Button>
+    <>
+      <SEO title="Player - Pitalica Skitalica" />
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4 pb-20">
+        <div className="container mx-auto max-w-4xl space-y-4">
+          <div className="flex justify-between items-center text-white">
+            <h1 className="text-xl font-bold truncate">{event?.name}</h1>
+            <Badge variant="outline" className="text-white border-white/30 bg-white/10">
+              {tickets.length} ulaznica
+            </Badge>
           </div>
-        )}
 
-        {/* ACTIVE QUESTION CARD */}
-        {event?.status === "active" && currentQuestion ? (
-          <Card className="bg-white shadow-2xl border-0 overflow-hidden">
-            <div className="h-2 bg-gray-100 w-full">
-              <div 
-                className="h-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-100 ease-linear"
-                style={{ width: `${(timeRemaining / 10) * 100}%` }}
+          {event?.winner_ticket_id && (
+            <Card className="border-4 border-yellow-500 bg-yellow-50 animate-pulse">
+              <CardContent className="pt-6 flex items-center justify-center gap-3">
+                <Trophy className="w-8 h-8 text-yellow-600" />
+                <div className="text-center">
+                  <p className="text-xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
+                  <p className="font-mono text-yellow-800 font-bold">{winnerSerial || "..."}</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {event?.status !== "finished" && (
+            <div className="flex gap-2 bg-white/10 p-2 rounded-lg backdrop-blur-sm">
+              <Input
+                placeholder="Dodaj još ulaznica..."
+                value={serialInput}
+                onChange={(e) => setSerialInput(e.target.value)}
+                disabled={tickets.length >= 4}
+                className="bg-white/90 border-0 focus-visible:ring-2 ring-white/50"
               />
+              <Button onClick={handleAddTicket} disabled={tickets.length >= 4} variant="secondary">
+                Dodaj
+              </Button>
+              <Button onClick={handleClearTickets} variant="destructive" size="icon">
+                <X className="w-4 h-4" />
+              </Button>
             </div>
-            <CardContent className="p-6 space-y-6 text-center">
-              <div>
-                <Badge className="bg-blue-100 text-blue-800 mb-2 hover:bg-blue-100 px-3 py-1 text-sm">
-                  Pitanje #{currentQuestion.question_number}
-                </Badge>
-                <h2 className="text-2xl md:text-3xl font-black text-gray-800 leading-tight">
-                  {currentQuestion.questions?.text}
-                </h2>
+          )}
+
+          {event?.status === "active" && currentQuestion ? (
+            <Card className="bg-white shadow-2xl border-0 overflow-hidden">
+              <div className="h-2 bg-gray-100 w-full">
+                <div 
+                  className="h-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-100 ease-linear"
+                  style={{ width: `${(timeRemaining / 10) * 100}%` }}
+                />
               </div>
+              <CardContent className="p-6 space-y-6 text-center">
+                <div>
+                  <Badge className="bg-blue-100 text-blue-800 mb-2 hover:bg-blue-100 px-3 py-1 text-sm">
+                    Pitanje #{currentQuestion.question_number}
+                  </Badge>
+                  <h2 className="text-2xl md:text-3xl font-black text-gray-800 leading-tight">
+                    {currentQuestion.questions?.text}
+                  </h2>
+                </div>
 
-              {timeRemaining > 0 ? (
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <Button
-                    onClick={() => handleSubmitAnswer(true)}
-                    disabled={hasAnswered}
-                    className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
-                      hasAnswered && answer === true 
-                        ? "bg-green-600 ring-4 ring-green-200" 
-                        : "bg-green-500 hover:bg-green-600 shadow-[0_4px_0_rgb(21,128,61)]"
-                    }`}
-                  >
-                    DA
-                  </Button>
-                  <Button
-                    onClick={() => handleSubmitAnswer(false)}
-                    disabled={hasAnswered}
-                    className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
-                      hasAnswered && answer === false
-                        ? "bg-red-600 ring-4 ring-red-200"
-                        : "bg-red-500 hover:bg-red-600 shadow-[0_4px_0_rgb(185,28,28)]"
-                    }`}
-                  >
-                    NE
-                  </Button>
-                </div>
-              ) : (
-                <div className="bg-gray-100 rounded-xl p-4 font-bold text-gray-500">
-                  Vrijeme je isteklo! ⏱️
-                </div>
-              )}
-              
-              {hasAnswered && (
-                <div className="text-sm font-medium text-gray-500 animate-in fade-in slide-in-from-bottom-2">
-                  Vaš odgovor: <span className="text-black font-bold">{answer ? "DA" : "NE"}</span>
-                  {timeRemaining > 0 && " • Čekamo kraj vremena..."}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ) : event?.status === "active" ? (
-          <Card className="bg-white/90 backdrop-blur text-center py-8 animate-pulse">
-            <CardContent>
-              <div className="text-4xl mb-2">🎲</div>
-              <h3 className="text-xl font-bold text-gray-700">Čekamo sljedeće pitanje...</h3>
-            </CardContent>
-          </Card>
-        ) : null}
+                {timeRemaining > 0 ? (
+                  <div className="grid grid-cols-2 gap-4 pt-2">
+                    <Button
+                      onClick={() => handleSubmitAnswer(true)}
+                      disabled={hasAnswered}
+                      className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                        hasAnswered && answer === true 
+                          ? "bg-green-600 ring-4 ring-green-200" 
+                          : "bg-green-500 hover:bg-green-600 shadow-[0_4px_0_rgb(21,128,61)]"
+                      }`}
+                    >
+                      DA
+                    </Button>
+                    <Button
+                      onClick={() => handleSubmitAnswer(false)}
+                      disabled={hasAnswered}
+                      className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                        hasAnswered && answer === false
+                          ? "bg-red-600 ring-4 ring-red-200"
+                          : "bg-red-500 hover:bg-red-600 shadow-[0_4px_0_rgb(185,28,28)]"
+                      }`}
+                    >
+                      NE
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="bg-gray-100 rounded-xl p-4 font-bold text-gray-500">
+                    Vrijeme je isteklo! ⏱️
+                  </div>
+                )}
+                
+                {hasAnswered && (
+                  <div className="text-sm font-medium text-gray-500 animate-in fade-in slide-in-from-bottom-2">
+                    Vaš odgovor: <span className="text-black font-bold">{answer ? "DA" : "NE"}</span>
+                    {timeRemaining > 0 && " • Čekamo kraj vremena..."}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : event?.status === "active" ? (
+            <Card className="bg-white/90 backdrop-blur text-center py-8 animate-pulse">
+              <CardContent>
+                <div className="text-4xl mb-2">🎲</div>
+                <h3 className="text-xl font-bold text-gray-700">Čekamo sljedeće pitanje...</h3>
+              </CardContent>
+            </Card>
+          ) : null}
 
-        {/* TICKETS GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {tickets.map(ticketData => renderTicketGrid(ticketData))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {tickets.map(ticketData => renderTicketGrid(ticketData))}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
