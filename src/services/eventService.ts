@@ -319,14 +319,14 @@ export const eventService = {
       questionId: questionData.question_id
     });
 
-    // Calculate deadline (9 seconds from now)
+    // Calculate deadline (10 seconds from now)
     const now = new Date();
-    const questionOpenUntil = new Date(now.getTime() + 9000).toISOString();
+    const questionOpenUntil = new Date(now.getTime() + 10000).toISOString();
 
     console.log("[DRAW] ⏰ Setting deadline:", {
       now: now.toISOString(),
       deadline: questionOpenUntil,
-      durationMs: 9000
+      durationMs: 10000
     });
 
     // ✅ ONE UPDATE - TRIGGERS SUPABASE REALTIME
