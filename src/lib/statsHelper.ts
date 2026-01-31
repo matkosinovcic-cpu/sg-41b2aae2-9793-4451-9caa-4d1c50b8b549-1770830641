@@ -28,6 +28,55 @@ export interface EventStats {
 }
 
 /**
+ * Calculate stats for a single ticket (client-side helper for /player)
+ * Used for real-time display without DB queries
+ */
+export function calculateSingleTicketStats(
+  ticket: { ticket_questions: Array<{ question_number: number }> },
+  answers: Array<{ ticket_id: string; question_number: number; answer: boolean | null }>,
+  drawnNumbers: number[]
+): {
+  totalQuestions: number;
+  drawnInGame: number;
+  drawnOnTicket: number;
+  answered: number;
+  correct: number;
+  accuracy: number;
+} {
+  const totalQuestions = ticket.ticket_questions.length;
+  const drawnInGame = drawnNumbers.length;
+  
+  // Get ticket question numbers
+  const ticketQuestionNumbers = new Set(
+    ticket.ticket_questions.map(tq => tq.question_number)
+  );
+  
+  // Count how many of the ticket's questions have been drawn
+  const drawnOnTicket = drawnNumbers.filter(num => ticketQuestionNumbers.has(num)).length;
+  
+  // Filter answers to only those that are drawn
+  const drawnAnswers = answers.filter(a => drawnNumbers.includes(a.question_number));
+  const answered = drawnAnswers.length;
+  
+  // Count correct answers (answer === true means correct)
+  const correct = drawnAnswers.filter(a => a.answer === true).length;
+  
+  // Calculate accuracy
+  const accuracy = drawnOnTicket > 0 
+    ? Math.min(100, Math.round((correct / drawnOnTicket) * 100))
+    : 0;
+  
+  return {
+    totalQuestions,
+    drawnInGame,
+    drawnOnTicket,
+    answered,
+    correct,
+    accuracy
+  };
+}
+
+/**
  * Get list of drawn question numbers for an event
  */
 export async function getDrawnQuestionNumbers(eventId: string): Promise<number[]> {

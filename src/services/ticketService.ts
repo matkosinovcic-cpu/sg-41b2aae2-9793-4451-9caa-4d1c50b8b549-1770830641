@@ -6,6 +6,7 @@ export interface Ticket {
   event_id: string;
   is_winner: boolean;
   created_at: string;
+  ticket_questions: TicketQuestion[];
 }
 
 export interface TicketQuestion {

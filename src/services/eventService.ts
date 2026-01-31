@@ -108,6 +108,17 @@ export const eventService = {
     return data as Event;
   },
 
+  async getEventById(eventId: string) {
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+    
+    if (error) throw error;
+    return data as Event;
+  },
+
   async generateEventQuestions(eventId: string) {
     // Get all questions from the pool
     const { data: allQuestions, error: questionsError } = await supabase
@@ -550,6 +561,18 @@ export const eventService = {
     
     if (error) throw error;
     return data as EventQuestion[];
+  },
+
+  async getQuestionForNumber(eventId: string, questionNumber: number) {
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("*, questions(*)")
+      .eq("event_id", eventId)
+      .eq("question_number", questionNumber)
+      .single();
+    
+    if (error) throw error;
+    return data as EventQuestion;
   },
 
   async getActiveEvent() {

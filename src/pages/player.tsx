@@ -1,797 +1,294 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect } from "react";
-import { eventService, Event } from "@/services/eventService";
-import { answerService, PlayerSession, SessionStats, TicketDetailedResults } from "@/services/answerService";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
 import { useRouter } from "next/router";
+import { eventService, Event } from "@/services/eventService";
+import { answerService } from "@/services/answerService";
+import { ticketService } from "@/services/ticketService";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, CheckCircle2, XCircle, Clock, Trophy, Ticket } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { calculateSingleTicketStats } from "@/lib/statsHelper";
 
-// Helper to normalize answers for local comparison (matches service logic)
-function normalizeAnswer(value: any): boolean | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1;
-  if (typeof value === "string") {
-    const v = value.trim().toUpperCase();
-    if (["DA", "YES", "Y", "TRUE", "1"].includes(v)) return true;
-    if (["NE", "NO", "N", "FALSE", "0"].includes(v)) return false;
+const ANSWER_TIMEOUT = 10;
+
+// localStorage helpers for multi-ticket support
+function getStoredFreeTickets(eventId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
   }
-  return null;
 }
 
 interface TicketData {
   id: string;
   serial_number: string;
   event_id: string;
-  is_winner: boolean;
   ticket_questions: Array<{ question_number: number }>;
 }
 
-// Interface for aggregated stats used in the UI
-interface AggregatedStats {
-  ticket_stats: Array<SessionStats & { ticket_serial: string }>;
-  total_correct: number;
-  total_answered: number;    // Sum of answered across all tickets
-  drawn_in_game: number;     // Event-level: unique drawn questions (NOT per-ticket sum)
+interface Answer {
+  ticket_id: string;
+  question_number: number;
+  answer: boolean | null;
+  created_at: string;
 }
 
-export default function PlayerScreen() {
-  const [serialInput, setSerialInput] = useState("");
-  const [tickets, setTickets] = useState<TicketData[]>([]);
-  const [ticket, setTicket] = useState<TicketData | null>(null);
-  const [event, setEvent] = useState<Event | null>(null);
-  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
-  const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
-  const [answer, setAnswer] = useState<boolean | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState(0);
-  const [hasAnswered, setHasAnswered] = useState(false);
-  const [session, setSession] = useState<PlayerSession | null>(null);
-  const [stats, setStats] = useState<AggregatedStats | null>(null);
-  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
-  const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
-  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
-  const { toast } = useToast();
+// Local comparison (matches service logic)
+function normalizeAnswer(value: any): boolean | null {
+  if (value === true || value === "true" || value === 1) return true;
+  if (value === false || value === "false" || value === 0) return false;
+  return null;
+}
+
+export default function PlayerPage() {
   const router = useRouter();
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Load tickets from localStorage on mount
+  // Multi-ticket state
+  const [tickets, setTickets] = useState<TicketData[]>([]);
+  const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
+  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
+
+  // Game state
+  const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
+  const [currentQuestion, setCurrentQuestion] = useState<{ id: string; text: string; correct_answer: boolean } | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
+
+  // Load tickets from URL or localStorage
   useEffect(() => {
-    const storedSerialsJSON = localStorage.getItem("ticket_serials");
-    const storedEventId = localStorage.getItem("event_id");
-    
-    if (storedSerialsJSON && storedEventId) {
+    const loadTickets = async () => {
+      setLoading(true);
       try {
-        const serials: string[] = JSON.parse(storedSerialsJSON);
-        console.log("[Player] Restoring tickets from localStorage:", serials);
-        
-        eventService.getEvent(storedEventId).then(eventData => {
-          setEvent(eventData);
-          setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+        const ticketSerial = router.query.ticket as string;
+        const eventIdParam = router.query.event as string;
+
+        let ticketsToLoad: string[] = [];
+        let eventId: string | null = null;
+
+        // Priority 1: URL has ticket serial (newly created)
+        if (ticketSerial) {
+          ticketsToLoad = [ticketSerial];
+          const ticket = await ticketService.getTicketBySerial(ticketSerial);
+          eventId = ticket.event_id;
           
-          answerService.getOrCreateSession(storedEventId).then(sessionData => {
-            setSession(sessionData);
-            console.log("[Player] ✅ Session initialized:", sessionData.id);
-          });
-          
-          Promise.all(
-            serials.map(serial => 
-              eventService.getTicketBySerial(serial).catch(err => {
-                console.error(`Failed to load ticket ${serial}:`, err);
-                return null;
-              })
-            )
-          ).then(loadedTickets => {
-            const validTickets = loadedTickets.filter(t => t !== null) as TicketData[];
-            if (validTickets.length > 0) {
-              setTickets(validTickets);
-              setTicket(validTickets[0]);
-              console.log("[Player] ✅ Restored tickets:", validTickets.map(t => t.serial_number));
-            } else {
-              localStorage.removeItem("ticket_serials");
-              localStorage.removeItem("event_id");
+          // Also load other stored tickets for this event
+          const storedTickets = getStoredFreeTickets(eventId);
+          ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
+        }
+        // Priority 2: URL has eventId (open my tickets)
+        else if (eventIdParam) {
+          eventId = eventIdParam;
+          ticketsToLoad = getStoredFreeTickets(eventId);
+        }
+
+        if (ticketsToLoad.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        // Fetch all tickets
+        const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
+        const loadedTickets = await Promise.all(ticketPromises);
+        setTickets(loadedTickets);
+
+        // Set focused ticket (newly created or first one)
+        if (ticketSerial) {
+          const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
+          setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
+        } else {
+          setFocusedTicketId(loadedTickets[0]?.id || null);
+        }
+
+        // Load event
+        if (eventId || loadedTickets[0]?.event_id) {
+          const event = await eventService.getEventById(eventId || loadedTickets[0].event_id);
+          setActiveEvent(event);
+          setCurrentDrawnNumber(event.current_drawn_number);
+          setWinnerSerial(event.winner_serial_number || null);
+
+          // Load current question if exists
+          if (event.current_drawn_number) {
+            const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
+            if (questionData) {
+              setCurrentQuestion(questionData);
+              const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
+              const now = Date.now();
+              const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+              setTimeLeft(remaining);
             }
-          });
-        }).catch(err => {
-          console.error("[Player] Failed to restore event:", err);
-          localStorage.removeItem("ticket_serials");
-          localStorage.removeItem("event_id");
-        });
-      } catch (err) {
-        console.error("[Player] Failed to parse stored tickets:", err);
-        localStorage.removeItem("ticket_serials");
-      }
-    }
-
-    // Auto-load ticket from URL query param (e.g., /player?ticket=T20260131-0001)
-    const ticketSerial = router.query.ticket as string;
-    if (ticketSerial && !storedSerialsJSON) {
-      console.log("[Player] Auto-loading ticket from URL:", ticketSerial);
-      
-      eventService.getTicketBySerial(ticketSerial)
-        .then(ticketData => {
-          console.log("[Player] ✅ Ticket loaded from URL:", ticketData.serial_number);
-          
-          // Load event
-          return eventService.getEvent(ticketData.event_id).then(eventData => {
-            setEvent(eventData);
-            setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-            localStorage.setItem("event_id", eventData.id);
-            
-            // Create session
-            return answerService.getOrCreateSession(eventData.id).then(sessionData => {
-              setSession(sessionData);
-              
-              // Set ticket
-              setTickets([ticketData]);
-              setTicket(ticketData);
-              localStorage.setItem("ticket_serials", JSON.stringify([ticketData.serial_number]));
-              
-              // Load current question if exists
-              if (eventData.current_question_number) {
-                return loadCurrentQuestion(eventData.id, eventData.current_question_number);
-              }
-            });
-          });
-        })
-        .catch(err => {
-          console.error("[Player] ❌ Failed to auto-load ticket from URL:", err);
-          toast({
-            title: "Greška",
-            description: "Tiket nije pronađen ili je nevažeći.",
-            variant: "destructive"
-          });
-        });
-    }
-  }, [router.query.ticket]);
-
-  // CRITICAL: Load statistics ONLY when event is finished
-  useEffect(() => {
-    if (session && tickets.length > 0 && event?.status === "finished") {
-      loadStats();
-      loadDetailedResults();
-    }
-  }, [session?.id, tickets.length, event?.status]);
-
-  // Real-time subscriptions
-  useEffect(() => {
-    if (!event) return;
-
-    console.log("[Player] Setting up subscriptions for event:", event.id);
-
-    const eventSubscription = eventService.subscribeToEvent(event.id, (payload) => {
-      console.log("[Player] Event update:", payload);
-      const updatedEvent = payload.new;
-      setEvent(updatedEvent);
-      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-      
-      if (updatedEvent.current_question_number) {
-        loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
-      }
-      
-      // CRITICAL: Load stats when event finishes
-      if (updatedEvent.status === "finished" && session && tickets.length > 0) {
-        loadStats();
-        loadDetailedResults();
-      }
-    });
-
-    const ticketsSubscription = eventService.subscribeToTickets(event.id, (payload) => {
-      console.log("[Player] Ticket update:", payload);
-      if (payload.new) {
-        setTickets(prevTickets => 
-          prevTickets.map(t => t.id === payload.new.id ? payload.new : t)
-        );
-        if (ticket && payload.new.id === ticket.id) {
-          setTicket(payload.new);
-        }
-      }
-    });
-
-    // Subscribe to answers for stats updates (only when finished)
-    const answersSubscription = session && event.status === "finished"
-      ? answerService.subscribeToEventAnswers(event.id, () => {
-          loadStats();
-          loadDetailedResults();
-        })
-      : null;
-
-    return () => {
-      eventSubscription.unsubscribe();
-      ticketsSubscription.unsubscribe();
-      if (answersSubscription) answersSubscription.unsubscribe();
-    };
-  }, [event?.id, ticket?.id, session?.id, event?.status]);
-
-  // Polling fallback
-  useEffect(() => {
-    if (!event || event.status !== "active") return;
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const updatedEvent = await eventService.getEvent(event.id);
-        
-        if (updatedEvent.current_drawn_number !== event.current_drawn_number) {
-          console.log("[Player-Poll] Number changed:", updatedEvent.current_drawn_number);
-          setEvent(updatedEvent);
-          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-          
-          if (updatedEvent.current_question_number) {
-            await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_question_number);
           }
-        }
-        
-        // Check if event finished
-        if (updatedEvent.status === "finished" && event.status === "active") {
-          setEvent(updatedEvent);
-          if (session && tickets.length > 0) {
-            await loadStats();
-            await loadDetailedResults();
+
+          // Load answers for all tickets
+          const allAnswers: Answer[] = [];
+          for (const ticket of loadedTickets) {
+            const ticketAnswers = await answerService.getAnswersForTicket(ticket.id);
+            allAnswers.push(...ticketAnswers);
           }
+          setAnswers(allAnswers);
+
+          // Subscribe to real-time updates
+          subscribeToEvent(event.id);
         }
       } catch (error) {
-        console.error("[Player-Poll] Error:", error);
-      }
-    }, 1500);
-
-    return () => clearInterval(pollInterval);
-  }, [event?.id, event?.status, event?.current_drawn_number, session?.id, tickets.length]);
-
-  // Timer countdown with timeout handling
-  useEffect(() => {
-    if (!event?.question_open_until || !session || !currentQuestion) {
-      setTimeRemaining(0);
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const now = new Date().getTime();
-      const deadline = new Date(event.question_open_until).getTime();
-      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
-      setTimeRemaining(remaining);
-      
-      // TIMEOUT HANDLING: Mark as wrong if time expires and not answered
-      if (remaining === 0 && !hasAnswered) {
-        handleTimeout();
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [event?.question_open_until, hasAnswered, session?.id, currentQuestion?.question_number]);
-
-  const handleTimeout = async () => {
-    if (!session || !currentQuestion || !event) return;
-    
-    console.log("[Player] ⏱️ TIMEOUT - marking question as missed:", {
-      sessionId: session.id,
-      eventId: event.id,
-      questionNumber: currentQuestion.question_number,
-      trackedTickets: tickets.map(t => t.serial_number)
-    });
-    
-    try {
-      // CRITICAL: Mark as missed for ALL tracked tickets
-      for (const ticket of tickets) {
-        await answerService.markUnansweredAsWrong(
-          session.id,
-          event.id,
-          currentQuestion.question_number,
-          ticket.serial_number // NEW: Pass exact ticket identifier
-        );
-      }
-      setHasAnswered(true);
-      console.log("[Player] ✅ Timeout recorded as MISSED for all tickets");
-    } catch (error) {
-      console.error("[Player] ❌ Failed to mark timeout:", error);
-    }
-  };
-
-  const loadStats = async () => {
-    if (!session || tickets.length === 0 || !event) return;
-    
-    try {
-      // Fetch stats for each ticket individually
-      const promises = tickets.map(async (t) => {
-        const singleStats = await answerService.getSessionStats(
-          session.id, 
-          event.id,
-          t.serial_number
-        );
-        return { ...singleStats, ticket_serial: t.serial_number };
-      });
-
-      const results = await Promise.all(promises);
-
-      // Aggregate results
-      const totalCorrect = results.reduce((sum, r) => sum + r.correct, 0);
-      const totalAnswered = results.reduce((sum, r) => sum + r.answered, 0);
-      
-      // ✅ FIX: Use event-level drawn count, NOT per-ticket sum
-      const drawnInGame = event.drawn_numbers?.length || 0;
-
-      // 🔍 DEBUG LOGGING: Verify stats calculation
-      console.log("═══════════════════════════════════════════");
-      console.log("📊 [Player Stats Debug]");
-      console.log("═══════════════════════════════════════════");
-      console.log("Event ID:", event.id);
-      console.log("Event Status:", event.status);
-      console.log("Event drawn_numbers:", event.drawn_numbers);
-      console.log("───────────────────────────────────────────");
-      console.log("🎯 AGGREGATED STATS:");
-      console.log("  • Total Correct:", totalCorrect);
-      console.log("  • Total Answered:", totalAnswered);
-      console.log("  • Drawn In Game:", drawnInGame, "← SOURCE OF TRUTH (event-level)");
-      console.log("───────────────────────────────────────────");
-      console.log("🎫 PER-TICKET BREAKDOWN:");
-      results.forEach((r, idx) => {
-        console.log(`  Ticket ${idx + 1} (${r.ticket_serial}):`);
-        console.log(`    ✓ Correct: ${r.correct}`);
-        console.log(`    📝 Answered: ${r.answered}`);
-        console.log(`    🎲 Drawn on ticket: ${r.drawnOnTicket}`);
-        console.log(`    📊 Accuracy: ${r.accuracy}%`);
-      });
-      console.log("═══════════════════════════════════════════");
-      console.log("🎨 UI WILL DISPLAY:");
-      console.log(`  Header: "Ukupno točno: ${totalCorrect} / ${drawnInGame}"`);
-      console.log(`  Accuracy: "${Math.round((totalCorrect / drawnInGame) * 100)}%"`);
-      console.log("═══════════════════════════════════════════");
-
-      setStats({
-        ticket_stats: results,
-        total_correct: totalCorrect,
-        total_answered: totalAnswered,
-        drawn_in_game: drawnInGame,
-      });
-    } catch (error) {
-      console.error("[Player] Failed to load stats:", error);
-    }
-  };
-
-  const loadDetailedResults = async () => {
-    if (!session || !event || tickets.length === 0) return;
-    
-    try {
-      const resultsMap = new Map<string, TicketDetailedResults>();
-      
-      for (const ticket of tickets) {
-        const details = await answerService.getTicketDetailedResults(
-          session.id,
-          ticket,
-          event.id,
-          event.drawn_numbers || []
-        );
-        resultsMap.set(ticket.serial_number, details);
-      }
-      
-      setDetailedResults(resultsMap);
-    } catch (error) {
-      console.error("[Player] Failed to load detailed results:", error);
-    }
-  };
-
-  const fetchWinnerSerial = async (ticketId: string) => {
-    try {
-      console.log("[Player] 🔍 Fetching winner serial for ticket:", ticketId);
-      const { data, error } = await supabase
-        .from('tickets')
-        .select('serial_number')
-        .eq('id', ticketId)
-        .single();
-      
-      if (error) throw error;
-      
-      const serial = data?.serial_number;
-      setWinnerSerial(serial || null);
-      console.log("[Player] ✅ Winner serial loaded:", serial);
-    } catch (error) {
-      console.error("[Player] ❌ Failed to load winner serial:", error);
-      setWinnerSerial(null);
-    }
-  };
-
-  useEffect(() => {
-    if (event?.winner_ticket_id) {
-      console.log("[Player] 🏆 Winner detected, fetching serial...");
-      fetchWinnerSerial(event.winner_ticket_id);
-    } else {
-      setWinnerSerial(null);
-    }
-  }, [event?.winner_ticket_id]);
-
-  const toggleTicketDetails = (serial: string) => {
-    setExpandedTickets(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(serial)) {
-        newSet.delete(serial);
-      } else {
-        newSet.add(serial);
-      }
-      return newSet;
-    });
-  };
-
-  const handleAddTicket = async () => {
-    if (!serialInput.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a ticket serial number",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    if (tickets.some(t => t.serial_number === serialInput)) {
-      toast({
-        title: "Duplicate",
-        description: "This ticket is already added.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    if (tickets.length >= 4) {
-      toast({
-        title: "Limit Reached",
-        description: "Maximum 4 tickets per player.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    try {
-      const ticketData = await eventService.getTicketBySerial(serialInput);
-      
-      if (event && ticketData.event_id !== event.id) {
+        console.error("[Player] Failed to load tickets:", error);
         toast({
-          title: "Error",
-          description: "This ticket belongs to a different event.",
+          title: "Greška",
+          description: "Greška pri učitavanju tiketa.",
           variant: "destructive"
         });
-        return;
+      } finally {
+        setLoading(false);
       }
+    };
 
-      if (!event) {
-        const eventData = await eventService.getEvent(ticketData.event_id);
-        setEvent(eventData);
-        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-        
-        const sessionData = await answerService.getOrCreateSession(eventData.id);
-        setSession(sessionData);
-        
-        if (eventData.current_question_number) {
-          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
+    if (router.isReady) {
+      loadTickets();
+    }
+  }, [router.isReady, router.query.ticket, router.query.event]);
+
+  // Real-time subscription
+  const subscribeToEvent = (eventId: string) => {
+    const channel = supabase
+      .channel(`event_${eventId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "events", filter: `id=eq.${eventId}` }, async (payload) => {
+        const updatedEvent = payload.new as Event;
+        setActiveEvent(updatedEvent);
+        setCurrentDrawnNumber(updatedEvent.current_drawn_number);
+        setWinnerSerial(updatedEvent.winner_serial_number || null);
+
+        if (updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
+          const questionData = await eventService.getQuestionForNumber(eventId, updatedEvent.current_drawn_number);
+          if (questionData) {
+            setCurrentQuestion(questionData);
+            const expiresAt = new Date(updatedEvent.question_open_until).getTime();
+            const now = Date.now();
+            const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+            setTimeLeft(remaining);
+          }
+        } else {
+          setCurrentQuestion(null);
+          setTimeLeft(0);
         }
-        
-        localStorage.setItem("event_id", eventData.id);
-      }
+      })
+      .subscribe();
 
-      const newTickets = [...tickets, ticketData];
-      setTickets(newTickets);
-      
-      if (!ticket) {
-        setTicket(ticketData);
-      }
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  };
 
-      const serials = newTickets.map(t => t.serial_number);
-      localStorage.setItem("ticket_serials", JSON.stringify(serials));
+  // Countdown timer
+  useEffect(() => {
+    if (timeLeft <= 0) return;
+    const timer = setInterval(() => {
+      setTimeLeft(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft]);
 
-      setSerialInput("");
-      
+  // Handle answer submission (for focused ticket only)
+  const handleAnswer = async (answer: boolean) => {
+    if (!focusedTicketId || !currentDrawnNumber || !currentQuestion || timeLeft <= 0 || submitting) return;
+
+    const focusedTicket = tickets.find(t => t.id === focusedTicketId);
+    if (!focusedTicket) return;
+
+    // Check if this question is on the focused ticket
+    const hasQuestion = focusedTicket.ticket_questions.some(tq => tq.question_number === currentDrawnNumber);
+    if (!hasQuestion) {
       toast({
-        title: "Success",
-        description: "Ticket added successfully!",
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Ticket not found or invalid",
+        title: "Pitanje nije na tvom tiketu",
+        description: `Broj ${currentDrawnNumber} nije na tvom tiketu.`,
         variant: "destructive"
       });
-    }
-  };
-
-  const handleClearTickets = () => {
-    setTickets([]);
-    setTicket(null);
-    setEvent(null);
-    setSession(null);
-    setStats(null);
-    setDetailedResults(new Map());
-    localStorage.removeItem("ticket_serials");
-    localStorage.removeItem("ticket_serial");
-    localStorage.removeItem("event_id");
-    window.location.reload();
-  };
-
-  const handleRemoveTicket = (ticketId: string) => {
-    const newTickets = tickets.filter(t => t.id !== ticketId);
-    setTickets(newTickets);
-    
-    if (newTickets.length === 0) {
-      handleClearTickets();
       return;
     }
 
-    if (ticket?.id === ticketId) {
-      setTicket(newTickets[0]);
-    }
-
-    const serials = newTickets.map(t => t.serial_number);
-    localStorage.setItem("ticket_serials", JSON.stringify(serials));
-
-    toast({
-      title: "Ticket Removed",
-      description: "Ticket removed from your list",
-    });
-  };
-
-  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
-    try {
-      const data = await eventService.getEventQuestion(eventId, questionNumber);
-      setCurrentQuestion(data);
-      
-      if (session) {
-        const answers = await answerService.getSessionAnswers(session.id);
-        const alreadyAnswered = answers.some(a => a.question_number === questionNumber);
-        setHasAnswered(alreadyAnswered);
-        
-        if (alreadyAnswered) {
-          const existingAnswer = answers.find(a => a.question_number === questionNumber);
-          setAnswer(existingAnswer?.answer_yesno === "YES");
-        } else {
-          setAnswer(null);
-        }
-      } else {
-        setHasAnswered(false);
-        setAnswer(null);
-      }
-    } catch (error) {
-      console.error("[Player] Failed to load question:", error);
-      setCurrentQuestion(null);
-    }
-  };
-
-  const handleSubmitAnswer = async (answerValue: boolean) => {
-    if (!session || !currentQuestion || hasAnswered || !event) return;
-
-    console.log("[Player] Submitting answer:", {
-      sessionId: session.id,
-      eventId: event.id,
-      questionNumber: currentQuestion.question_number,
-      answer: answerValue ? "DA" : "NE",
-      trackedTickets: tickets.map(t => ({ id: t.id, serial: t.serial_number }))
-    });
-
-    setAnswer(answerValue);
-
-    try {
-      // Calculate correctness locally using normalization
-      // NOTE: Service now recalculates this securely, but we keep local for UI feedback if needed
-      // Actually, we should just let service do it.
-      
-      // CRITICAL: Submit answer for ALL tracked tickets
-      for (const ticket of tickets) {
-        await answerService.submitAnswer(
-          session.id,
-          event.id,
-          currentQuestion.question_number,
-          answerValue, // Pass boolean directly
-          ticket.serial_number // Pass exact ticket identifier
-        );
-      }
-      
-      setHasAnswered(true);
-      
-      console.log("[Player] ✅ Answer submitted successfully for all tickets");
-      
+    // Check if already answered
+    const existingAnswer = answers.find(a => a.ticket_id === focusedTicketId && a.question_number === currentDrawnNumber);
+    if (existingAnswer) {
       toast({
-        title: "Odgovor poslan",
-        description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}`,
-      });
-    } catch (error: any) {
-      setAnswer(null);
-      console.error("[Player] ❌ Answer submission failed:", error);
-      toast({
-        title: "Greška",
-        description: error.message || "Vec si odgovorio na ovo pitanje",
+        title: "Već si odgovorio/la",
+        description: "Ne možeš promijeniti odgovor.",
         variant: "destructive"
       });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await answerService.submitAnswer(focusedTicketId, currentDrawnNumber, answer);
+      
+      const newAnswer: Answer = {
+        ticket_id: focusedTicketId,
+        question_number: currentDrawnNumber,
+        answer,
+        created_at: new Date().toISOString()
+      };
+      setAnswers(prev => [...prev, newAnswer]);
+
+      const isCorrect = normalizeAnswer(answer) === normalizeAnswer(currentQuestion.correct_answer);
+      toast({
+        title: isCorrect ? "✅ Točno!" : "❌ Netočno",
+        description: isCorrect ? "Odgovor je točan!" : "Odgovor nije točan.",
+        variant: isCorrect ? "default" : "destructive"
+      });
+    } catch (error) {
+      console.error("[Player] Failed to submit answer:", error);
+      toast({
+        title: "Greška",
+        description: "Greška pri slanju odgovora.",
+        variant: "destructive"
+      });
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const renderTicketGrid = (ticketData: TicketData) => {
-    const numbers = ticketData.ticket_questions
-      .map(tq => tq.question_number)
-      .sort((a, b) => a - b);
+  // Calculate stats for focused ticket
+  const focusedTicket = tickets.find(t => t.id === focusedTicketId);
+  const focusedStats = focusedTicket && activeEvent
+    ? calculateSingleTicketStats(focusedTicket, answers, activeEvent.drawn_numbers || [])
+    : { totalQuestions: 15, drawnInGame: 0, drawnOnTicket: 0, answered: 0, correct: 0, accuracy: 0 };
 
-    const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
-    
-    // CRITICAL: Only show stats if event is finished
-    const ticketStats = event?.status === "finished" 
-      ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
-      : null;
+  const canAddTicket = activeEvent && tickets.length < 4;
 
-    const details = detailedResults.get(ticketData.serial_number);
-    const isExpanded = expandedTickets.has(ticketData.serial_number);
-
+  if (loading) {
     return (
-      <Card key={ticketData.id} className="relative bg-white/95 backdrop-blur-sm">
-        <button
-          onClick={() => handleRemoveTicket(ticketData.id)}
-          className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 z-10"
-        >
-          <X className="w-4 h-4" />
-        </button>
-
-        <CardContent className="p-4">
-          <div className="text-center mb-3">
-            <Badge className="bg-purple-600 text-white mb-1">
-              {ticketData.serial_number}
-            </Badge>
-            {ticketData.is_winner && (
-              <div className="flex items-center justify-center gap-2 mt-2">
-                <Trophy className="w-6 h-6 text-yellow-500" />
-                <span className="text-xl font-black text-yellow-600">WINNER!</span>
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-5 gap-2">
-            {numbers.map((num) => {
-              const isDrawn = drawnNumbers.has(num);
-              return (
-                <div
-                  key={num}
-                  className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg transition-all ${
-                    isDrawn
-                      ? "bg-green-500 text-white scale-105 shadow-lg"
-                      : "bg-purple-100 text-purple-900"
-                  }`}
-                >
-                  {num}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="text-center mt-3 space-y-1">
-            <div className="text-sm font-semibold text-gray-600">
-              {drawnCount} / 15 izvučeno
-            </div>
-            {/* CRITICAL: Only show stats when game is finished */}
-            {event?.status === "finished" && ticketStats && (
-              <>
-                <div className="text-center mb-2 space-y-1">
-                  <div className="text-lg font-bold text-blue-600">
-                    ✓ {ticketStats.correct} / {ticketStats.drawnOnTicket} točno ({ticketStats.accuracy}%)
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    Izvučeno na ovoj ulaznici: {ticketStats.drawnOnTicket}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    Odgovoreno: {ticketStats.answered} / {ticketStats.drawnOnTicket}
-                  </div>
-                  {ticketStats.missed > 0 && (
-                    <div className="text-xs text-red-600">
-                      Propušteno: {ticketStats.missed}
-                    </div>
-                  )}
-                </div>
-                {details && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => toggleTicketDetails(ticketData.serial_number)}
-                    className="w-full mt-2"
-                  >
-                    {isExpanded ? (
-                      <>
-                        <ChevronUp className="w-4 h-4 mr-2" />
-                        Sakrij detalje
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown className="w-4 h-4 mr-2" />
-                        Prikaži detalje
-                      </>
-                    )}
-                  </Button>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* CRITICAL: Detailed Results - Only when finished and expanded */}
-          {isExpanded && details && event?.status === "finished" && (
-            <div className="mt-4 space-y-2 border-t pt-4">
-              <h4 className="font-bold text-sm text-gray-700 mb-3">Detalji po pitanjima:</h4>
-              {details.questions.map((q) => (
-                <div
-                  key={q.question_number}
-                  className={`p-3 rounded-lg border-2 ${
-                    q.result === "Točno"
-                      ? "bg-green-50 border-green-300"
-                      : "bg-red-50 border-red-300"
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    {q.result === "Točno" ? (
-                      <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-xs text-gray-600 mb-1">
-                        Pitanje #{q.question_number}
-                      </div>
-                      <div className="text-sm text-gray-800 mb-2 line-clamp-2">
-                        {q.question_text}
-                      </div>
-                      <div className="flex gap-3 text-xs">
-                        <span className="font-semibold">
-                          Točan odgovor: <span className="text-blue-600">{q.correct_answer}</span>
-                        </span>
-                        <span className="font-semibold">
-                          Vaš odgovor: <span className={q.player_answer === "Nije odgovoreno" ? "text-gray-500" : "text-purple-600"}>
-                            {q.player_answer}
-                          </span>
-                        </span>
-                      </div>
-                      <div className={`text-xs font-bold mt-1 ${
-                        q.result === "Točno" ? "text-green-600" : 
-                        q.result === "Propušteno" ? "text-orange-600" : "text-red-600"
-                      }`}>
-                        {q.result}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <>
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Loader2 className="h-12 w-12 animate-spin text-white" />
+        </div>
+      </>
     );
-  };
+  }
 
-  const getFinalMessage = () => {
-    if (!stats || stats.ticket_stats.length === 0) return "";
-    
-    const bestScore = Math.max(...stats.ticket_stats.map(ts => ts.correct));
-    
-    if (bestScore === 15) return "🎉 Čestitamo! Sve točno!";
-    if (bestScore >= 13) return "🌟 Odličan rezultat!";
-    return "👍 Hvala na sudjelovanju!";
-  };
-
-  // Join screen
   if (tickets.length === 0) {
     return (
       <>
-        <SEO title="Join Game - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
           <Card className="w-full max-w-md">
-            <CardContent className="pt-6 space-y-4">
-              <div className="text-center mb-6">
-                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
-                  PRIDRUŽI SE IGRI
-                </h1>
-                <p className="text-gray-600">Unesi serijski broj ulaznice</p>
-              </div>
-
-              <Input
-                placeholder="Unesi serijski broj"
-                value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                className="text-lg"
-              />
-
-              <Button onClick={handleAddTicket} className="w-full" size="lg">
-                Pridruži se igri
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">Nemaš aktivne tikete</CardTitle>
+              <CardDescription>Preuzmi tiket za aktivni event</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => router.push("/play")} className="w-full" size="lg">
+                <Ticket className="mr-2 h-5 w-5" />
+                Preuzmi tiket
               </Button>
             </CardContent>
           </Card>
@@ -800,196 +297,237 @@ export default function PlayerScreen() {
     );
   }
 
-  // Multi-ticket display
+  // Winner screen
+  if (winnerSerial) {
+    const isWinner = tickets.some(t => t.serial_number === winnerSerial);
+    return (
+      <>
+        <SEO title={isWinner ? "POBJEDNIK! 🎉" : "Event završen"} />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Card className="w-full max-w-2xl">
+            <CardHeader className="text-center space-y-4">
+              <Trophy className="h-24 w-24 mx-auto text-yellow-500" />
+              <CardTitle className="text-4xl font-bold">
+                {isWinner ? "🎉 ČESTITAMO! 🎉" : "Event završen"}
+              </CardTitle>
+              <CardDescription className="text-xl">
+                {isWinner ? "TI SI POBJEDNIK!" : `Pobjednik: ${winnerSerial}`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-center space-y-4">
+              {isWinner && (
+                <p className="text-2xl font-bold">Tvoj tiket: {winnerSerial}</p>
+              )}
+              <Button onClick={() => router.push("/play")} variant="outline" size="lg">
+                Nova igra
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
-      <SEO title="Player - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4">
-        <div className="container mx-auto max-w-4xl">
-          <div className="mb-6">
-            <h1 className="text-4xl font-black text-white mb-2">PITALICA SKITALICA</h1>
-            <p className="text-white/80">Odgovori na pitanja i osvoji nagradu!</p>
-          </div>
-
-          {/* WINNER BANNER */}
-          {event?.winner_ticket_id && (
-            <Card className="mb-4 border-4 border-yellow-500 bg-yellow-50">
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-center gap-3">
-                  <Trophy className="w-8 h-8 text-yellow-600" />
-                  <div className="text-center">
-                    <p className="text-2xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
-                    <p className="text-sm text-yellow-700 mt-1">Serijski broj ulaznice:</p>
-                    <p className="text-lg font-bold text-yellow-800">
-                      {winnerSerial || "..."}
-                    </p>
+      <SEO title="Igrač - Pitalica Skitalica" />
+      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4">
+        <div className="max-w-6xl mx-auto space-y-3">
+          {/* Header with stats */}
+          {focusedTicket && (
+            <Card className="bg-white/95 backdrop-blur">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg sm:text-xl">
+                      {focusedTicket.serial_number}
+                    </CardTitle>
+                    <CardDescription className="text-xs sm:text-sm">
+                      {activeEvent?.name || "Event"}
+                    </CardDescription>
                   </div>
-                  <Trophy className="w-8 h-8 text-yellow-600" />
+                  <Badge variant="outline" className="text-xs sm:text-sm">
+                    {tickets.length} / 4 tiketa
+                  </Badge>
                 </div>
-              </CardContent>
+                <div className="grid grid-cols-3 gap-2 text-center pt-2">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Izvučeno</p>
+                    <p className="text-lg sm:text-xl font-bold">{focusedStats.drawnOnTicket}/{focusedStats.totalQuestions}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Odgovoreno</p>
+                    <p className="text-lg sm:text-xl font-bold">{focusedStats.answered}/{focusedStats.drawnOnTicket}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Točnost</p>
+                    <p className="text-lg sm:text-xl font-bold">{focusedStats.accuracy}%</p>
+                  </div>
+                </div>
+              </CardHeader>
             </Card>
           )}
 
-          {/* Header */}
-          <div className="text-center mb-6">
-            <h1 className="text-4xl font-black text-white mb-2">
-              Pitanje {event?.drawn_numbers?.length || 0} / 90
-            </h1>
-            <Badge className="bg-gradient-to-r from-blue-600 to-purple-600 text-white text-lg px-4 py-2">
-              #{event?.current_drawn_number}
-            </Badge>
-          </div>
+          {/* Multi-ticket grid */}
+          <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
+            {tickets.map(ticket => {
+              const isFocused = ticket.id === focusedTicketId;
+              const ticketAnswers = answers.filter(a => a.ticket_id === ticket.id);
+              const stats = activeEvent ? calculateSingleTicketStats(ticket, ticketAnswers, activeEvent.drawn_numbers || []) : null;
 
-          <div className="mb-4 space-y-2">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Dodaj još jednu ulaznicu"
-                value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                disabled={tickets.length >= 4 || event?.status === "finished"}
-                className="flex-1"
-              />
-              <Button
-                onClick={handleAddTicket}
-                disabled={tickets.length >= 4 || event?.status === "finished"}
-                className="whitespace-nowrap"
-              >
-                Dodaj ({tickets.length}/4)
-              </Button>
-            </div>
-            <Button
-              onClick={handleClearTickets}
-              variant="destructive"
-              className="w-full"
-              size="sm"
-            >
-              Obriši sve
-            </Button>
-          </div>
-
-          {/* CRITICAL: Final Statistics - ONLY when event is finished */}
-          {event?.status === "finished" && stats && (() => {
-            // Logic: Use Winner ticket if player has it, otherwise use First ticket
-            const winnerTicket = tickets.find(t => t.id === event.winner_ticket_id);
-            const targetTicket = winnerTicket || tickets[0];
-            const targetStats = stats.ticket_stats.find(s => s.ticket_serial === targetTicket.serial_number);
-            
-            if (!targetStats) return null;
-
-            // Calculate global accuracy: correct / total drawn in game
-            const globalAccuracy = stats.drawn_in_game > 0 
-              ? Math.round((targetStats.correct / stats.drawn_in_game) * 100) 
-              : 0;
-
-            return (
-              <Card className="bg-white/95 backdrop-blur-sm mb-4">
-                <CardContent className="p-6 text-center space-y-3">
-                  <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
-                    Hvala na sudjelovanju!
-                  </h2>
-                  
-                  {/* Single ticket stats */}
-                  <div className="text-2xl font-bold text-gray-700">
-                    Ukupno točno: {targetStats.correct} / {stats.drawn_in_game}
-                  </div>
-                  
-                  {stats.drawn_in_game > 0 && (
-                    <div className="text-lg text-gray-600">
-                      Točnost: {globalAccuracy}%
-                    </div>
-                  )}
-                  
-                  <div className="text-sm text-gray-500 mt-2">
-                    Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })()}
-
-          {/* Tickets Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            {tickets.map(ticketData => renderTicketGrid(ticketData))}
-          </div>
-
-          {/* Current Question - ONLY during active game */}
-          {event?.status === "active" && currentQuestion && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 space-y-4">
-                <div className="text-center">
-                  <Badge className="bg-blue-600 text-white text-lg px-4 py-1 mb-3">
-                    Pitanje #{currentQuestion.question_number}
-                  </Badge>
-                  <h2 className="text-2xl font-bold mb-4">
-                    {currentQuestion.questions?.text}
-                  </h2>
-                </div>
-
-                {timeRemaining > 0 ? (
-                  <>
-                    <div className="flex items-center gap-4">
-                      <div className="h-4 flex-1 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-green-500 to-green-300 transition-all duration-100"
-                          style={{ width: `${(timeRemaining / 10) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-2xl font-black font-mono text-green-600 min-w-[2ch]">
-                        {timeRemaining}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <Button
-                        onClick={() => handleSubmitAnswer(true)}
-                        disabled={hasAnswered}
-                        className="h-20 text-2xl font-black bg-green-600 hover:bg-green-700"
-                      >
-                        DA
-                      </Button>
-                      <Button
-                        onClick={() => handleSubmitAnswer(false)}
-                        disabled={hasAnswered}
-                        className="h-20 text-2xl font-black bg-red-600 hover:bg-red-700"
-                      >
-                        NE
-                      </Button>
-                    </div>
-
-                    {hasAnswered && (
-                      <div className="text-center text-lg font-semibold text-green-600">
-                        Odgovoreno: {answer ? "DA" : "NE"}
+              return (
+                <Card
+                  key={ticket.id}
+                  className={`cursor-pointer transition-all ${isFocused ? "ring-4 ring-purple-500 bg-white" : "bg-white/80 hover:bg-white/90"}`}
+                  onClick={() => setFocusedTicketId(ticket.id)}
+                >
+                  <CardHeader className="p-3 sm:p-4">
+                    <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
+                    {stats && (
+                      <div className="text-xs text-muted-foreground">
+                        {stats.drawnOnTicket}/{stats.totalQuestions} izvučeno • {stats.accuracy}% točno
                       </div>
                     )}
-                  </>
-                ) : (
-                  <div className="bg-gray-100 rounded-lg p-4 text-center">
-                    <p className="text-lg font-semibold text-gray-600">Vrijeme je isteklo!</p>
+                  </CardHeader>
+                  <CardContent className="p-3 sm:p-4 pt-0">
+                    <div className="grid grid-cols-5 gap-1">
+                      {ticket.ticket_questions
+                        .sort((a, b) => a.question_number - b.question_number)
+                        .map(tq => {
+                          const isDrawn = activeEvent?.drawn_numbers?.includes(tq.question_number);
+                          const isCurrent = currentDrawnNumber === tq.question_number;
+                          const answer = ticketAnswers.find(a => a.question_number === tq.question_number);
+                          const hasAnswer = !!answer;
+                          const isCorrect = hasAnswer && currentQuestion && normalizeAnswer(answer.answer) === normalizeAnswer(currentQuestion.correct_answer);
+
+                          return (
+                            <div
+                              key={tq.question_number}
+                              className={`aspect-square flex items-center justify-center text-xs sm:text-sm font-bold rounded ${
+                                isCurrent
+                                  ? "bg-yellow-400 text-black animate-pulse"
+                                  : hasAnswer
+                                  ? isCorrect
+                                    ? "bg-green-500 text-white"
+                                    : "bg-red-500 text-white"
+                                  : isDrawn
+                                  ? "bg-gray-300 text-gray-700"
+                                  : "bg-white border-2 border-gray-200"
+                              }`}
+                            >
+                              {tq.question_number}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+
+            {/* Add ticket card (if < 4) */}
+            {canAddTicket && (
+              <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed" onClick={() => router.push("/play")}>
+                <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                  <Ticket className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                  <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                  <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {tickets.length >= 4 && (
+            <p className="text-center text-xs text-white/80">Limit 4 tiketa (promo faza)</p>
+          )}
+
+          {/* Current question */}
+          {focusedTicket && currentQuestion && currentDrawnNumber && (
+            <Card className="bg-white/95 backdrop-blur">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <Badge variant="secondary" className="text-lg">
+                    Pitanje #{currentDrawnNumber}
+                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    <span className={`text-2xl font-bold ${timeLeft <= 3 ? "text-red-500 animate-pulse" : ""}`}>
+                      {timeLeft}s
+                    </span>
                   </div>
-                )}
+                </div>
+                <CardTitle className="text-xl sm:text-2xl mt-4">{currentQuestion.text}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const hasQuestion = focusedTicket.ticket_questions.some(tq => tq.question_number === currentDrawnNumber);
+                  const existingAnswer = answers.find(a => a.ticket_id === focusedTicketId && a.question_number === currentDrawnNumber);
+
+                  if (!hasQuestion) {
+                    return (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <XCircle className="h-12 w-12 mx-auto mb-2" />
+                        <p>Ovo pitanje nije na tvom tiketu</p>
+                      </div>
+                    );
+                  }
+
+                  if (existingAnswer) {
+                    const isCorrect = normalizeAnswer(existingAnswer.answer) === normalizeAnswer(currentQuestion.correct_answer);
+                    return (
+                      <div className="text-center py-8">
+                        {isCorrect ? (
+                          <CheckCircle2 className="h-16 w-16 mx-auto mb-4 text-green-500" />
+                        ) : (
+                          <XCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
+                        )}
+                        <p className="text-xl font-bold">{isCorrect ? "Točan odgovor!" : "Netočan odgovor"}</p>
+                        <p className="text-muted-foreground mt-2">
+                          Tvoj odgovor: {normalizeAnswer(existingAnswer.answer) ? "DA" : "NE"}
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  if (timeLeft <= 0) {
+                    return (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <Clock className="h-12 w-12 mx-auto mb-2" />
+                        <p>Vrijeme je isteklo</p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-2 gap-4">
+                      <Button
+                        onClick={() => handleAnswer(true)}
+                        disabled={submitting}
+                        size="lg"
+                        className="h-24 text-2xl font-bold bg-green-600 hover:bg-green-700"
+                      >
+                        {submitting ? <Loader2 className="animate-spin" /> : "DA"}
+                      </Button>
+                      <Button
+                        onClick={() => handleAnswer(false)}
+                        disabled={submitting}
+                        size="lg"
+                        className="h-24 text-2xl font-bold bg-red-600 hover:bg-red-700"
+                      >
+                        {submitting ? <Loader2 className="animate-spin" /> : "NE"}
+                      </Button>
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           )}
 
-          {/* Waiting state */}
-          {event?.status === "active" && !currentQuestion && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 text-center">
-                <p className="text-xl font-semibold text-gray-600">
-                  Čekamo sljedeće pitanje...
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Event not active */}
-          {event?.status !== "active" && event?.status !== "finished" && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 text-center">
-                <p className="text-xl font-semibold text-gray-600">
-                  Igra još nije počela
-                </p>
+          {!currentQuestion && (
+            <Card className="bg-white/80 backdrop-blur">
+              <CardContent className="text-center py-12">
+                <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-purple-600" />
+                <p className="text-lg text-muted-foreground">Čekamo sljedeće pitanje...</p>
               </CardContent>
             </Card>
           )}
