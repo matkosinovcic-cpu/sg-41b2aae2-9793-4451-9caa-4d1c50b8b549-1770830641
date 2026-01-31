@@ -461,6 +461,57 @@ export default function PlayerPage() {
       <SEO title="Igrač - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4">
         <div className="max-w-6xl mx-auto space-y-3">
+          
+          {/* TEMPORARY DEBUG BOX - REMOVE AFTER FIX */}
+          {activeEvent && (
+            <Card className="bg-yellow-100 border-yellow-400">
+              <CardContent className="p-3">
+                <pre className="text-xs whitespace-pre-wrap">
+                  {`=== PLAYER STATS DEBUG ===
+Event ID: ${activeEvent.id}
+Drawn Source: event.drawn_numbers (length: ${activeEvent.drawn_numbers?.length || 0})
+First 5 Drawn: [${(activeEvent.drawn_numbers || []).slice(0, 5).join(', ')}]
+Tickets Count: ${tickets.length}
+Sample Ticket Numbers (first): [${tickets[0]?.ticket_questions.slice(0, 5).map(tq => tq.question_number).join(', ') || 'none'}]
+Answers Keys Count: ${new Set(answers.map(a => a.question_number)).size} unique question numbers
+Sample Answer Keys: [${Array.from(new Set(answers.map(a => a.question_number))).slice(0, 5).join(', ')}]
+---
+COMPUTED HEADER:
+Izvučeno: ${activeEvent.drawn_numbers?.length || 0} / 90
+Odgovoreno: ${new Set(answers.filter(a => tickets.some(t => t.serial_number === a.ticket_id)).map(a => a.question_number)).size} / ${activeEvent.drawn_numbers?.length || 0}
+Točnost: ${(() => {
+  const playerAnswers = answers.filter(a => tickets.some(t => t.serial_number === a.ticket_id));
+  const answeredCount = new Set(playerAnswers.map(a => a.question_number)).size;
+  let correctCount = 0;
+  if (currentQuestion && currentDrawnNumber) {
+    correctCount = playerAnswers.filter(a => {
+      if (Number(a.question_number) === Number(currentDrawnNumber)) {
+        return normalizeAnswer(a.answer) === normalizeAnswer(currentQuestion.correct_answer);
+      }
+      return false;
+    }).length;
+  }
+  return answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
+})()}%
+---
+FOCUSED TICKET STATS:
+${focusedTicket ? `Ticket: ${focusedTicket.serial_number}
+Ticket Numbers: [${focusedTicket.ticket_questions.map(tq => tq.question_number).join(', ')}]
+Drawn on Ticket: ${focusedTicket.ticket_questions.filter(tq => (activeEvent.drawn_numbers || []).includes(Number(tq.question_number))).length} / 15
+Answered on Ticket: ${answers.filter(a => a.ticket_id === focusedTicket.serial_number).length}
+Correct on Ticket: ${answers.filter(a => {
+  if (a.ticket_id !== focusedTicket.serial_number) return false;
+  if (currentQuestion && Number(a.question_number) === Number(currentDrawnNumber)) {
+    return normalizeAnswer(a.answer) === normalizeAnswer(currentQuestion.correct_answer);
+  }
+  return false;
+}).length}` : 'No focused ticket'}
+`}
+                </pre>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Header with stats */}
           {focusedTicket && (
             <Card className="bg-white/95 backdrop-blur">
