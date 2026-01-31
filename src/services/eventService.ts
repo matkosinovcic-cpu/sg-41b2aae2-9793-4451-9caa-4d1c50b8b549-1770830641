@@ -109,14 +109,7 @@ export const eventService = {
   },
 
   async getEventById(eventId: string) {
-    const { data, error } = await supabase
-      .from("events")
-      .select("*")
-      .eq("id", eventId)
-      .single();
-    
-    if (error) throw error;
-    return data as Event;
+    return this.getEvent(eventId);
   },
 
   async generateEventQuestions(eventId: string) {

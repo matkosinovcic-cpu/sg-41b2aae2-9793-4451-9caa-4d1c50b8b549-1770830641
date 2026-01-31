@@ -102,7 +102,15 @@ export const ticketService = {
         questions: questionNumbers,
       });
 
-      return ticket;
+      // Return full ticket object with questions
+      return {
+        ...ticket,
+        ticket_questions: ticketQuestions.map((tq, index) => ({
+          id: `temp-${index}`, // Temporary ID as we didn't fetch inserted rows
+          ticket_id: ticket.id,
+          question_number: tq.question_number
+        }))
+      } as Ticket;
     } catch (error) {
       console.error("[TicketService] ❌ Failed to create free ticket:", error);
       throw error;
@@ -116,7 +124,7 @@ export const ticketService = {
     try {
       const { data, error } = await supabase
         .from("tickets")
-        .select("*")
+        .select("*, ticket_questions(*)")
         .eq("serial_number", serialNumber)
         .single();
 
@@ -128,7 +136,7 @@ export const ticketService = {
         throw error;
       }
 
-      return data;
+      return data as Ticket;
     } catch (error) {
       console.error("[TicketService] ❌ Failed to get ticket:", error);
       throw error;

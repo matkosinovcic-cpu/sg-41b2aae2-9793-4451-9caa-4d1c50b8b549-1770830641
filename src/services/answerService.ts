@@ -314,6 +314,39 @@ export const answerService = {
   },
 
   /**
+   * Get all answers for a specific ticket (legacy support for player.tsx)
+   */
+  async getAnswersForTicket(ticketId: string): Promise<any[]> {
+    const { data, error } = await supabase
+      .from("player_answers")
+      .select("*")
+      .eq("ticket_id", ticketId); // Note: ticket_id in player_answers is actually serial number or UUID depending on schema, assuming it matches ticket.id from player.tsx context? 
+      // Wait, in submitAnswer we passed ticketSerial as ticket_id. 
+      // Let's check player.tsx usage. It passes ticket.id. 
+      // Schema check: player_answers.ticket_id is text (serial number usually). 
+      // Ticket object in player.tsx has id (UUID) and serial_number.
+      // We should probably use ticket serial.
+      // Let's assume player.tsx passes UUID but we need serial? 
+      // Actually player.tsx passes `ticket.id` to `getAnswersForTicket`. 
+      // But `submitAnswer` uses `ticketSerial`.
+      // I will implement this to take `ticketId` (UUID) and find answers. 
+      // BUT `player_answers` table definition from previous context (not fully visible here) likely uses serial or UUID.
+      // Given `submitAnswer` implementation: `ticket_id: ticketSerial`.
+      // So `getAnswersForTicket` should probably take serial.
+      // I will update player.tsx to pass serial.
+    
+    if (error) throw error;
+    
+    // Map to expected format in player.tsx
+    return (data || []).map(a => ({
+      ticket_id: a.ticket_id, // This is serial in DB
+      question_number: a.question_number,
+      answer: a.answer_yesno === 'YES',
+      created_at: a.created_at
+    }));
+  },
+
+  /**
    * Real-time subscription to player answers
    */
   subscribeToEventAnswers(

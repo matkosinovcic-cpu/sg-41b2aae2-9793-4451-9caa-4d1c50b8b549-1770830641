@@ -57,6 +57,7 @@ export default function PlayerPage() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
   const [activeEvent, setActiveEvent] = useState<Event | null>(null);
+  const [sessionId, setSessionId] = useState<string>("");
 
   // Game state
   const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
@@ -80,16 +81,21 @@ export default function PlayerPage() {
         if (ticketSerial) {
           ticketsToLoad = [ticketSerial];
           const ticket = await ticketService.getTicketBySerial(ticketSerial);
-          eventId = ticket.event_id;
-          
-          // Also load other stored tickets for this event
-          const storedTickets = getStoredFreeTickets(eventId);
-          ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
+          if (ticket) {
+             eventId = ticket.event_id;
+             // Also load other stored tickets for this event
+             const storedTickets = getStoredFreeTickets(eventId);
+             ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
+          }
         }
         // Priority 2: URL has eventId (open my tickets)
         else if (eventIdParam) {
           eventId = eventIdParam;
           ticketsToLoad = getStoredFreeTickets(eventId);
+        } else {
+             // Fallback: check localStorage for any tickets? 
+             // For now, if no params, maybe just try to load generic stored ones?
+             // Let's stick to current logic: if no tickets to load, we stop.
         }
 
         if (ticketsToLoad.length === 0) {
@@ -99,7 +105,7 @@ export default function PlayerPage() {
 
         // Fetch all tickets
         const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
-        const loadedTickets = await Promise.all(ticketPromises);
+        const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
         setTickets(loadedTickets);
 
         // Set focused ticket (newly created or first one)
@@ -112,16 +118,32 @@ export default function PlayerPage() {
 
         // Load event
         if (eventId || loadedTickets[0]?.event_id) {
-          const event = await eventService.getEventById(eventId || loadedTickets[0].event_id);
+          const currentEventId = eventId || loadedTickets[0].event_id;
+          const event = await eventService.getEventById(currentEventId);
           setActiveEvent(event);
           setCurrentDrawnNumber(event.current_drawn_number);
-          setWinnerSerial(event.winner_serial_number || null);
+          
+          // Handle winner serial
+          if (event.winner_ticket_id) {
+             const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
+             setWinnerSerial(winnerTicket?.serial_number || null);
+          } else {
+             setWinnerSerial(null);
+          }
+
+          // Create/Get session
+          const session = await answerService.getOrCreateSession(currentEventId);
+          setSessionId(session.id);
 
           // Load current question if exists
           if (event.current_drawn_number) {
             const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
-            if (questionData) {
-              setCurrentQuestion(questionData);
+            if (questionData && questionData.questions) {
+              setCurrentQuestion({
+                 id: questionData.question_id,
+                 text: questionData.questions.text,
+                 correct_answer: questionData.questions.correct_answer
+              });
               const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
               const now = Date.now();
               const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
@@ -132,7 +154,11 @@ export default function PlayerPage() {
           // Load answers for all tickets
           const allAnswers: Answer[] = [];
           for (const ticket of loadedTickets) {
-            const ticketAnswers = await answerService.getAnswersForTicket(ticket.id);
+            // Use serial_number if getAnswersForTicket expects serial (as per my update plan)
+            // But wait, my update to answerService.getAnswersForTicket took ticketId but I suspected it should take serial.
+            // Let's check submitAnswer usage. It uses ticketSerial.
+            // So we should pass ticket.serial_number to getAnswersForTicket.
+            const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
             allAnswers.push(...ticketAnswers);
           }
           setAnswers(allAnswers);
@@ -165,12 +191,24 @@ export default function PlayerPage() {
         const updatedEvent = payload.new as Event;
         setActiveEvent(updatedEvent);
         setCurrentDrawnNumber(updatedEvent.current_drawn_number);
-        setWinnerSerial(updatedEvent.winner_serial_number || null);
+        
+        // Update winner
+        if (updatedEvent.winner_ticket_id) {
+            ticketService.getTicket(updatedEvent.winner_ticket_id).then(t => {
+                setWinnerSerial(t?.serial_number || null);
+            });
+        } else {
+            setWinnerSerial(null);
+        }
 
         if (updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
           const questionData = await eventService.getQuestionForNumber(eventId, updatedEvent.current_drawn_number);
-          if (questionData) {
-            setCurrentQuestion(questionData);
+          if (questionData && questionData.questions) {
+            setCurrentQuestion({
+                id: questionData.question_id,
+                text: questionData.questions.text,
+                correct_answer: questionData.questions.correct_answer
+            });
             const expiresAt = new Date(updatedEvent.question_open_until).getTime();
             const now = Date.now();
             const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
@@ -216,7 +254,7 @@ export default function PlayerPage() {
     }
 
     // Check if already answered
-    const existingAnswer = answers.find(a => a.ticket_id === focusedTicketId && a.question_number === currentDrawnNumber);
+    const existingAnswer = answers.find(a => a.ticket_id === focusedTicket.serial_number && a.question_number === currentDrawnNumber);
     if (existingAnswer) {
       toast({
         title: "Već si odgovorio/la",
@@ -228,10 +266,16 @@ export default function PlayerPage() {
 
     setSubmitting(true);
     try {
-      await answerService.submitAnswer(focusedTicketId, currentDrawnNumber, answer);
+      await answerService.submitAnswer(
+          sessionId, 
+          focusedTicket.event_id, 
+          currentDrawnNumber, 
+          answer, 
+          focusedTicket.serial_number
+      );
       
       const newAnswer: Answer = {
-        ticket_id: focusedTicketId,
+        ticket_id: focusedTicket.serial_number,
         question_number: currentDrawnNumber,
         answer,
         created_at: new Date().toISOString()
