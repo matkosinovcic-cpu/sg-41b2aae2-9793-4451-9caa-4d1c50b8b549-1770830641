@@ -16,6 +16,8 @@ export default function TVScreen() {
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
   const [isLoadingEvent, setIsLoadingEvent] = useState(true);
   const [noActiveEvent, setNoActiveEvent] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [lastRealtimeAt, setLastRealtimeAt] = useState<string | null>(null);
 
   const eventChannelRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -65,95 +67,22 @@ export default function TVScreen() {
   // Load current question
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log("[TV] 📥 Loading question #", questionNumber);
+      console.log("[TV SYNC] loading_question", questionNumber);
       const questionData = await eventService.getEventQuestion(eventId, questionNumber);
       setCurrentQuestion(questionData);
       
       if (questionData.questions) {
         setQuestionText(questionData.questions.text);
-        console.log("[TV] ✅ Question loaded:", questionData.questions.text);
+        console.log("[TV SYNC] question_loaded", questionData.questions.text);
       }
     } catch (error) {
-      console.error("[TV] Failed to load question:", error);
+      console.error("[TV SYNC] question_load_failed", error);
     }
   };
 
-  // 📡 SUBSCRIBE TO REALTIME EVENT UPDATES
-  const subscribeToEventUpdates = (eventId: string) => {
-    console.log("═══════════════════════════════════════════════");
-    console.log("[TV] 📡 SETTING UP REALTIME SUBSCRIPTION");
-    console.log("[TV] 🔑 Event ID:", eventId);
-    console.log("[TV] 📋 Full ID:", eventId);
-    console.log("[TV] 🎯 Channel:", `tv-event-${eventId}`);
-    console.log("[TV] 🔍 Filter:", `id=eq.${eventId}`);
-    console.log("═══════════════════════════════════════════════");
-
-    const channel = supabase
-      .channel(`tv-event-${eventId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "events",
-          filter: `id=eq.${eventId}`,
-        },
-        async (payload) => {
-          console.log("═══════════════════════════════════════════════");
-          console.log("[TV] ⚡ REALTIME UPDATE RECEIVED!");
-          console.log("[TV] 📦 Payload:", payload);
-          console.log("[TV] 🆔 Event ID from payload:", payload.new?.id?.slice(0, 8));
-          console.log("[TV] 🔢 Current question:", payload.new?.current_question_number);
-          console.log("[TV] 🎯 Drawn number:", payload.new?.current_drawn_number);
-          console.log("[TV] ⏰ Deadline:", payload.new?.question_open_until);
-          console.log("[TV] 🕒 Updated at:", payload.new?.updated_at);
-          console.log("═══════════════════════════════════════════════");
-
-          const newEvent = payload.new as Event;
-
-          // ✅ DIRECT STATE UPDATE
-          console.log("[TV] 🔄 Updating state...");
-          setEvent(newEvent);
-          setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
-          console.log("[TV] ✅ State updated");
-
-          // ✅ LOAD QUESTION IF CHANGED
-          if (
-            newEvent.current_drawn_number &&
-            newEvent.current_drawn_number !== currentQuestion?.question_number
-          ) {
-            console.log("[TV] 🔔 NEW QUESTION DETECTED!");
-            console.log("[TV] 📥 Loading question:", newEvent.current_drawn_number);
-            playBeep("start");
-            await loadCurrentQuestion(newEvent.id, newEvent.current_drawn_number);
-            console.log("[TV] ✅ Question loaded and displayed");
-          }
-        }
-      )
-      .subscribe((status) => {
-        console.log("[TV] 📊 Subscription status:", status);
-        
-        if (status === "SUBSCRIBED") {
-          console.log("[TV] ✅ REALTIME SUBSCRIPTION ACTIVE");
-          console.log("[TV] 🎧 Listening for UPDATE events on events table");
-          console.log("[TV] 🔍 Filtering by: id =", eventId.slice(0, 8));
-        } else if (status === "CHANNEL_ERROR") {
-          console.error("[TV] ❌ SUBSCRIPTION ERROR!");
-          console.error("[TV] ⚠️ Realtime connection failed");
-        } else if (status === "TIMED_OUT") {
-          console.error("[TV] ⏰ SUBSCRIPTION TIMEOUT!");
-        } else if (status === "CLOSED") {
-          console.log("[TV] 🔌 Subscription closed");
-        }
-      });
-
-    eventChannelRef.current = channel;
-    console.log("[TV] 💾 Channel reference stored");
-  };
-
-  // ✅ SIMPLE REALTIME INITIALIZATION
+  // ✅ ZERO POLLING - PURE REALTIME SUBSCRIPTION
   useEffect(() => {
-    console.log("[TV] 🚀 TV Screen mounting");
+    console.log("[TV SYNC] mounting");
 
     const initTV = async () => {
       try {
@@ -161,7 +90,7 @@ export default function TVScreen() {
 
         // If no URL eventId, find active event
         if (!targetEventId) {
-          console.log("[TV] 🔍 No eventId in URL, looking for active event");
+          console.log("[TV SYNC] finding_active_event");
           const { data: activeEvent } = await supabase
             .from('events')
             .select('*')
@@ -169,18 +98,18 @@ export default function TVScreen() {
             .maybeSingle();
 
           if (!activeEvent) {
-            console.log("[TV] ⚠️ No active event found");
+            console.log("[TV SYNC] no_active_event");
             setNoActiveEvent(true);
             setIsLoadingEvent(false);
             return;
           }
 
           targetEventId = activeEvent.id;
-          console.log("[TV] ✅ Found active event:", targetEventId.slice(0, 8));
+          console.log("[TV SYNC] active_event_found", targetEventId.slice(0, 8));
         }
 
-        // Load event data
-        console.log("[TV] 📥 Loading event data:", targetEventId.slice(0, 8));
+        // ✅ STEP 1: ONE INITIAL FETCH
+        console.log("[TV SYNC] initial_fetch", targetEventId.slice(0, 8));
         const eventData = await eventService.getEvent(targetEventId);
         setEvent(eventData);
         setDrawnNumbers(new Set(eventData.drawn_numbers || []));
@@ -190,8 +119,8 @@ export default function TVScreen() {
           await loadCurrentQuestion(eventData.id, eventData.current_question_number);
         }
 
-        // ✅ SUBSCRIBE TO REALTIME UPDATES
-        console.log("[TV] 📡 Setting up realtime subscription for:", targetEventId.slice(0, 8));
+        // ✅ STEP 2: REALTIME SUBSCRIPTION (NO POLLING!)
+        console.log("[TV SYNC] subscribing_realtime", targetEventId.slice(0, 8));
         
         const channel = supabase
           .channel(`tv-event-${targetEventId}`)
@@ -204,33 +133,57 @@ export default function TVScreen() {
               filter: `id=eq.${targetEventId}`
             },
             async (payload) => {
-              console.log("[TV] ⚡ Realtime UPDATE received");
+              console.log("[TV SYNC] realtime_event", {
+                questionNumber: payload.new?.current_question_number,
+                drawnNumber: payload.new?.current_drawn_number,
+                deadline: payload.new?.question_open_until
+              });
+              
+              setLastRealtimeAt(new Date().toISOString());
+              
               const newEvent = payload.new as Event;
               
-              // ✅ DIRECT STATE UPDATE
+              // ✅ INSTANT STATE UPDATE
+              console.log("[TV SYNC] apply_state");
               setEvent(newEvent);
               setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
               
               // ✅ LOAD NEW QUESTION IF CHANGED
               if (newEvent.current_question_number && 
                   newEvent.current_question_number !== currentQuestion?.question_number) {
-                console.log("[TV] 🔔 New question:", newEvent.current_question_number);
+                console.log("[TV SYNC] new_question_detected", newEvent.current_question_number);
                 playBeep('start');
                 await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
               }
             }
           )
           .subscribe((status) => {
-            console.log("[TV] 📡 Subscription status:", status);
+            console.log("[TV SYNC] subscription_status", status);
+            
+            if (status === 'SUBSCRIBED') {
+              console.log("[TV SYNC] subscribed_ok");
+              setRealtimeConnected(true);
+            } else if (status === 'CHANNEL_ERROR') {
+              console.error("[TV SYNC] subscription_error");
+              setRealtimeConnected(false);
+            } else if (status === 'CLOSED') {
+              console.log("[TV SYNC] subscription_closed, reconnecting...");
+              setRealtimeConnected(false);
+              // ✅ RECONNECT STRATEGY (NO POLLING!)
+              setTimeout(() => {
+                console.log("[TV SYNC] reconnecting");
+                initTV();
+              }, 2000);
+            }
           });
 
         eventChannelRef.current = channel;
         setIsLoadingEvent(false);
         setNoActiveEvent(false);
 
-        console.log("[TV] ✅ TV initialization complete");
+        console.log("[TV SYNC] initialization_complete");
       } catch (error) {
-        console.error("[TV] ❌ Failed to initialize TV:", error);
+        console.error("[TV SYNC] init_failed", error);
         setIsLoadingEvent(false);
       }
     };
@@ -239,24 +192,25 @@ export default function TVScreen() {
 
     // Cleanup
     return () => {
-      console.log("[TV] 🧹 Cleaning up subscription");
+      console.log("[TV SYNC] cleanup");
       if (eventChannelRef.current) {
         eventChannelRef.current.unsubscribe();
       }
     };
   }, [urlEventId]);
 
-  // ⏱️ COUNTDOWN TIMER (LOCAL CALCULATION)
+  // ⏱️ LOCAL COUNTDOWN TICK (NO POLLING!)
   useEffect(() => {
     if (!event?.question_open_until) {
       setTimeRemaining(0);
       return;
     }
 
+    // ✅ LOCAL TICK ONLY FOR DISPLAY (500ms)
     const interval = setInterval(() => {
       const now = new Date().getTime();
       const deadline = new Date(event.question_open_until!).getTime();
-      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+      const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
 
       // Play sounds
       if (remaining <= 3 && remaining > 0 && remaining !== timeRemaining) {
@@ -268,10 +222,23 @@ export default function TVScreen() {
       }
 
       setTimeRemaining(remaining);
-    }, 100);
+    }, 500); // 500ms tick for display only
 
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
+
+  // ✅ DEBUG HELPER
+  useEffect(() => {
+    (window as any).__TV_SYNC_STATUS__ = () => ({
+      activeEventId: event?.id,
+      realtimeConnected,
+      lastRealtimeAt,
+      currentQuestionNumber: event?.current_question_number,
+      currentDrawnNumber: event?.current_drawn_number,
+      questionOpenUntil: event?.question_open_until,
+      drawnCount: drawnNumbers.size
+    });
+  }, [event, realtimeConnected, lastRealtimeAt, drawnNumbers]);
 
   // Loading state
   if (isLoadingEvent) {
@@ -354,7 +321,7 @@ export default function TVScreen() {
                 </h2>
               </div>
 
-              {/* Timer */}
+              {/* Timer - 9s countdown */}
               <div className="text-center mb-8">
                 <div className={`text-8xl font-black ${
                   timeRemaining <= 3 ? 'text-red-600 animate-pulse' : 'text-blue-600'
