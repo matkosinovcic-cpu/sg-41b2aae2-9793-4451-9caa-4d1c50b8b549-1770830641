@@ -112,7 +112,6 @@ export default function PlayerScreen() {
           if (newEvent.status === "finished" && session && tickets.length > 0) {
             console.log("[PLAYER] 🏁 Event finished, loading stats...");
             loadStats();
-            loadDetailedResults();
           }
         }
       )
