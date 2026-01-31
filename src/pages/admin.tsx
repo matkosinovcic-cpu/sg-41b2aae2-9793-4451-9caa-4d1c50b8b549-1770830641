@@ -1,148 +1,279 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
-import { eventService, Event, Ticket } from "@/services/eventService";
+import { useState, useEffect, useRef } from "react";
+import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
 import { answerService, TicketStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Toaster } from "@/components/ui/toaster";
-import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy } from "lucide-react";
+import { Play, Pause, SkipForward, Plus, Ticket as TicketIcon, Trophy, CheckCircle } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+
+// ✅ CRITICAL: Answer timing configuration (SOURCE OF TRUTH)
+// Used for both player answer time and auto-draw interval
+const ANSWER_SECONDS = 9;  // Players have 9 seconds to answer
+const AUTO_DRAW_INTERVAL_MS = (ANSWER_SECONDS + 1) * 1000;  // Auto-draw waits 10s (answer time + 1s buffer)
 
 export default function AdminPanel() {
-  const { toast } = useToast();
-  
-  // Questions
-  const [questionText, setQuestionText] = useState("");
-  const [correctAnswer, setCorrectAnswer] = useState<boolean>(true);
-  const [questions, setQuestions] = useState<any[]>([]);
-
-  // Events
-  const [eventName, setEventName] = useState("");
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
-  
-  // Tickets
-  const [ticketCount, setTicketCount] = useState(10);
+  const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  
-  // Stats
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
-  
-  // Loading states
-  const [loading, setLoading] = useState(false);
 
-  // Load data
+  const [legacyAnswersCount, setLegacyAnswersCount] = useState<number>(0);
+  const [isDeletingLegacy, setIsDeletingLegacy] = useState(false);
+  const [newEventName, setNewEventName] = useState("");
+  const [ticketCount, setTicketCount] = useState(10);
+  const [loading, setLoading] = useState(false);
+  
+  // CRITICAL: Continue mode state - defaults to FALSE for each event
+  const [continueAfterWinner, setContinueAfterWinner] = useState<Record<string, boolean>>({});
+  
+  // ✅ Auto-draw refs (critical for stability)
+  const autoTimerRef = useRef<Record<string, NodeJS.Timeout | null>>({});
+  const autoRunningRef = useRef<Record<string, boolean>>({});
+  const autoInFlightRef = useRef<Record<string, boolean>>({});
+  
+  // UI state for button toggles
+  const [autoDrawingState, setAutoDrawingState] = useState<Record<string, boolean>>({});
+  
+  const { toast } = useToast();
+
   useEffect(() => {
-    loadQuestions();
     loadEvents();
+    
+    // ✅ Cleanup on unmount
+    return () => {
+      Object.keys(autoTimerRef.current).forEach(eventId => {
+        stopAuto(eventId, "unmount");
+      });
+    };
   }, []);
 
-  useEffect(() => {
-    if (selectedEvent) {
-      loadTickets(selectedEvent.id);
-      loadStats(selectedEvent.id);
+  // ✅ STOP AUTO implementation
+  const stopAuto = (eventId: string, reason: string) => {
+    if (autoTimerRef.current[eventId]) {
+      clearInterval(autoTimerRef.current[eventId]!);
+      autoTimerRef.current[eventId] = null;
     }
-  }, [selectedEvent]);
-
-  const loadQuestions = async () => {
-    try {
-      const data = await eventService.getAllQuestions();
-      setQuestions(data);
-    } catch (error: any) {
-      console.error("Failed to load questions:", error);
+    
+    autoRunningRef.current[eventId] = false;
+    autoInFlightRef.current[eventId] = false;
+    
+    // Update UI
+    setAutoDrawingState(prev => {
+      if (!prev[eventId]) return prev; // Avoid unnecessary renders
+      return { ...prev, [eventId]: false };
+    });
+    
+    console.log(`[AUTO] stopped ${eventId}`, reason);
+    if (reason === "manual") {
+      toast({
+        title: "Auto izvlačenje zaustavljeno",
+        description: "Zaustavili ste automatsko izvlačenje. Možete nastaviti ručno.",
+      });
     }
   };
+
+  // ✅ START AUTO implementation
+  const startAuto = (eventId: string) => {
+    // Prevent double start
+    if (autoRunningRef.current[eventId]) return;
+
+    console.log(`[AUTO] starting ${eventId}`);
+    
+    // Set running state
+    autoRunningRef.current[eventId] = true;
+    setAutoDrawingState(prev => ({ ...prev, [eventId]: true }));
+    
+    toast({
+      title: "Auto izvlačenje pokrenuto",
+      description: `Interval: ${ANSWER_SECONDS + 1}s`,
+    });
+
+    // Start interval
+    autoTimerRef.current[eventId] = setInterval(async () => {
+      // DEBUG LOG
+      console.log(`[AUTO] tick ${eventId}`, { 
+        running: autoRunningRef.current[eventId], 
+        inFlight: autoInFlightRef.current[eventId] 
+      });
+      
+      if (!autoRunningRef.current[eventId]) return;
+      if (autoInFlightRef.current[eventId]) return;
+
+      autoInFlightRef.current[eventId] = true;
+
+      try {
+        // 1) RE-FETCH event iz baze (svaki tick) da ne koristimo stale state
+        const { data: freshEvent, error } = await supabase
+          .from("events")
+          .select("*")
+          .eq("id", eventId)
+          .single();
+
+        if (error || !freshEvent) {
+          console.error("[AUTO] Failed to fetch event", error);
+          return;
+        }
+
+        console.log(`[AUTO] event state ${eventId}`, { 
+          status: freshEvent.status, 
+          winner: freshEvent.winner_ticket_id 
+        });
+
+        // 2) Guard: stop ako je finished ili ima winner ili nije active
+        if (freshEvent.status === "finished" || freshEvent.winner_ticket_id || freshEvent.status !== "active") {
+          stopAuto(eventId, "winner_or_finished_or_paused");
+          
+          if (freshEvent.winner_ticket_id) {
+             toast({ 
+               title: "Pobjednik pronađen!", 
+               description: `Ulaznica: ${freshEvent.winner_ticket_id}` 
+             });
+          } else if (freshEvent.status === "finished") {
+             toast({ title: "Auto stop", description: "Event je završen." });
+          } else {
+             toast({ title: "Auto stop", description: "Event nije aktivan." });
+          }
+          
+          await loadEvents();
+          return;
+        }
+
+        // 3) Check drawn count limit
+        if ((freshEvent.drawn_numbers?.length || 0) >= 90) {
+           stopAuto(eventId, "max_questions");
+           toast({ title: "Auto stop", description: "Svih 90 pitanja izvučeno." });
+           await loadEvents();
+           return;
+        }
+
+        // 4) Povuci sljedeće pitanje
+        await eventService.drawNextQuestion(eventId);
+        console.log(`[AUTO] drawNextQuestion OK ${eventId}`);
+        
+        // Refresh UI list
+        await loadEvents();
+
+      } catch (e: any) {
+        console.error("[AUTO] drawNextQuestion FAILED", e);
+        // Ne gasimo auto na prvi network error, ali logiramo
+      } finally {
+        autoInFlightRef.current[eventId] = false;
+      }
+    }, AUTO_DRAW_INTERVAL_MS);
+  };
+
+  // ✅ Cleanup: Stop ALL auto-draw intervals on unmount
+  useEffect(() => {
+    Object.keys(autoRunningRef.current).forEach(eventId => {
+      stopAuto(eventId, "unmount");
+    });
+  }, []);
+
+  // Load event details when selected
+  useEffect(() => {
+    if (selectedEvent) {
+      loadEventDetails(selectedEvent.id);
+      
+      // Load ticket stats if event is finished
+      if (selectedEvent.status === "finished") {
+        loadTicketStats(selectedEvent.id);
+      }
+    }
+  }, [selectedEvent?.id, selectedEvent?.status]);
+
+  // Real-time subscription for answers (only when finished)
+  useEffect(() => {
+    if (!selectedEvent || selectedEvent.status !== "finished") return;
+
+    console.log("[Admin] Setting up answer subscription for finished event:", selectedEvent.id);
+
+    const subscription = answerService.subscribeToEventAnswers(selectedEvent.id, () => {
+      console.log("[Admin] Answer update detected, reloading stats");
+      loadTicketStats(selectedEvent.id);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [selectedEvent?.id, selectedEvent?.status]);
+
+  // CRITICAL: Only poll stats when event is finished
+  useEffect(() => {
+    if (!selectedEvent || selectedEvent.status !== "finished") return;
+
+    const pollInterval = setInterval(() => {
+      loadTicketStats(selectedEvent.id);
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [selectedEvent?.id, selectedEvent?.status]);
 
   const loadEvents = async () => {
     try {
       const data = await eventService.getEvents();
       setEvents(data);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Failed to load events:", error);
     }
   };
 
-  const loadTickets = async (eventId: string) => {
+  const loadEventDetails = async (eventId: string) => {
     try {
-      const data = await eventService.getTickets(eventId);
-      setTickets(data);
-    } catch (error: any) {
-      console.error("Failed to load tickets:", error);
+      const [questionsData, ticketsData] = await Promise.all([
+        eventService.getEventQuestions(eventId),
+        eventService.getTickets(eventId),
+      ]);
+      setEventQuestions(questionsData);
+      setTickets(ticketsData);
+    } catch (error) {
+      console.error("Failed to load event details:", error);
     }
   };
 
-  const loadStats = async (eventId: string) => {
+  const loadTicketStats = async (eventId: string) => {
     try {
-      const data = await answerService.getEventTicketStats(eventId);
-      setTicketStats(data);
-    } catch (error: any) {
-      console.error("Failed to load stats:", error);
+      const result = await answerService.getEventTicketStats(eventId);
+      console.log("[Admin] ✅ Loaded ticket stats:", result.length, "tickets");
+      setTicketStats(result);
+    } catch (error) {
+      console.error("[Admin] Failed to load ticket stats:", error);
     }
   };
 
-  // Question actions
-  const handleCreateQuestion = async () => {
-    if (!questionText.trim()) {
-      toast({
-        title: "Error",
-        description: "Molim unesite tekst pitanja",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await eventService.createQuestion(questionText, correctAnswer);
-      setQuestionText("");
-      setCorrectAnswer(true);
-      await loadQuestions();
-      
-      toast({
-        title: "Success",
-        description: "Pitanje kreirano"
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Event actions
   const handleCreateEvent = async () => {
-    if (!eventName.trim()) {
+    if (!newEventName.trim()) {
       toast({
         title: "Error",
-        description: "Molim unesite naziv eventa",
-        variant: "destructive"
+        description: "Please enter an event name",
+        variant: "destructive",
       });
       return;
     }
 
     setLoading(true);
     try {
-      const event = await eventService.createEvent(eventName);
-      setEventName("");
+      const newEvent = await eventService.createEvent(newEventName);
+      setNewEventName("");
       await loadEvents();
-      setSelectedEvent(event);
+      
+      // CRITICAL: Ensure continue mode is OFF for new event
+      setContinueAfterWinner(prev => ({ ...prev, [newEvent.id]: false }));
       
       toast({
         title: "Success",
-        description: "Event kreiran"
+        description: "Event created successfully",
       });
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
-        variant: "destructive"
+        description: "Failed to create event",
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -152,23 +283,20 @@ export default function AdminPanel() {
   const handleGenerateQuestions = async (eventId: string) => {
     setLoading(true);
     try {
-      const result = await eventService.generateEventQuestions(eventId);
-      
+      await eventService.generateEventQuestions(eventId);
+      if (selectedEvent?.id === eventId) {
+        await loadEventDetails(eventId);
+      }
+      await loadEvents();
       toast({
         title: "Success",
-        description: `Generirano ${result.count} pitanja (od ${result.total} dostupnih)`
+        description: "90 questions generated successfully",
       });
-      
-      await loadEvents();
-      if (selectedEvent?.id === eventId) {
-        const updated = await eventService.getEvent(eventId);
-        setSelectedEvent(updated);
-      }
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
-        variant: "destructive"
+        description: "Failed to generate questions",
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -179,17 +307,18 @@ export default function AdminPanel() {
     setLoading(true);
     try {
       await eventService.generateTickets(eventId, ticketCount);
-      await loadTickets(eventId);
-      
+      if (selectedEvent?.id === eventId) {
+        await loadEventDetails(eventId);
+      }
       toast({
         title: "Success",
-        description: `Generirano ${ticketCount} ulaznica`
+        description: `${ticketCount} tickets generated successfully`,
       });
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
-        variant: "destructive"
+        description: "Failed to generate tickets",
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -199,49 +328,49 @@ export default function AdminPanel() {
   const handleStartEvent = async (eventId: string) => {
     setLoading(true);
     try {
-      await eventService.startEvent(eventId);
-      await loadEvents();
-      
-      if (selectedEvent?.id === eventId) {
-        const updated = await eventService.getEvent(eventId);
-        setSelectedEvent(updated);
-      }
-      
-      toast({
-        title: "Success",
-        description: "Event pokrenut"
-      });
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+      // ✅ Re-fetch event to check current status
+      const { data: freshEvent, error: fetchError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("id", eventId)
+        .maybeSingle();
 
-  const handlePauseEvent = async (eventId: string) => {
-    setLoading(true);
-    try {
-      await eventService.pauseEvent(eventId);
-      await loadEvents();
-      
-      if (selectedEvent?.id === eventId) {
-        const updated = await eventService.getEvent(eventId);
-        setSelectedEvent(updated);
+      if (fetchError || !freshEvent) {
+        toast({
+          title: "Error",
+          description: "Failed to fetch event state",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
       }
+
+      // ✅ PREVENT restarting FINISHED events
+      if (freshEvent.status === "finished") {
+        toast({
+          title: "Event je završen",
+          description: "Ne možete ponovno pokrenuti završen event. Koristite 'Reset Event' za novo izvlačenje.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      await eventService.startEvent(eventId);
       
+      // ✅ Reset continue mode when starting/resuming
+      setContinueAfterWinner(prev => ({ ...prev, [eventId]: false }));
+      
+      await loadEvents();
       toast({
         title: "Success",
-        description: "Event pauziran"
+        description: freshEvent.status === "paused" ? "Event nastavljen" : "Event pokrenut",
       });
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: "Error",
-        description: error.message,
-        variant: "destructive"
+        description: "Failed to start event",
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -251,356 +380,568 @@ export default function AdminPanel() {
   const handleDrawNextQuestion = async (eventId: string) => {
     setLoading(true);
     try {
-      console.log("[ADMIN] Drawing question for event:", eventId);
-      
-      const result = await eventService.drawNextQuestion(eventId);
-      
-      console.log("[ADMIN] Question drawn:", result.drawnNumber);
-      
+      // ✅ CRITICAL: Re-fetch event from DB to get latest state (SOURCE OF TRUTH)
+      const { data: freshEvent, error: fetchError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("id", eventId)
+        .maybeSingle();
+
+      if (fetchError || !freshEvent) {
+        toast({
+          title: "Error",
+          description: "Failed to fetch event state",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ✅ STATE MACHINE: Enforce strict status rules
+      if (freshEvent.status === "finished") {
+        toast({
+          title: "Event završen",
+          description: "Event je završen (pobjednik postoji). Za novo izvlačenje koristi 'Reset Event'.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (freshEvent.status === "paused") {
+        toast({
+          title: "Event pauziran",
+          description: "Event je pauziran. Klikni 'Nastavi' za nastavak.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (freshEvent.status !== "active") {
+        toast({
+          title: "Nevažeći status",
+          description: `Event mora biti aktivan za izvlačenje (trenutni status: ${freshEvent.status})`,
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ✅ ACTIVE status: Allow draw
+      await eventService.drawNextQuestion(eventId);
       await loadEvents();
       
       if (selectedEvent?.id === eventId) {
-        const updated = await eventService.getEvent(eventId);
-        setSelectedEvent(updated);
+        const updatedEvent = await eventService.getEvent(eventId);
+        setSelectedEvent(updatedEvent);
       }
       
       toast({
         title: "Success",
-        description: `Pitanje #${result.drawnNumber} izvučeno`
+        description: "Pitanje izvučeno",
       });
     } catch (error: any) {
-      console.error("[ADMIN] Draw failed:", error);
       toast({
         title: "Error",
-        description: error.message,
-        variant: "destructive"
+        description: error.message || "Failed to draw question",
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
     }
   };
 
+  const handleContinueAfterWinner = (eventId: string) => {
+    setContinueAfterWinner(prev => ({ ...prev, [eventId]: true }));
+    toast({
+      title: "Continue Mode Enabled",
+      description: "Drawing will continue until 90. Winner remains locked.",
+    });
+  };
+
+  const handleResetEvent = async (eventId: string) => {
+    // ✅ CONFIRMATION REQUIRED
+    const confirmed = window.confirm(
+      "⚠️ RESET EVENT?\n\n" +
+      "Ovo će:\n" +
+      "• Resetirati event status na DRAFT\n" +
+      "• Obrisati pobjednika\n" +
+      "• Obrisati sva izvučena pitanja\n" +
+      "• ZADRŽATI sve odgovore igrača\n\n" +
+      'Za potvrdu, klikni "OK".'
+    );
+
+    if (!confirmed) return;
+
+    setLoading(true);
+    try {
+      // ✅ Reset event using UPDATE instead of delete
+      const { error } = await supabase
+        .from("events")
+        .update({
+          status: "draft",
+          winner_ticket_id: null,
+          current_question_number: 0,
+          current_drawn_number: null,
+          drawn_numbers: [],
+          question_open_until: null,
+        })
+        .eq("id", eventId);
+
+      if (error) throw error;
+      
+      // Also clear event_questions drawn status
+      const { error: qError } = await supabase
+        .from("event_questions")
+        .update({ drawn: false, drawn_at: null })
+        .eq("event_id", eventId);
+        
+      if (qError) console.error("Failed to reset questions", qError);
+
+      await loadEvents();
+      
+      toast({
+        title: "Event resetiran",
+        description: "Event je vraćen u DRAFT stanje.",
+      });
+    } catch (error) {
+      console.error("Failed to reset event:", error);
+      toast({
+        title: "Greška",
+        description: "Nije moguće resetirati event.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const colors = {
+      draft: "bg-gray-500",
+      active: "bg-green-500",
+      paused: "bg-yellow-500",
+      finished: "bg-blue-500",
+    };
+    return (
+      <Badge className={`${colors[status as keyof typeof colors]} text-white`}>
+        {status.toUpperCase()}
+      </Badge>
+    );
+  };
+
+  const getWinnerSerial = (winnerId: string | null) => {
+    if (!winnerId) return null;
+    const winnerTicket = tickets.find(t => t.id === winnerId);
+    return winnerTicket?.serial_number || winnerId;
+  };
+
+  const handleClearLegacyAnswers = async () => {
+    // Legacy cleanup removed as service method is deprecated
+    toast({
+      title: "Info",
+      description: "Legacy cleanup is no longer needed with the new architecture.",
+    });
+  };
+
   return (
     <>
       <SEO title="Admin Panel - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-8">
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4">
         <div className="container mx-auto max-w-7xl">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-black text-white mb-2">
-              PITALICA SKITALICA - ADMIN
-            </h1>
-            <p className="text-white/60">Upravljanje sistemom</p>
+          <div className="mb-6">
+            <h1 className="text-4xl font-black text-white mb-2">ADMIN PANEL</h1>
+            <p className="text-white/80">Upravljanje događajima i igrama</p>
           </div>
 
-          <Tabs defaultValue="events" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="questions">Pitanja</TabsTrigger>
-              <TabsTrigger value="events">Eventi</TabsTrigger>
-              <TabsTrigger value="tickets">Ulaznice</TabsTrigger>
+          <Tabs defaultValue="events" className="space-y-4">
+            <TabsList className="bg-white/20 backdrop-blur-sm">
+              <TabsTrigger value="events">Događaji</TabsTrigger>
+              <TabsTrigger value="details" disabled={!selectedEvent}>
+                Detalji
+              </TabsTrigger>
             </TabsList>
 
-            {/* Questions Tab */}
-            <TabsContent value="questions">
-              <Card>
+            <TabsContent value="events" className="space-y-4">
+              <Card className="bg-white/95 backdrop-blur-sm">
                 <CardHeader>
-                  <CardTitle>Kreiraj Pitanje</CardTitle>
+                  <CardTitle>Kreiraj novi događaj</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Input
-                    placeholder="Tekst pitanja"
-                    value={questionText}
-                    onChange={(e) => setQuestionText(e.target.value)}
-                  />
-                  
-                  <div className="flex gap-4">
-                    <Button
-                      variant={correctAnswer ? "default" : "outline"}
-                      onClick={() => setCorrectAnswer(true)}
-                      className="flex-1"
-                    >
-                      Točan odgovor: DA
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Naziv događaja"
+                      value={newEventName}
+                      onChange={(e) => setNewEventName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleCreateEvent()}
+                    />
+                    <Button onClick={handleCreateEvent} disabled={loading}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Kreiraj
                     </Button>
-                    <Button
-                      variant={!correctAnswer ? "default" : "outline"}
-                      onClick={() => setCorrectAnswer(false)}
-                      className="flex-1"
-                    >
-                      Točan odgovor: NE
-                    </Button>
-                  </div>
-
-                  <Button
-                    onClick={handleCreateQuestion}
-                    disabled={loading || !questionText.trim()}
-                    className="w-full"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Dodaj Pitanje
-                  </Button>
-
-                  <div className="text-sm text-gray-600">
-                    Ukupno pitanja u pool-u: {questions.length}
                   </div>
                 </CardContent>
               </Card>
 
-              <Card className="mt-6">
+              <Card className="bg-white/95 backdrop-blur-sm">
                 <CardHeader>
-                  <CardTitle>Sva Pitanja ({questions.length})</CardTitle>
+                  <CardTitle>Svi događaji</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {questions.map((q) => (
-                      <div
-                        key={q.id}
-                        className="p-3 bg-gray-50 rounded border flex justify-between items-center"
-                      >
-                        <span className="flex-1">{q.text}</span>
-                        <Badge variant={q.correct_answer ? "default" : "destructive"}>
-                          {q.correct_answer ? "DA" : "NE"}
-                        </Badge>
-                      </div>
+                  <div className="space-y-4">
+                    {events.map((event) => (
+                      <Card key={event.id} className="border-2">
+                        <CardContent className="pt-6">
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                              <h3 className="text-xl font-bold">{event.name}</h3>
+                              {getStatusBadge(event.status)}
+                              {event.winner_ticket_id && (
+                                <div className="flex items-center gap-2 bg-yellow-100 px-3 py-1 rounded">
+                                  <Trophy className="w-5 h-5 text-yellow-600" />
+                                  <span className="font-bold text-yellow-600">
+                                    WINNER: {getWinnerSerial(event.winner_ticket_id)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            <Button
+                              variant="outline"
+                              onClick={() => setSelectedEvent(event)}
+                            >
+                              Otvori detalje
+                            </Button>
+                          </div>
+
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-blue-600">
+                                {event.current_drawn_number || "-"}
+                              </div>
+                              <div className="text-sm text-gray-600">Trenutni broj</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-purple-600">
+                                {event.drawn_numbers?.length || 0} / 90
+                              </div>
+                              <div className="text-sm text-gray-600">Izvučeno</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-green-600">
+                                {event.current_question_number || 0}
+                              </div>
+                              <div className="text-sm text-gray-600">Pitanje br.</div>
+                            </div>
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-orange-600">
+                                {tickets.filter((t) => t.event_id === event.id).length}
+                              </div>
+                              <div className="text-sm text-gray-600">Ulaznice</div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            {event.status === "draft" && (
+                              <>
+                                <Button
+                                  onClick={() => handleGenerateQuestions(event.id)}
+                                  disabled={loading || event.current_question_number > 0}
+                                  size="sm"
+                                >
+                                  Generiraj 90 pitanja
+                                </Button>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    max="100"
+                                    value={ticketCount}
+                                    onChange={(e) =>
+                                      setTicketCount(parseInt(e.target.value) || 10)
+                                    }
+                                    className="w-20"
+                                  />
+                                  <Button
+                                    onClick={() => handleGenerateTickets(event.id)}
+                                    disabled={loading}
+                                    size="sm"
+                                  >
+                                    <TicketIcon className="w-4 h-4 mr-2" />
+                                    Generiraj ulaznice
+                                  </Button>
+                                </div>
+                                <Button
+                                  onClick={() => handleStartEvent(event.id)}
+                                  disabled={loading || event.current_question_number === 0}
+                                  variant="default"
+                                  size="sm"
+                                >
+                                  <Play className="w-4 h-4 mr-2" />
+                                  Pokreni događaj
+                                </Button>
+                              </>
+                            )}
+
+                            {event.status === "active" && (
+                              <>
+                                {/* ✅ MANUAL DRAW BUTTON (disabled during auto-draw) */}
+                                <Button
+                                  onClick={() => handleDrawNextQuestion(event.id)}
+                                  disabled={loading || autoDrawingState[event.id]}
+                                  size="sm"
+                                >
+                                  <SkipForward className="w-4 h-4 mr-1" />
+                                  Izvuci sljedeće pitanje
+                                </Button>
+
+                                {/* ✅ AUTO DRAW BUTTON */}
+                                {!autoDrawingState[event.id] ? (
+                                  <div className="flex flex-col gap-1">
+                                    <Button
+                                      onClick={() => startAuto(event.id)}
+                                      disabled={loading}
+                                      variant="secondary"
+                                      size="sm"
+                                    >
+                                      <Play className="w-4 h-4 mr-1" />
+                                      Auto izvlačenje
+                                    </Button>
+                                    <span className="text-xs text-gray-500 text-center">
+                                      svakih {ANSWER_SECONDS + 1}s
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <Button
+                                    onClick={() => stopAuto(event.id, "manual_stop")}
+                                    disabled={loading}
+                                    variant="destructive"
+                                    size="sm"
+                                  >
+                                    <Pause className="w-4 h-4 mr-1" />
+                                    Zaustavi auto
+                                  </Button>
+                                )}
+                              </>
+                            )}
+
+                            {event.status === "paused" && (
+                              <Button
+                                onClick={() => handleStartEvent(event.id)}
+                                disabled={loading}
+                                variant="default"
+                                size="sm"
+                              >
+                                <Play className="w-4 h-4 mr-2" />
+                                Nastavi
+                              </Button>
+                            )}
+
+                            {event.status === "finished" && (
+                              <Button
+                                onClick={() => handleResetEvent(event.id)}
+                                disabled={loading}
+                                variant="destructive"
+                                size="sm"
+                              >
+                                🔄 Reset Event
+                              </Button>
+                            )}
+                          </div>
+
+                          {event.status === "active" &&
+                            (event.drawn_numbers?.length || 0) >= 90 && (
+                              <div className="mt-4 bg-yellow-100 border-2 border-yellow-500 rounded-lg p-3 text-center">
+                                <p className="font-bold text-yellow-800">
+                                  Svih 90 brojeva je izvučeno!
+                                </p>
+                              </div>
+                            )}
+                        </CardContent>
+                      </Card>
                     ))}
                   </div>
                 </CardContent>
               </Card>
             </TabsContent>
 
-            {/* Events Tab */}
-            <TabsContent value="events">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Kreiraj Event</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Input
-                    placeholder="Naziv eventa"
-                    value={eventName}
-                    onChange={(e) => setEventName(e.target.value)}
-                  />
-                  <Button
-                    onClick={handleCreateEvent}
-                    disabled={loading || !eventName.trim()}
-                    className="w-full"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Kreiraj Event
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                {events.map((event) => (
-                  <Card
-                    key={event.id}
-                    className={selectedEvent?.id === event.id ? "ring-2 ring-blue-500" : ""}
-                  >
+            <TabsContent value="details" className="space-y-4">
+              {selectedEvent && (
+                <>
+                  <Card className="bg-white/95 backdrop-blur-sm">
                     <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">{event.name}</CardTitle>
-                        <Badge
-                          variant={
-                            event.status === "active"
-                              ? "default"
-                              : event.status === "finished"
-                              ? "secondary"
-                              : "outline"
-                          }
-                        >
-                          {event.status}
-                        </Badge>
-                      </div>
+                      <CardTitle>{selectedEvent.name}</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="grid grid-cols-2 gap-2 text-sm">
+                    <CardContent>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
-                          <div className="text-gray-500">Status</div>
-                          <Badge variant={
-                            event.status === "active" ? "default" :
-                            event.status === "finished" ? "secondary" :
-                            "outline"
-                          }>
-                            {event.status}
-                          </Badge>
-                        </div>
-                        <div>
-                          <div className="text-gray-500">Pitanje</div>
-                          <div className="font-semibold">
-                            {event.drawn_numbers?.length || 0} / 90
+                          <div className="text-sm text-gray-600">Status</div>
+                          <div className="font-bold">
+                            {getStatusBadge(selectedEvent.status)}
                           </div>
                         </div>
                         <div>
-                          <div className="text-gray-500">Izvučeno</div>
-                          <div className="font-semibold">
-                            {event.current_drawn_number || "-"}
+                          <div className="text-sm text-gray-600">Trenutni broj</div>
+                          <div className="text-2xl font-bold text-blue-600">
+                            {selectedEvent.current_drawn_number || "-"}
                           </div>
                         </div>
                         <div>
-                          <div className="text-gray-500">Tiketa</div>
-                          <div className="font-semibold">{ticketCount}</div>
+                          <div className="text-sm text-gray-600">Izvučeno</div>
+                          <div className="text-2xl font-bold text-purple-600">
+                            {selectedEvent.drawn_numbers?.length || 0} / 90
+                          </div>
                         </div>
+                        <div>
+                          <div className="text-sm text-gray-600">Pitanje</div>
+                          <div className="text-2xl font-bold text-green-600">
+                            #{selectedEvent.current_question_number || 0}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* CRITICAL: Only show stats when game is finished */}
+                  {selectedEvent.status === "finished" && ticketStats.length > 0 && (
+                    <>
+                      {/* Stats Overview */}
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Ukupno odigranih listića
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">{ticketStats.length}</div>
+                          </CardContent>
+                        </Card>
+                        
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Aktivni igrači
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {ticketStats.filter(s => s.answered > 0).length}
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-gray-500">
+                              Ukupna točnost
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="text-2xl font-bold">
+                              {ticketStats.length > 0
+                                ? Math.round(
+                                    (ticketStats.reduce((sum, s) => sum + s.correct, 0) /
+                                      Math.max(1, ticketStats.reduce((sum, s) => sum + s.answered, 0))) *
+                                      100
+                                  )
+                                : 0}
+                              %
+                            </div>
+                          </CardContent>
+                        </Card>
                       </div>
 
-                      {event.winner_ticket_id && (
-                        <div className="bg-yellow-100 border border-yellow-400 rounded p-2 flex items-center gap-2">
-                          <Trophy className="w-4 h-4 text-yellow-600" />
-                          <span className="text-sm font-bold text-yellow-900">
-                            POBJEDNIK: {event.winner_ticket_id.slice(-4)}
-                          </span>
+                      {/* Legacy Data Warning */}
+                      {legacyAnswersCount > 0 && (
+                        <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
+                          <div className="font-semibold text-yellow-900 mb-1">
+                            ⚠️ Zastarjeli podaci ({legacyAnswersCount} odgovora)
+                          </div>
+                          <p className="text-sm text-yellow-800 mb-3">
+                            Ovaj event ima odgovore iz starog sustava koji ne sadrže ticket_id. 
+                            Ovi odgovori se ne prikazuju u statistici jer nije moguće pouzdano 
+                            odrediti kojoj ulaznici pripadaju.
+                          </p>
+                          <Button
+                            onClick={handleClearLegacyAnswers}
+                            disabled={isDeletingLegacy}
+                            variant="outline"
+                            size="sm"
+                          >
+                            {isDeletingLegacy ? "Brisanje..." : "Obriši zastarjele odgovore"}
+                          </Button>
                         </div>
                       )}
 
-                      <div className="flex flex-col gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setSelectedEvent(event)}
-                        >
-                          Odaberi Event
-                        </Button>
-
-                        {event.status === "draft" && (
-                          <>
-                            <Button
-                              size="sm"
-                              onClick={() => handleGenerateQuestions(event.id)}
-                              disabled={loading}
-                            >
-                              Generiraj 90 Pitanja
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => handleStartEvent(event.id)}
-                              disabled={loading}
-                            >
-                              <Play className="w-4 h-4 mr-2" />
-                              Pokreni Event
-                            </Button>
-                          </>
-                        )}
-
-                        {event.status === "active" && (
-                          <>
-                            <Button
-                              size="sm"
-                              onClick={() => handleDrawNextQuestion(event.id)}
-                              disabled={loading}
-                            >
-                              <SkipForward className="w-4 h-4 mr-2" />
-                              Izvuci Sljedeće Pitanje
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handlePauseEvent(event.id)}
-                              disabled={loading}
-                            >
-                              <Pause className="w-4 h-4 mr-2" />
-                              Pauziraj
-                            </Button>
-                          </>
-                        )}
-
-                        {event.status === "paused" && (
-                          <Button
-                            size="sm"
-                            onClick={() => handleStartEvent(event.id)}
-                            disabled={loading}
-                          >
-                            <Play className="w-4 h-4 mr-2" />
-                            Nastavi Event
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </TabsContent>
-
-            {/* Tickets Tab */}
-            <TabsContent value="tickets">
-              {selectedEvent ? (
-                <>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Generiraj Ulaznice - {selectedEvent.name}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <Input
-                        type="number"
-                        placeholder="Broj ulaznica"
-                        value={ticketCount}
-                        onChange={(e) => setTicketCount(parseInt(e.target.value) || 0)}
-                        min={1}
-                        max={100}
-                      />
-                      <Button
-                        onClick={() => handleGenerateTickets(selectedEvent.id)}
-                        disabled={loading || ticketCount < 1}
-                        className="w-full"
-                      >
-                        <TicketIcon className="w-4 h-4 mr-2" />
-                        Generiraj {ticketCount} Ulaznica
-                      </Button>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="mt-6">
-                    <CardHeader>
-                      <CardTitle>Ulaznice ({tickets.length})</CardTitle>
-                    </CardHeader>
-                    <CardContent>
+                      {/* CRITICAL: Final Statistics - ONLY when event is finished */}
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {tickets.map((ticket) => {
-                          const stats = ticketStats.find(s => s.ticket_id === ticket.id);
-                          
-                          return (
-                            <Card key={ticket.id} className={ticket.is_winner ? "border-4 border-yellow-400" : ""}>
-                              <CardContent className="pt-4">
-                                <div className="flex items-center justify-between mb-2">
-                                  <Badge>{ticket.serial_number}</Badge>
-                                  {ticket.is_winner && (
-                                    <Trophy className="w-5 h-5 text-yellow-500" />
-                                  )}
+                        {ticketStats.map((stat) => (
+                          <Card key={stat.ticket_serial}>
+                            <CardContent className="pt-6">
+                              <div className="text-center mb-4">
+                                <Badge className="bg-purple-600 text-white">
+                                  {stat.ticket_serial}
+                                </Badge>
+                              </div>
+
+                              <div className="space-y-2">
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Točno:</span>
+                                  <span className="font-semibold text-green-600">
+                                    {stat.correct} / {stat.drawn_on_ticket}
+                                  </span>
                                 </div>
-                                
-                                {stats && (
-                                  <div className="grid grid-cols-3 gap-2 text-xs mt-2">
-                                    <div className="text-center">
-                                      <div className="font-bold text-green-600">{stats.correct}</div>
-                                      <div className="text-gray-500">Točno</div>
-                                    </div>
-                                    <div className="text-center">
-                                      <div className="font-bold text-red-600">{stats.incorrect}</div>
-                                      <div className="text-gray-500">Netočno</div>
-                                    </div>
-                                    <div className="text-center">
-                                      <div className="font-bold text-blue-600">{stats.percentage}%</div>
-                                      <div className="text-gray-500">Točnost</div>
-                                    </div>
-                                  </div>
-                                )}
-                              </CardContent>
-                            </Card>
-                          );
-                        })}
+
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Odgovoreno:</span>
+                                  <span className="font-semibold">
+                                    {stat.answered} / {stat.drawn_on_ticket}
+                                  </span>
+                                </div>
+
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Propušteno:</span>
+                                  <span className="font-semibold text-orange-600">
+                                    {stat.missed}
+                                  </span>
+                                </div>
+
+                                <div className="flex justify-between">
+                                  <span className="text-sm text-gray-600">Točnost:</span>
+                                  <span className="font-bold text-blue-600">
+                                    {stat.percentage}%
+                                  </span>
+                                </div>
+
+                                <div className="text-xs text-gray-500 mt-2 pt-2 border-t">
+                                  Izvučeno na ovoj ulaznici: {stat.drawn_on_ticket}
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
                       </div>
-                    </CardContent>
-                  </Card>
+                    </>
+                  )}
+
+                  {selectedEvent.status === "finished" && ticketStats.length === 0 && (
+                    <p className="text-center text-gray-500">
+                      Nema odgovora. Nitko nije igrao.
+                    </p>
+                  )}
+
+                  {selectedEvent.status !== "finished" && (
+                    <p className="text-center text-gray-500">
+                      Statistika će biti dostupna nakon završetka eventa.
+                    </p>
+                  )}
                 </>
-              ) : (
-                <Card>
-                  <CardContent className="py-12 text-center text-gray-500">
-                    Odaberi event da vidiš ulaznice
-                  </CardContent>
-                </Card>
               )}
             </TabsContent>
           </Tabs>
         </div>
       </div>
-      <Toaster />
     </>
   );
 }

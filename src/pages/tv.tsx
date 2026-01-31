@@ -2,217 +2,178 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
+import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
+import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Gamepad2, Trophy, Clock } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { Trophy } from "lucide-react";
+
+interface TicketData {
+  id: string;
+  serial_number: string;
+  event_id: string;
+  is_winner: boolean;
+  ticket_questions: Array<{ question_number: number }>;
+}
 
 export default function TVScreen() {
   const router = useRouter();
-  const { eventId: urlEventId } = router.query;
-
+  const [events, setEvents] = useState<Event[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
-  const [questionText, setQuestionText] = useState<string>("");
-  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [questionText, setQuestionText] = useState<string | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
-  const [isLoadingEvent, setIsLoadingEvent] = useState(true);
-  const [noActiveEvent, setNoActiveEvent] = useState(false);
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
-  const [lastRealtimeAt, setLastRealtimeAt] = useState<string | null>(null);
-
-  const eventChannelRef = useRef<any>(null);
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [pollingActive, setPollingActive] = useState(false);
+  const [loadingError, setLoadingError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const lastDrawnNumberRef = useRef<number | null>(null);
+  const [tickets, setTickets] = useState<TicketData[]>([]);
+  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
+  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
 
-  // Initialize audio context
   useEffect(() => {
-    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
-    };
-  }, []);
-
-  // Play beep sound
-  const playBeep = (type: 'start' | 'tick' | 'end') => {
-    if (!audioContextRef.current) return;
-
-    const ctx = audioContextRef.current;
-    const oscillator = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-
-    oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
-
-    if (type === 'start') {
-      oscillator.frequency.value = 800;
-      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.3);
-    } else if (type === 'tick') {
-      oscillator.frequency.value = 600;
-      gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.1);
-    } else if (type === 'end') {
-      oscillator.frequency.value = 400;
-      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.5);
-    }
-  };
-
-  // Load current question
-  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
+    // Initialize AudioContext with error handling
     try {
-      console.log("[TV SYNC] loading_question", questionNumber);
-      const questionData = await eventService.getEventQuestion(eventId, questionNumber);
-      setCurrentQuestion(questionData);
-      
-      if (questionData.questions) {
-        setQuestionText(questionData.questions.text);
-        console.log("[TV SYNC] question_loaded", questionData.questions.text);
-      }
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      console.log("[TV] ✅ AudioContext initialized");
     } catch (error) {
-      console.error("[TV SYNC] question_load_failed", error);
+      console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
+    }
+
+    // Load available events
+    const initializeTV = async () => {
+      try {
+        console.log("[TV] 🚀 Initializing TV display...");
+        await loadEvents();
+        console.log("[TV] ✅ Events loaded successfully");
+        
+        // Priority 1: URL query param
+        const urlEventId = router.query.eventId as string;
+        
+        // Priority 2: localStorage
+        const storedEventId = localStorage.getItem("tv_event_id");
+        
+        const targetEventId = urlEventId || storedEventId;
+        
+        if (targetEventId) {
+          console.log("[TV] 📌 Auto-selecting event:", targetEventId, "from", urlEventId ? "URL" : "localStorage");
+          
+          // Validate event exists before selecting
+          const eventExists = await validateEventExists(targetEventId);
+          if (eventExists) {
+            setSelectedEventId(targetEventId);
+          } else {
+            console.warn("[TV] ⚠️ Event", targetEventId, "no longer exists, clearing and showing selection");
+            localStorage.removeItem("tv_event_id");
+            setSelectedEventId("");
+          }
+        } else {
+          console.log("[TV] ℹ️ No stored event, user must select");
+        }
+      } catch (error) {
+        console.error("[TV] ❌ Initialization failed:", error);
+        setLoadingError("Failed to initialize TV display. Please refresh the page.");
+      }
+    };
+
+    initializeTV();
+  }, [router.query.eventId]);
+
+  // Validate event exists in database
+  const validateEventExists = async (eventId: string): Promise<boolean> => {
+    try {
+      const event = await eventService.getEvent(eventId);
+      return !!event;
+    } catch (error) {
+      console.error("[TV] Event validation failed:", error);
+      return false;
     }
   };
 
-  // ✅ ZERO POLLING - PURE REALTIME SUBSCRIPTION
+  // Save selected event to localStorage and URL
   useEffect(() => {
-    console.log("[TV SYNC] mounting");
+    if (selectedEventId) {
+      localStorage.setItem("tv_event_id", selectedEventId);
+      // Update URL without reload
+      router.replace({ pathname: "/tv", query: { eventId: selectedEventId } }, undefined, { shallow: true });
+    }
+  }, [selectedEventId]);
 
-    const initTV = async () => {
+  // Real-time subscriptions
+  useEffect(() => {
+    if (!selectedEventId) {
+      return;
+    }
+
+    console.log("[TV] Setting up subscription for event:", selectedEventId);
+
+    // Define async initialization function
+    const initializeEventView = async () => {
       try {
-        let targetEventId = urlEventId as string;
-
-        // If no URL eventId, find active event
-        if (!targetEventId) {
-          console.log("[TV SYNC] finding_active_event");
-          const { data: activeEvent } = await supabase
-            .from('events')
-            .select('*')
-            .eq('status', 'active')
-            .maybeSingle();
-
-          if (!activeEvent) {
-            console.log("[TV SYNC] no_active_event");
-            setNoActiveEvent(true);
-            setIsLoadingEvent(false);
-            return;
-          }
-
-          targetEventId = activeEvent.id;
-          console.log("[TV SYNC] active_event_found", targetEventId.slice(0, 8));
-        }
-
-        // ✅ STEP 1: ONE INITIAL FETCH
-        console.log("[TV SYNC] initial_fetch", targetEventId.slice(0, 8));
-        const eventData = await eventService.getEvent(targetEventId);
-        setEvent(eventData);
-        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-
-        // Load current question if exists
-        if (eventData.current_question_number) {
-          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
-        }
-
-        // ✅ STEP 2: REALTIME SUBSCRIPTION (NO POLLING!)
-        console.log("[TV SYNC] subscribing_realtime", targetEventId.slice(0, 8));
-        
-        const channel = supabase
-          .channel(`tv-event-${targetEventId}`)
-          .on(
-            'postgres_changes',
-            {
-              event: 'UPDATE',
-              schema: 'public',
-              table: 'events',
-              filter: `id=eq.${targetEventId}`
-            },
-            async (payload) => {
-              console.log("[TV SYNC] realtime_event", {
-                questionNumber: payload.new?.current_question_number,
-                drawnNumber: payload.new?.current_drawn_number,
-                deadline: payload.new?.question_open_until
-              });
-              
-              setLastRealtimeAt(new Date().toISOString());
-              
-              const newEvent = payload.new as Event;
-              
-              // ✅ INSTANT STATE UPDATE
-              console.log("[TV SYNC] apply_state");
-              setEvent(newEvent);
-              setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
-              
-              // ✅ LOAD NEW QUESTION IF CHANGED
-              if (newEvent.current_question_number && 
-                  newEvent.current_question_number !== currentQuestion?.question_number) {
-                console.log("[TV SYNC] new_question_detected", newEvent.current_question_number);
-                playBeep('start');
-                await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
-              }
-            }
-          )
-          .subscribe((status) => {
-            console.log("[TV SYNC] subscription_status", status);
-            
-            if (status === 'SUBSCRIBED') {
-              console.log("[TV SYNC] subscribed_ok");
-              setRealtimeConnected(true);
-            } else if (status === 'CHANNEL_ERROR') {
-              console.error("[TV SYNC] subscription_error");
-              setRealtimeConnected(false);
-            } else if (status === 'CLOSED') {
-              console.log("[TV SYNC] subscription_closed, reconnecting...");
-              setRealtimeConnected(false);
-              // ✅ RECONNECT STRATEGY (NO POLLING!)
-              setTimeout(() => {
-                console.log("[TV SYNC] reconnecting");
-                initTV();
-              }, 2000);
-            }
-          });
-
-        eventChannelRef.current = channel;
-        setIsLoadingEvent(false);
-        setNoActiveEvent(false);
-
-        console.log("[TV SYNC] initialization_complete");
+        // Initial load - MUST complete before subscription
+        await loadEventData();
+        console.log("[TV] ✅ Initial data loaded, subscription will handle updates");
       } catch (error) {
-        console.error("[TV SYNC] init_failed", error);
-        setIsLoadingEvent(false);
+        console.error("[TV] ❌ Failed to initialize event view:", error);
+        // Error already handled by loadEventData
       }
     };
 
-    initTV();
+    // Start initialization
+    initializeEventView();
 
-    // Cleanup
+    // Subscribe to event changes
+    const eventSubscription = eventService.subscribeToEvent(selectedEventId, async (payload) => {
+      console.log("[TV] Real-time event update received:", payload);
+      const updatedEvent = payload.new;
+      
+      // ✅ CRITICAL: Always update drawn numbers set from event
+      console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+      
+      // Check if drawn number changed
+      const numberChanged = updatedEvent.current_drawn_number !== lastDrawnNumberRef.current;
+      
+      if (numberChanged && updatedEvent.current_drawn_number) {
+        console.log(`[TV] Number changed from ${lastDrawnNumberRef.current} to ${updatedEvent.current_drawn_number}`);
+        playBeep('start');
+        lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
+        await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
+      }
+      
+      // ✅ CRITICAL: Always update event state
+      setEvent(updatedEvent);
+      console.log("[TV] Event state updated:", {
+        status: updatedEvent.status,
+        current_number: updatedEvent.current_drawn_number,
+        drawn_count: updatedEvent.drawn_numbers?.length || 0
+      });
+    });
+
+    console.log("[TV] Subscription active");
+
     return () => {
-      console.log("[TV SYNC] cleanup");
-      if (eventChannelRef.current) {
-        eventChannelRef.current.unsubscribe();
-      }
+      console.log("[TV] Cleaning up subscription");
+      eventSubscription.unsubscribe();
     };
-  }, [urlEventId]);
+  }, [selectedEventId]);
 
-  // ⏱️ LOCAL COUNTDOWN TICK (NO POLLING!)
+  // Timer countdown with sound effects
   useEffect(() => {
     if (!event?.question_open_until) {
       setTimeRemaining(0);
       return;
     }
 
-    // ✅ LOCAL TICK ONLY FOR DISPLAY (500ms)
     const interval = setInterval(() => {
       const now = new Date().getTime();
       const deadline = new Date(event.question_open_until!).getTime();
-      const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
-
-      // Play sounds
+      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+      
+      // Play tick sound for last 3 seconds
       if (remaining <= 3 && remaining > 0 && remaining !== timeRemaining) {
         playBeep('tick');
       }
@@ -222,155 +183,489 @@ export default function TVScreen() {
       }
 
       setTimeRemaining(remaining);
-    }, 500); // 500ms tick for display only
+    }, 100);
 
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
-  // ✅ DEBUG HELPER
+  // Safari-safe fallback: Polling mechanism (every 2s for stability)
   useEffect(() => {
-    (window as any).__TV_SYNC_STATUS__ = () => ({
-      activeEventId: event?.id,
-      realtimeConnected,
-      lastRealtimeAt,
-      currentQuestionNumber: event?.current_question_number,
-      currentDrawnNumber: event?.current_drawn_number,
-      questionOpenUntil: event?.question_open_until,
-      drawnCount: drawnNumbers.size
-    });
-  }, [event, realtimeConnected, lastRealtimeAt, drawnNumbers]);
+    if (!selectedEventId || !event) {
+      setPollingActive(false);
+      return;
+    }
 
-  // Loading state
-  if (isLoadingEvent) {
-    return (
-      <>
-        <SEO title="TV Screen - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 flex items-center justify-center">
-          <div className="text-white text-4xl font-bold">Učitavam...</div>
-        </div>
-      </>
-    );
-  }
+    // ✅ Stop polling if event is FINISHED
+    if (event.status === "finished") {
+      console.log("[TV-POLL] Event FINISHED, polling disabled");
+      setPollingActive(false);
+      return;
+    }
 
-  // No active event
-  if (noActiveEvent) {
-    return (
-      <>
-        <SEO title="TV Screen - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 flex items-center justify-center p-8">
-          <div className="text-center">
-            <div className="text-white text-6xl mb-6">⏳</div>
-            <div className="text-white text-4xl font-bold mb-4">Čekam aktivni event</div>
-            <div className="text-white/80 text-xl">
-              Još nema aktivnog eventa. Automatski će se prikazati kad admin pokrene event.
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
+    // ✅ Only poll ACTIVE events
+    if (event.status !== "active") {
+      console.log("[TV-POLL] Event not ACTIVE, polling disabled");
+      setPollingActive(false);
+      return;
+    }
 
-  // Winner screen
-  if (event?.winner_ticket_id) {
-    return (
-      <>
-        <SEO title="Pobjednik! - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-yellow-400 via-orange-500 to-red-600 flex items-center justify-center p-8">
-          <div className="text-center animate-bounce">
-            <Trophy className="w-48 h-48 text-white mx-auto mb-8" />
-            <div className="text-white text-8xl font-black mb-6">POBJEDNIK!</div>
-            <div className="text-white text-6xl font-bold mb-4">
-              Ulaznica #{event.winner_ticket_id.slice(-4)}
-            </div>
-            <div className="text-white/90 text-3xl">
-              🎉 Čestitamo! 🎉
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
+    console.log("[TV-POLL] Starting polling for ACTIVE event:", selectedEventId);
+    setPollingActive(true);
+
+    const pollInterval = setInterval(async () => {
+      try {
+        console.log("[TV-POLL] Fetching event state...");
+        const updatedEvent = await eventService.getEvent(selectedEventId);
+        
+        if (!updatedEvent) {
+          console.warn("[TV-POLL] Event not found, stopping polling");
+          setPollingActive(false);
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        // ✅ Stop polling if event became FINISHED
+        if (updatedEvent.status === "finished") {
+          console.log("[TV-POLL] Event became FINISHED, stopping polling");
+          setPollingActive(false);
+          clearInterval(pollInterval);
+        }
+        
+        // ✅ CRITICAL: Always update drawn numbers (fixes refresh bug)
+        console.log("[TV-POLL] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+        
+        // Check if drawn number changed
+        const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
+        
+        if (numberChanged && updatedEvent.current_drawn_number) {
+          console.log(`[TV-POLL] ✅ Number changed: ${event.current_drawn_number} → ${updatedEvent.current_drawn_number}`);
+          playBeep('start');
+          lastDrawnNumberRef.current = updatedEvent.current_drawn_number;
+          await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
+        }
+
+        // ✅ CRITICAL: Always update event state
+        setEvent(updatedEvent);
+        console.log("[TV-POLL] Event refreshed:", {
+          status: updatedEvent.status,
+          current_number: updatedEvent.current_drawn_number,
+          drawn_count: updatedEvent.drawn_numbers?.length || 0
+        });
+        
+      } catch (error) {
+        console.error("[TV-POLL] Polling error:", error);
+      }
+    }, 2000); // ✅ 2s interval for stability
+
+    return () => {
+      console.log("[TV-POLL] Cleaning up polling");
+      clearInterval(pollInterval);
+      setPollingActive(false);
+    };
+  }, [selectedEventId, event?.id, event?.status, event?.current_drawn_number]);
+
+  // Load statistics when event finishes
+  useEffect(() => {
+    if (event?.status === "finished") {
+      loadStats();
+    }
+  }, [event?.status]);
+
+  const loadEvents = async () => {
+    try {
+      console.log("[TV] 🔍 loadEvents: Fetching all events...");
+      setLoadingError(null);
+      const data = await eventService.getEvents();
+      console.log("[TV] ✅ loadEvents: Found", data.length, "events");
+      setEvents(data);
+    } catch (error) {
+      console.error("[TV] ❌ loadEvents: Failed to load events:", error);
+      console.error("[TV] ❌ loadEvents: Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      setLoadingError("Failed to load events. Please refresh the page.");
+    }
+  };
+
+  const loadEventData = async () => {
+    if (!selectedEventId) {
+      console.warn("[TV] ⚠️ loadEventData called without selectedEventId");
+      return;
+    }
+
+    try {
+      setLoadingError(null);
+      console.log("[TV] 🔍 Step 1: Starting loadEventData for:", selectedEventId);
+      
+      // ✅ SAFE: Use getEvent with try-catch instead of assuming .single() succeeds
+      const data = await eventService.getEvent(selectedEventId);
+      
+      if (!data) {
+        console.warn("[TV] ⚠️ Event not found:", selectedEventId);
+        // Graceful fallback: Clear selection and return to Event Selection
+        localStorage.removeItem("tv_event_id");
+        setSelectedEventId("");
+        setEvent(null);
+        return;
+      }
+
+      console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
+      console.log("[TV] ✅ Step 3: Event name:", data.name);
+      console.log("[TV] ✅ Step 4: Event status:", data.status);
+      console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
+      
+      // ✅ CRITICAL: Respect FINISHED status - stop polling
+      if (data.status === "finished") {
+        console.log("[TV] 🏁 Event is FINISHED, stopping all polling");
+        setPollingActive(false);
+      }
+      
+      setEvent(data);
+      lastDrawnNumberRef.current = data.current_drawn_number;
+      
+      // Load drawn numbers from event
+      setDrawnNumbers(new Set(data.drawn_numbers || []));
+      console.log("[TV] ✅ Step 6: Drawn numbers set loaded");
+      
+      // Load current question if one exists
+      if (data.current_drawn_number) {
+        console.log("[TV] ✅ Step 7: Loading current question #", data.current_drawn_number);
+        await loadCurrentQuestion(data.id, data.current_drawn_number);
+        console.log("[TV] ✅ Step 8: Current question loaded");
+      } else {
+        console.log("[TV] ℹ️ Step 7: No current question (waiting for first draw)");
+      }
+      
+      console.log("[TV] 🎉 Event data loaded successfully!");
+    } catch (error) {
+      console.error("[TV] ❌ FAILED at some step:", error);
+      console.error("[TV] ❌ Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        selectedEventId,
+      });
+      
+      // Check if it's a "not found" error
+      if (error instanceof Error && (error.message.includes("not found") || error.message.includes("0 rows"))) {
+        console.log("[TV] 🔄 Event no longer exists, returning to selection");
+        localStorage.removeItem("tv_event_id");
+        setSelectedEventId("");
+        setEvent(null);
+        setLoadingError(null); // Don't show error, just return to selection
+      } else {
+        setLoadingError(`Failed to load event: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setEvent(null);
+      }
+    }
+  };
+
+  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
+    try {
+      console.log(`[TV] 🔍 loadCurrentQuestion: Loading question #${questionNumber} for event ${eventId}`);
+      const data = await eventService.getEventQuestion(eventId, questionNumber);
+      console.log("[TV] ✅ loadCurrentQuestion: Question loaded:", data);
+      setCurrentQuestion(data);
+
+      // Fetch question text if we have a question ID
+      if (data?.question_id) {
+        const { data: qData, error: qError } = await supabase
+          .from("questions")
+          .select("text")
+          .eq("id", data.question_id)
+          .single();
+
+        if (qError) {
+          console.error("[TV] ❌ Failed to load question text:", qError);
+          setQuestionText(null);
+        } else {
+          console.log("[TV] ✅ Question text loaded:", qData?.text);
+          setQuestionText(qData?.text || null);
+        }
+      } else {
+        setQuestionText(null);
+      }
+    } catch (error) {
+      console.error("[TV] ❌ loadCurrentQuestion: Failed to load question:", error);
+      console.error("[TV] ❌ loadCurrentQuestion: Details:", {
+        message: error instanceof Error ? error.message : String(error),
+        eventId,
+        questionNumber,
+      });
+      setCurrentQuestion(null);
+      setQuestionText(null);
+    }
+  };
+
+  const playBeep = (type: 'start' | 'tick' | 'end') => {
+    if (!audioContextRef.current) return;
+    
+    try {
+      const ctx = audioContextRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      if (type === 'start') {
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.setValueAtTime(1760, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } else if (type === 'tick') {
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+      } else if (type === 'end') {
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 1);
+        osc.start();
+        osc.stop(ctx.currentTime + 1);
+      }
+    } catch (error) {
+      console.warn("[TV] Audio playback failed:", error);
+    }
+  };
+
+  const loadDetailedResults = async () => {
+    if (!event || tickets.length === 0) return;
+    
+    try {
+      const resultsMap = new Map<string, TicketDetailedResults>();
+      
+      for (const ticket of tickets) {
+        const details = await answerService.getTicketDetailedResults(
+          ticket.id,
+          ticket,
+          event.id,
+          event.drawn_numbers || []
+        );
+        resultsMap.set(ticket.serial_number, details);
+      }
+      
+      setDetailedResults(resultsMap);
+    } catch (error) {
+      console.error("[TV] Failed to load detailed results:", error);
+    }
+  };
+
+  const loadStats = async () => {
+    if (!event || tickets.length === 0) return;
+    
+    try {
+      const statsData = await answerService.getEventTicketStats(event.id);
+      setTicketStats(statsData);
+      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
+    } catch (error) {
+      console.error("[TV] Failed to load stats:", error);
+      setTicketStats([]);
+    }
+  };
 
   return (
     <>
-      <SEO title="TV Screen - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-8">
-        <div className="container mx-auto max-w-7xl">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <h1 className="text-6xl font-black text-white mb-4">
-              {event?.name || "PITALICA SKITALICA"}
-            </h1>
-            <div className="text-white/80 text-2xl">
-              Pitanje {event?.drawn_numbers?.length || 0} / 90
-            </div>
-          </div>
-
-          {/* Main Question Display */}
-          {currentQuestion && questionText ? (
-            <div className="bg-white rounded-3xl shadow-2xl p-12 mb-8">
-              <div className="text-center mb-8">
-                <div className="inline-block bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-4 rounded-full text-4xl font-bold mb-6">
-                  #{event?.current_drawn_number}
-                </div>
+      <SEO title="TV Display - Pitalica Skitalica" />
+      
+      {/* Error state */}
+      {loadingError ? (
+        <div className="min-h-screen bg-black flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl border-red-500 border-2">
+            <CardContent className="pt-6">
+              <h1 className="text-3xl font-bold mb-4 text-center text-red-500">⚠️ TV Display Error</h1>
+              <div className="bg-red-50 border border-red-200 rounded p-4 mb-4">
+                <p className="text-center text-red-800 font-mono text-sm whitespace-pre-wrap">
+                  {loadingError}
+                </p>
               </div>
-
-              <div className="text-center mb-12">
-                <h2 className="text-6xl font-bold text-gray-900 leading-tight">
-                  {questionText}
-                </h2>
-              </div>
-
-              {/* Timer - 9s countdown */}
-              <div className="text-center mb-8">
-                <div className={`text-8xl font-black ${
-                  timeRemaining <= 3 ? 'text-red-600 animate-pulse' : 'text-blue-600'
-                }`}>
-                  {timeRemaining}s
-                </div>
-              </div>
-
-              {/* Answer options display */}
-              <div className="grid grid-cols-2 gap-8">
-                <div className="bg-green-100 border-4 border-green-500 rounded-2xl p-8 text-center">
-                  <div className="text-6xl font-black text-green-700">DA</div>
-                </div>
-                <div className="bg-red-100 border-4 border-red-500 rounded-2xl p-8 text-center">
-                  <div className="text-6xl font-black text-red-700">NE</div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white rounded-3xl shadow-2xl p-12 text-center">
-              <div className="text-4xl font-bold text-gray-600">
-                Čekam prvo pitanje...
-              </div>
-            </div>
-          )}
-
-          {/* Drawn Numbers Grid */}
-          <div className="bg-white/20 backdrop-blur-sm rounded-2xl p-6">
-            <h3 className="text-white text-2xl font-bold mb-4">Izvučeni brojevi</h3>
-            <div className="grid grid-cols-10 gap-2">
-              {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => (
-                <div
-                  key={num}
-                  className={`
-                    aspect-square rounded-lg flex items-center justify-center text-lg font-bold
-                    ${drawnNumbers.has(num)
-                      ? 'bg-yellow-400 text-gray-900'
-                      : 'bg-white/20 text-white/40'
-                    }
-                    ${event?.current_drawn_number === num ? 'ring-4 ring-yellow-300' : ''}
-                  `}
+              <div className="space-y-3">
+                <button 
+                  onClick={() => {
+                    setLoadingError(null);
+                    setSelectedEventId("");
+                    localStorage.removeItem("tv_event_id");
+                  }} 
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded font-semibold"
                 >
-                  {num}
+                  ← Back to Event Selection
+                </button>
+                <button 
+                  onClick={() => {
+                    setLoadingError(null);
+                    if (selectedEventId) {
+                      loadEventData();
+                    }
+                  }} 
+                  className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded font-semibold"
+                >
+                  🔄 Retry Loading Event
+                </button>
+                <button 
+                  onClick={() => window.location.reload()} 
+                  className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-3 rounded font-semibold"
+                >
+                  ♻️ Reload Page
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : !selectedEventId ? (
+        /* Event selection */
+        <div className="min-h-screen bg-black flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="pt-6">
+              <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
+              <Select onValueChange={setSelectedEventId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an event" />
+                </SelectTrigger>
+                <SelectContent>
+                  {events.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.name} ({e.status})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </CardContent>
+          </Card>
+        </div>
+      ) : !event ? (
+        /* Loading */
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <div className="text-white text-2xl">Loading event...</div>
+        </div>
+      ) : (
+        /* ✅ MAIN TV DISPLAY - PROPER 16:9 LAYOUT */
+        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+          
+          {/* Background gradient (fills entire screen) */}
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
+          
+          {/* 16:9 Container (constrained, centered, letterboxed if needed) */}
+          <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
+            
+            {/* Content wrapper with padding */}
+            <div className="absolute inset-0 flex flex-col p-6">
+              
+              {/* 1️⃣ HEADER (12% height) */}
+              <div className="flex-none h-[12%] flex items-center justify-between px-4">
+                {/* Event name - top left corner */}
+                <div className="text-lg text-gray-400 font-medium">
+                  {event.name}
                 </div>
-              ))}
+                
+                {/* Main title - centered */}
+                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-6xl font-black tracking-wider text-white drop-shadow-2xl">
+                  PITALICA SKITALICA
+                </h1>
+              </div>
+              
+              {/* 2️⃣ MAIN CONTENT AREA (76% height) - 2 columns */}
+              <div className="flex-none h-[76%] grid grid-cols-[58%_38%] gap-[4%] py-4">
+                
+                {/* LEFT COLUMN: Question Panel (58%) */}
+                <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-6 flex flex-col justify-center shadow-2xl overflow-hidden">
+                  
+                  {event.current_drawn_number ? (
+                    /* Active question state */
+                    <div className="text-center space-y-4">
+                      <div className="text-lg text-indigo-300 tracking-wide uppercase">
+                        Trenutno pitanje
+                      </div>
+                      <div className="text-8xl font-black text-white drop-shadow-2xl">
+                        #{event.current_drawn_number}
+                      </div>
+                      {timeRemaining > 0 && (
+                        <div className="text-5xl font-bold text-yellow-300 animate-pulse">
+                          {timeRemaining}s
+                        </div>
+                      )}
+                      {questionText && (
+                        <div className="mt-6 bg-white/10 rounded-2xl p-5 backdrop-blur max-h-[40vh] overflow-y-auto">
+                          <p className="text-xl text-white leading-relaxed">
+                            {questionText}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Waiting state */
+                    <div className="text-center">
+                      <div className="text-6xl mb-4 animate-pulse">⏳</div>
+                      <p className="text-3xl text-gray-300 animate-pulse">
+                        Čekam sljedeće pitanje...
+                      </p>
+                    </div>
+                  )}
+                  
+                </div>
+                
+                {/* RIGHT COLUMN: Numbers Board (38%) */}
+                <div className="bg-white/5 backdrop-blur-sm rounded-3xl border-2 border-white/10 p-4 flex items-center justify-center shadow-2xl overflow-hidden">
+                  
+                  {/* Board grid - scaled down for better fit */}
+                  <div className="grid grid-cols-10 gap-1 w-full h-full max-h-full" style={{ aspectRatio: '10/9' }}>
+                    {Array.from({ length: 90 }, (_, i) => i + 1).map((num) => {
+                      const isDrawn = drawnNumbers.has(num);
+                      const isCurrent = event.current_drawn_number === num;
+                      
+                      return (
+                        <div
+                          key={num}
+                          className={`
+                            aspect-square rounded-md flex items-center justify-center 
+                            text-sm font-bold transition-all duration-300
+                            ${
+                              isCurrent
+                                ? "bg-yellow-400 text-gray-900 scale-110 shadow-[0_0_15px_rgba(250,204,21,0.6)] animate-pulse"
+                                : isDrawn
+                                ? "bg-indigo-500 text-white shadow-[0_0_8px_rgba(99,102,241,0.4)] scale-105"
+                                : "bg-gray-800/60 text-gray-400 border border-gray-700/50"
+                            }
+                          `}
+                        >
+                          {num}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                </div>
+                
+              </div>
+              
+              {/* 3️⃣ FOOTER (12% height) */}
+              <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-yellow-300">90</div>
+                  <div className="text-sm text-gray-300 mt-1">pitanja</div>
+                </div>
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-green-300">15</div>
+                  <div className="text-sm text-gray-300 mt-1">za pobjedu</div>
+                </div>
+                
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-pink-300">🍀</div>
+                  <div className="text-sm text-gray-300 mt-1">Sretno</div>
+                </div>
+                
+              </div>
+              
             </div>
           </div>
         </div>
-      </div>
+      )}
     </>
   );
 }
