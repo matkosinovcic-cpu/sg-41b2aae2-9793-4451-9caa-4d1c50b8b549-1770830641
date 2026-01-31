@@ -322,7 +322,7 @@ export const eventService = {
       throw new Error("Pitanje nije pronađeno za izvučeni broj");
     }
 
-    const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
+    const questionOpenUntil = new Date(Date.now() + 9000).toISOString();
 
     // Mark question as drawn
     await supabase
