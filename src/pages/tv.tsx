@@ -257,9 +257,6 @@ export default function TVScreen() {
       if (activeEventTrackerRef.current) {
         activeEventTrackerRef.current.unsubscribe();
       }
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
     };
   }, [urlEventId]);
 

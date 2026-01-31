@@ -243,7 +243,6 @@ export default function PlayerScreen() {
     return () => {
       if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
       if (activeEventTrackerRef.current) activeEventTrackerRef.current.unsubscribe();
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
   }, [urlEventId]);
 
