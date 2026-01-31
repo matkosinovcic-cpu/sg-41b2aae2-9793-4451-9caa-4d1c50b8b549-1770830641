@@ -36,9 +36,12 @@ export default function TVScreen() {
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
   const lastUpdatedAtRef = useRef<string | null>(null);
-  const realtimeConnectedRef = useRef<boolean>(false);
-  const lastRealtimeMessageRef = useRef<number>(Date.now());
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastRealtimeUpdateRef = useRef<number>(0);
+
+  // 🔍 SYNC DIAGNOSTICS LOGGER
+  const log = (type: string, data: any) => {
+    console.log(`[TV SYNC] ${type}`, { ...data, ts: Date.now() });
+  };
 
   // 🚀 RESOLVE ACTIVE EVENT
   const resolveActiveEvent = async (): Promise<Event | null> => {
@@ -75,6 +78,16 @@ export default function TVScreen() {
       lastUpdatedAtRef.current = eventData.updated_at || null;
       lastDrawnNumberRef.current = eventData.current_drawn_number;
       
+      // 🔍 SYNC DIAGNOSTIC: Log initial state
+      log("init", {
+        activeEventId: eventData.id.slice(0, 8),
+        eventName: eventData.name,
+        status: eventData.status,
+        currentQuestionNumber: eventData.current_question_number,
+        currentDrawnNumber: eventData.current_drawn_number,
+        drawnCount: eventData.drawn_numbers?.length || 0
+      });
+      
       if (eventData.current_drawn_number) {
         await loadCurrentQuestion(eventData.id, eventData.current_drawn_number);
       }
@@ -96,6 +109,9 @@ export default function TVScreen() {
     
     console.log("[TV] 📡 Subscribing to event updates:", eventId.slice(0, 8));
     
+    // 🔍 SYNC DIAGNOSTIC: Log subscription start
+    log("realtime_subscribe_start", { eventId: eventId.slice(0, 8) });
+    
     const channel = supabase
       .channel(`tv-event-${eventId}`)
       .on('postgres_changes', {
@@ -107,6 +123,24 @@ export default function TVScreen() {
         console.log("[TV] ⚡ Realtime UPDATE received");
         
         const newEvent = payload.new as Event;
+        
+        // 🔍 SYNC DIAGNOSTIC: Log realtime event
+        log("realtime_event", {
+          eventId: newEvent.id.slice(0, 8),
+          currentQuestionNumber: newEvent.current_question_number,
+          currentDrawnNumber: newEvent.current_drawn_number,
+          questionOpenUntil: newEvent.question_open_until,
+          updatedAt: newEvent.updated_at,
+          receivedAt: Date.now()
+        });
+        
+        // 🛡️ DEBOUNCE: Prevent duplicate updates
+        const now = Date.now();
+        if (now - lastRealtimeUpdateRef.current < 100) {
+          log("realtime_debounced", { timeSinceLastMs: now - lastRealtimeUpdateRef.current });
+          return;
+        }
+        lastRealtimeUpdateRef.current = now;
         
         // 🎯 COMPARE GUARD - Prevent unnecessary updates
         if (newEvent.updated_at === lastUpdatedAtRef.current) {
@@ -124,6 +158,12 @@ export default function TVScreen() {
         if (newEvent.current_drawn_number !== lastDrawnNumberRef.current) {
           console.log("[TV] 🔔 New number drawn:", newEvent.current_drawn_number);
           
+          // 🔍 SYNC DIAGNOSTIC: Log state change
+          log("apply_state", {
+            from: { questionNumber: lastDrawnNumberRef.current },
+            to: { questionNumber: newEvent.current_drawn_number }
+          });
+          
           playBeep('start');
           lastDrawnNumberRef.current = newEvent.current_drawn_number;
           
@@ -137,6 +177,18 @@ export default function TVScreen() {
       })
       .subscribe((status) => {
         console.log("[TV] 📡 Event subscription status:", status);
+        
+        // 🔍 SYNC DIAGNOSTIC: Log subscription status
+        if (status === 'SUBSCRIBED') {
+          log("realtime_subscribed_ok", { 
+            channel: `tv-event-${eventId.slice(0, 8)}`,
+            eventId: eventId.slice(0, 8)
+          });
+        } else if (status === 'CHANNEL_ERROR') {
+          log("realtime_error", { status, eventId: eventId.slice(0, 8) });
+        } else if (status === 'CLOSED') {
+          log("realtime_closed", { status, eventId: eventId.slice(0, 8) });
+        }
       });
     
     eventChannelRef.current = channel;
@@ -247,6 +299,22 @@ export default function TVScreen() {
     };
     
     initializeTV();
+    
+    // 🔍 SYNC DIAGNOSTIC: Expose __SYNC_STATUS__ helper
+    (window as any).__TV_SYNC_STATUS__ = () => ({
+      activeEventId: event?.id.slice(0, 8),
+      eventName: event?.name,
+      status: event?.status,
+      realtimeConnected: eventChannelRef.current !== null,
+      lastRealtimeAt: lastRealtimeUpdateRef.current,
+      lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
+      mode: 'realtime',
+      currentQuestionNumber: event?.current_question_number,
+      currentDrawnNumber: event?.current_drawn_number,
+      drawnCount: event?.drawn_numbers?.length || 0,
+      timeRemaining,
+      channelState: eventChannelRef.current?.state
+    });
     
     // Cleanup on unmount
     return () => {

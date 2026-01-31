@@ -54,6 +54,12 @@ export default function PlayerScreen() {
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
   const lastUpdatedAtRef = useRef<string | null>(null);
+  const lastRealtimeUpdateRef = useRef<number>(0);
+
+  // 🔍 SYNC DIAGNOSTICS LOGGER
+  const log = (type: string, data: any) => {
+    console.log(`[PLAYER SYNC] ${type}`, { ...data, ts: Date.now() });
+  };
 
   // 🚀 RESOLVE ACTIVE EVENT
   const resolveActiveEvent = async (): Promise<Event | null> => {
@@ -89,6 +95,16 @@ export default function PlayerScreen() {
       setDrawnNumbers(new Set(eventData.drawn_numbers || []));
       lastUpdatedAtRef.current = eventData.updated_at || null;
       
+      // 🔍 SYNC DIAGNOSTIC: Log initial state
+      log("init", {
+        activeEventId: eventData.id.slice(0, 8),
+        eventName: eventData.name,
+        status: eventData.status,
+        currentQuestionNumber: eventData.current_question_number,
+        currentDrawnNumber: eventData.current_drawn_number,
+        drawnCount: eventData.drawn_numbers?.length || 0
+      });
+      
       // Create/get session
       const sessionData = await answerService.getOrCreateSession(eventData.id);
       setSession(sessionData);
@@ -114,6 +130,9 @@ export default function PlayerScreen() {
     
     console.log("[Player] 📡 Subscribing to event updates:", eventId.slice(0, 8));
     
+    // 🔍 SYNC DIAGNOSTIC: Log subscription start
+    log("realtime_subscribe_start", { eventId: eventId.slice(0, 8) });
+    
     const channel = supabase
       .channel(`player-event-${eventId}`)
       .on('postgres_changes', {
@@ -126,7 +145,25 @@ export default function PlayerScreen() {
         
         const newEvent = payload.new as Event;
         
-        // 🎯 COMPARE GUARD - Prevent unnecessary updates
+        // 🔍 SYNC DIAGNOSTIC: Log realtime event
+        log("realtime_event", {
+          eventId: newEvent.id.slice(0, 8),
+          currentQuestionNumber: newEvent.current_question_number,
+          currentDrawnNumber: newEvent.current_drawn_number,
+          questionOpenUntil: newEvent.question_open_until,
+          updatedAt: newEvent.updated_at,
+          receivedAt: Date.now()
+        });
+        
+        // 🛡️ DEBOUNCE: Prevent duplicate updates
+        const now = Date.now();
+        if (now - lastRealtimeUpdateRef.current < 100) {
+          log("realtime_debounced", { timeSinceLastMs: now - lastRealtimeUpdateRef.current });
+          return;
+        }
+        lastRealtimeUpdateRef.current = now;
+        
+        // 🎯 COMPARE GUARD: Only update if changed
         if (newEvent.updated_at === lastUpdatedAtRef.current) {
           return;
         }
@@ -139,6 +176,14 @@ export default function PlayerScreen() {
         // Load current question if changed
         if (newEvent.current_question_number && 
             newEvent.current_question_number !== currentQuestion?.question_number) {
+          console.log("[Player] 🔔 New question:", newEvent.current_question_number);
+          
+          // 🔍 SYNC DIAGNOSTIC: Log state change
+          log("apply_state", {
+            from: { questionNumber: currentQuestion?.question_number },
+            to: { questionNumber: newEvent.current_question_number }
+          });
+          
           await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
         }
         
@@ -153,6 +198,18 @@ export default function PlayerScreen() {
       })
       .subscribe((status) => {
         console.log("[Player] 📡 Event subscription status:", status);
+        
+        // 🔍 SYNC DIAGNOSTIC: Log subscription status
+        if (status === 'SUBSCRIBED') {
+          log("realtime_subscribed_ok", { 
+            channel: `player-event-${eventId.slice(0, 8)}`,
+            eventId: eventId.slice(0, 8)
+          });
+        } else if (status === 'CHANNEL_ERROR') {
+          log("realtime_error", { status, eventId: eventId.slice(0, 8) });
+        } else if (status === 'CLOSED') {
+          log("realtime_closed", { status, eventId: eventId.slice(0, 8) });
+        }
       });
     
     eventChannelRef.current = channel;
@@ -239,6 +296,25 @@ export default function PlayerScreen() {
     };
     
     initializePlayer();
+    
+    // 🔍 SYNC DIAGNOSTIC: Expose __SYNC_STATUS__ helper
+    (window as any).__PLAYER_SYNC_STATUS__ = () => ({
+      activeEventId: event?.id.slice(0, 8),
+      eventName: event?.name,
+      status: event?.status,
+      realtimeConnected: eventChannelRef.current !== null,
+      lastRealtimeAt: lastRealtimeUpdateRef.current,
+      lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
+      mode: 'realtime',
+      currentQuestionNumber: event?.current_question_number,
+      currentDrawnNumber: event?.current_drawn_number,
+      drawnCount: event?.drawn_numbers?.length || 0,
+      timeRemaining,
+      hasAnswered,
+      ticketsCount: tickets.length,
+      sessionId: session?.id.slice(0, 8),
+      channelState: eventChannelRef.current?.state
+    });
     
     return () => {
       if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
