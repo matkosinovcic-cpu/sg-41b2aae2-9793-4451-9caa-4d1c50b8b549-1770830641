@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter } from "next/router";
 
 // Helper to normalize answers for local comparison (matches service logic)
 function normalizeAnswer(value: any): boolean | null {
@@ -105,7 +105,48 @@ export default function PlayerScreen() {
         localStorage.removeItem("ticket_serials");
       }
     }
-  }, []);
+
+    // Auto-load ticket from URL query param (e.g., /player?ticket=T20260131-0001)
+    const ticketSerial = router.query.ticket as string;
+    if (ticketSerial && !storedSerialsJSON) {
+      console.log("[Player] Auto-loading ticket from URL:", ticketSerial);
+      
+      eventService.getTicketBySerial(ticketSerial)
+        .then(ticketData => {
+          console.log("[Player] ✅ Ticket loaded from URL:", ticketData.serial_number);
+          
+          // Load event
+          return eventService.getEvent(ticketData.event_id).then(eventData => {
+            setEvent(eventData);
+            setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+            localStorage.setItem("event_id", eventData.id);
+            
+            // Create session
+            return answerService.getOrCreateSession(eventData.id).then(sessionData => {
+              setSession(sessionData);
+              
+              // Set ticket
+              setTickets([ticketData]);
+              setTicket(ticketData);
+              localStorage.setItem("ticket_serials", JSON.stringify([ticketData.serial_number]));
+              
+              // Load current question if exists
+              if (eventData.current_question_number) {
+                return loadCurrentQuestion(eventData.id, eventData.current_question_number);
+              }
+            });
+          });
+        })
+        .catch(err => {
+          console.error("[Player] ❌ Failed to auto-load ticket from URL:", err);
+          toast({
+            title: "Greška",
+            description: "Tiket nije pronađen ili je nevažeći.",
+            variant: "destructive"
+          });
+        });
+    }
+  }, [router.query.ticket]);
 
   // CRITICAL: Load statistics ONLY when event is finished
   useEffect(() => {
