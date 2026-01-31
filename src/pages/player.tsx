@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event } from "@/services/eventService";
 import { answerService, PlayerSession, SessionStats, TicketDetailedResults } from "@/services/answerService";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { RealtimeChannel } from "@supabase/supabase-js";
 
 // Helper to normalize answers
 function normalizeAnswer(value: any): boolean | null {
@@ -41,7 +42,7 @@ interface AggregatedStats {
 
 export default function PlayerScreen() {
   const router = useRouter();
-  const eventId = router.query.eventId as string;
+  const urlEventId = router.query.eventId as string | undefined;
   
   const [serialInput, setSerialInput] = useState("");
   const [tickets, setTickets] = useState<TicketData[]>([]);
@@ -57,45 +58,74 @@ export default function PlayerScreen() {
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
   const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
+  const [isLoadingEvent, setIsLoadingEvent] = useState(true);
+  const [noActiveEvent, setNoActiveEvent] = useState(false);
+  
   const { toast } = useToast();
+  
+  // Refs for tracking sync
+  const eventChannelRef = useRef<RealtimeChannel | null>(null);
+  const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
+  const lastUpdatedAtRef = useRef<string | null>(null);
 
-  // Fetch initial event state
-  useEffect(() => {
-    if (!eventId) return;
-    
-    const fetchEvent = async () => {
-      try {
-        console.log("[Player] 📥 Fetching initial event state for:", eventId.slice(0, 8));
-        const eventData = await eventService.getEvent(eventId);
-        
-        setEvent(eventData);
-        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-        
-        // Create session
-        const sessionData = await answerService.getOrCreateSession(eventData.id);
-        setSession(sessionData);
-        
-        if (eventData.current_question_number) {
-          await loadCurrentQuestion(eventData.id, eventData.current_question_number);
-        }
-        
-        console.log("[Player] ✅ Initial state loaded:", {
-          currentNumber: eventData.current_question_number,
-          status: eventData.status
-        });
-      } catch (error) {
-        console.error("[Player] ❌ Failed to fetch initial event:", error);
+  // 🚀 RESOLVE ACTIVE EVENT
+  const resolveActiveEvent = async (): Promise<Event | null> => {
+    try {
+      console.log("[Player] 🔍 Resolving active event...");
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[Player] ❌ Error fetching active event:", error);
+        return null;
       }
-    };
-    
-    fetchEvent();
-  }, [eventId]);
+      
+      return data as Event;
+    } catch (error) {
+      console.error("[Player] ❌ Exception in resolveActiveEvent:", error);
+      return null;
+    }
+  };
 
-  // Realtime subscription
-  useEffect(() => {
-    if (!eventId) return;
+  // 🎯 LOAD EVENT DATA
+  const loadEventData = async (eventId: string) => {
+    try {
+      console.log("[Player] 📥 Loading event data:", eventId.slice(0, 8));
+      const eventData = await eventService.getEvent(eventId);
+      
+      setEvent(eventData);
+      setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+      lastUpdatedAtRef.current = eventData.updated_at || null;
+      
+      // Create/get session
+      const sessionData = await answerService.getOrCreateSession(eventData.id);
+      setSession(sessionData);
+      
+      if (eventData.current_question_number) {
+        await loadCurrentQuestion(eventData.id, eventData.current_question_number);
+      }
+      
+      console.log("[Player] ✅ Event data loaded");
+    } catch (error) {
+      console.error("[Player] ❌ Failed to load event data:", error);
+    }
+  };
+
+  // 🔄 SUBSCRIBE TO EVENT UPDATES
+  const subscribeToEventUpdates = (eventId: string) => {
+    // Unsubscribe from old channel if exists
+    if (eventChannelRef.current) {
+      console.log("[Player] 🧹 Unsubscribing from old event channel");
+      eventChannelRef.current.unsubscribe();
+      eventChannelRef.current = null;
+    }
     
-    console.log("[Player] 📡 Setting up realtime subscription for event:", eventId.slice(0, 8));
+    console.log("[Player] 📡 Subscribing to event updates:", eventId.slice(0, 8));
     
     const channel = supabase
       .channel(`player-event-${eventId}`)
@@ -105,9 +135,14 @@ export default function PlayerScreen() {
         table: 'events',
         filter: `id=eq.${eventId}`
       }, async (payload) => {
-        console.log("[Player] ⚡ Realtime UPDATE received:", payload);
-        
         const newEvent = payload.new as Event;
+        
+        // 🎯 COMPARE GUARD - Prevent unnecessary updates
+        if (newEvent.updated_at === lastUpdatedAtRef.current) {
+          return;
+        }
+        
+        lastUpdatedAtRef.current = newEvent.updated_at || null;
         
         // Update drawn numbers
         setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
@@ -126,29 +161,120 @@ export default function PlayerScreen() {
           loadStats();
           loadDetailedResults();
         }
-        
-        console.log("[Player] ✅ State updated:", {
-          currentNumber: newEvent.current_question_number,
-          status: newEvent.status
-        });
       })
-      .subscribe((status) => {
-        console.log("[Player] 📡 Subscription status:", status);
-      });
+      .subscribe();
+    
+    eventChannelRef.current = channel;
+  };
+
+  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER
+  const subscribeToActiveEventTracker = () => {
+    const channel = supabase
+      .channel('player-active-event-tracker')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'events',
+        filter: 'status=eq.active'
+      }, async (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const newActiveEvent = payload.new as Event;
+          
+          // Check if it's a different event
+          if (event && newActiveEvent.id === event.id) {
+            return;
+          }
+          
+          console.log("[Player] 🆕 NEW ACTIVE EVENT detected:", newActiveEvent.id.slice(0, 8));
+          await handleNewActiveEvent(newActiveEvent);
+        }
+      })
+      .subscribe();
+    
+    activeEventTrackerRef.current = channel;
+  };
+
+  // 🔥 HANDLE NEW ACTIVE EVENT
+  const handleNewActiveEvent = async (newEvent: Event) => {
+    console.log("[Player] 🔥 Switching to new active event");
+    
+    // 1. Clear old state
+    setDrawnNumbers(new Set());
+    setCurrentQuestion(null);
+    setTimeRemaining(0);
+    // Note: We keep tickets if they belong to this event (unlikely if it's new)
+    // but typically player would need to join new event
+    
+    // 2. Clear cache
+    localStorage.removeItem('eventId');
+    sessionStorage.clear();
+    
+    // 3. Load new event
+    await loadEventData(newEvent.id);
+    
+    // 4. Subscribe to new event
+    subscribeToEventUpdates(newEvent.id);
+  };
+
+  // 🚀 INITIAL LOAD
+  useEffect(() => {
+    const initializePlayer = async () => {
+      console.log("[Player] 🚀 Initializing Player screen...");
+      
+      // 1. Determine event ID (URL param OR active event)
+      let targetEventId = urlEventId;
+      
+      if (!targetEventId) {
+        const activeEvent = await resolveActiveEvent();
+        
+        if (activeEvent) {
+          targetEventId = activeEvent.id;
+          console.log("[Player] ✅ Using active event:", targetEventId.slice(0, 8));
+        } else {
+          console.log("[Player] ⚠️ No active event found");
+          setNoActiveEvent(true);
+          setIsLoadingEvent(false);
+          return;
+        }
+      }
+      
+      // 2. Load event data
+      await loadEventData(targetEventId);
+      
+      // 3. Subscribe to event updates
+      subscribeToEventUpdates(targetEventId);
+      
+      // 4. Subscribe to active event tracker
+      subscribeToActiveEventTracker();
+      
+      setIsLoadingEvent(false);
+      setNoActiveEvent(false);
+    };
+    
+    initializePlayer();
     
     return () => {
-      console.log("[Player] 🧹 Cleaning up realtime subscription");
-      channel.unsubscribe();
+      if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
+      if (activeEventTrackerRef.current) activeEventTrackerRef.current.unsubscribe();
     };
-  }, [eventId, currentQuestion, session, tickets]);
+  }, [urlEventId]);
 
-  // Load stats when event finishes
+  // 🔄 POLLING FALLBACK (only if no event)
   useEffect(() => {
-    if (session && tickets.length > 0 && event?.status === "finished") {
-      loadStats();
-      loadDetailedResults();
-    }
-  }, [session?.id, tickets.length, event?.status]);
+    if (!noActiveEvent) return;
+    
+    const pollInterval = setInterval(async () => {
+      const activeEvent = await resolveActiveEvent();
+      if (activeEvent) {
+        setNoActiveEvent(false);
+        await loadEventData(activeEvent.id);
+        subscribeToEventUpdates(activeEvent.id);
+        subscribeToActiveEventTracker();
+      }
+    }, 3000);
+    
+    return () => clearInterval(pollInterval);
+  }, [noActiveEvent]);
 
   // Timer countdown
   useEffect(() => {
@@ -159,7 +285,7 @@ export default function PlayerScreen() {
 
     const interval = setInterval(() => {
       const now = new Date().getTime();
-      const deadline = new Date(event.question_open_until).getTime();
+      const deadline = new Date(event.question_open_until!).getTime();
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
       setTimeRemaining(remaining);
       
@@ -173,9 +299,6 @@ export default function PlayerScreen() {
 
   const handleTimeout = async () => {
     if (!session || !currentQuestion || !event) return;
-    
-    console.log("[Player] ⏱️ TIMEOUT - marking question as missed");
-    
     try {
       for (const ticket of tickets) {
         await answerService.markUnansweredAsWrong(
@@ -186,7 +309,6 @@ export default function PlayerScreen() {
         );
       }
       setHasAnswered(true);
-      console.log("[Player] ✅ Timeout recorded as MISSED for all tickets");
     } catch (error) {
       console.error("[Player] ❌ Failed to mark timeout:", error);
     }
@@ -194,27 +316,17 @@ export default function PlayerScreen() {
 
   const loadStats = async () => {
     if (!session || tickets.length === 0 || !event) return;
-    
     try {
       const promises = tickets.map(async (t) => {
-        const singleStats = await answerService.getSessionStats(
-          session.id, 
-          event.id,
-          t.serial_number
-        );
+        const singleStats = await answerService.getSessionStats(session.id, event.id, t.serial_number);
         return { ...singleStats, ticket_serial: t.serial_number };
       });
-
       const results = await Promise.all(promises);
-      const totalCorrect = results.reduce((sum, r) => sum + r.correct, 0);
-      const totalAnswered = results.reduce((sum, r) => sum + r.answered, 0);
-      const drawnInGame = event.drawn_numbers?.length || 0;
-
       setStats({
         ticket_stats: results,
-        total_correct: totalCorrect,
-        total_answered: totalAnswered,
-        drawn_in_game: drawnInGame,
+        total_correct: results.reduce((sum, r) => sum + r.correct, 0),
+        total_answered: results.reduce((sum, r) => sum + r.answered, 0),
+        drawn_in_game: event.drawn_numbers?.length || 0,
       });
     } catch (error) {
       console.error("[Player] Failed to load stats:", error);
@@ -223,20 +335,12 @@ export default function PlayerScreen() {
 
   const loadDetailedResults = async () => {
     if (!session || !event || tickets.length === 0) return;
-    
     try {
       const resultsMap = new Map<string, TicketDetailedResults>();
-      
       for (const ticket of tickets) {
-        const details = await answerService.getTicketDetailedResults(
-          session.id,
-          ticket,
-          event.id,
-          event.drawn_numbers || []
-        );
+        const details = await answerService.getTicketDetailedResults(session.id, ticket, event.id, event.drawn_numbers || []);
         resultsMap.set(ticket.serial_number, details);
       }
-      
       setDetailedResults(resultsMap);
     } catch (error) {
       console.error("[Player] Failed to load detailed results:", error);
@@ -250,11 +354,9 @@ export default function PlayerScreen() {
         .select('serial_number')
         .eq('id', ticketId)
         .single();
-      
       if (error) throw error;
       setWinnerSerial(data?.serial_number || null);
     } catch (error) {
-      console.error("[Player] Failed to load winner serial:", error);
       setWinnerSerial(null);
     }
   };
@@ -270,201 +372,98 @@ export default function PlayerScreen() {
   const toggleTicketDetails = (serial: string) => {
     setExpandedTickets(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(serial)) {
-        newSet.delete(serial);
-      } else {
-        newSet.add(serial);
-      }
+      if (newSet.has(serial)) newSet.delete(serial);
+      else newSet.add(serial);
       return newSet;
     });
   };
 
   const handleAddTicket = async () => {
-    if (!serialInput.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a ticket serial number",
-        variant: "destructive"
-      });
-      return;
-    }
-
+    if (!serialInput.trim()) return;
     if (tickets.some(t => t.serial_number === serialInput)) {
-      toast({
-        title: "Duplicate",
-        description: "This ticket is already added.",
-        variant: "destructive"
-      });
+      toast({ title: "Duplicate", description: "Already added.", variant: "destructive" });
       return;
     }
-
     if (tickets.length >= 4) {
-      toast({
-        title: "Limit Reached",
-        description: "Maximum 4 tickets per player.",
-        variant: "destructive"
-      });
+      toast({ title: "Limit Reached", description: "Max 4 tickets.", variant: "destructive" });
       return;
     }
 
     try {
       const ticketData = await eventService.getTicketBySerial(serialInput);
-      
       if (event && ticketData.event_id !== event.id) {
-        toast({
-          title: "Error",
-          description: "This ticket belongs to a different event.",
-          variant: "destructive"
-        });
+        toast({ title: "Error", description: "Wrong event ticket.", variant: "destructive" });
         return;
       }
-
-      if (!event && eventId && ticketData.event_id !== eventId) {
-        toast({
-          title: "Error",
-          description: "This ticket does not belong to this event.",
-          variant: "destructive"
-        });
-        return;
-      }
-
-      const newTickets = [...tickets, ticketData];
-      setTickets(newTickets);
-      
-      if (!ticket) {
-        setTicket(ticketData);
-      }
-
+      setTickets([...tickets, ticketData]);
+      if (!ticket) setTicket(ticketData);
       setSerialInput("");
-      
-      toast({
-        title: "Success",
-        description: "Ticket added successfully!",
-      });
+      toast({ title: "Success", description: "Ticket added!" });
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "Ticket not found or invalid",
-        variant: "destructive"
-      });
+      toast({ title: "Error", description: "Ticket invalid", variant: "destructive" });
     }
   };
 
   const handleClearTickets = () => {
     setTickets([]);
     setTicket(null);
-    window.location.reload();
   };
 
   const handleRemoveTicket = (ticketId: string) => {
     const newTickets = tickets.filter(t => t.id !== ticketId);
     setTickets(newTickets);
-    
-    if (newTickets.length === 0) {
-      handleClearTickets();
-      return;
-    }
-
-    if (ticket?.id === ticketId) {
-      setTicket(newTickets[0]);
-    }
-
-    toast({
-      title: "Ticket Removed",
-      description: "Ticket removed from your list",
-    });
+    if (newTickets.length === 0) handleClearTickets();
+    else if (ticket?.id === ticketId) setTicket(newTickets[0]);
   };
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
       const data = await eventService.getEventQuestion(eventId, questionNumber);
       setCurrentQuestion(data);
-      
       if (session) {
         const answers = await answerService.getSessionAnswers(session.id);
-        const alreadyAnswered = answers.some(a => a.question_number === questionNumber);
-        setHasAnswered(alreadyAnswered);
-        
-        if (alreadyAnswered) {
-          const existingAnswer = answers.find(a => a.question_number === questionNumber);
-          setAnswer(existingAnswer?.answer_yesno === "YES");
-        } else {
-          setAnswer(null);
-        }
+        const existingAnswer = answers.find(a => a.question_number === questionNumber);
+        setHasAnswered(!!existingAnswer);
+        setAnswer(existingAnswer ? existingAnswer.answer_yesno === "YES" : null);
       } else {
         setHasAnswered(false);
         setAnswer(null);
       }
     } catch (error) {
-      console.error("[Player] Failed to load question:", error);
       setCurrentQuestion(null);
     }
   };
 
   const handleSubmitAnswer = async (answerValue: boolean) => {
     if (!session || !currentQuestion || hasAnswered || !event) return;
-
-    console.log("[Player] Submitting answer:", answerValue ? "DA" : "NE");
-
     setAnswer(answerValue);
-
     try {
       for (const ticket of tickets) {
-        await answerService.submitAnswer(
-          session.id,
-          event.id,
-          currentQuestion.question_number,
-          answerValue,
-          ticket.serial_number
-        );
+        await answerService.submitAnswer(session.id, event.id, currentQuestion.question_number, answerValue, ticket.serial_number);
       }
-      
       setHasAnswered(true);
-      
-      console.log("[Player] ✅ Answer submitted successfully for all tickets");
-      
-      toast({
-        title: "Odgovor poslan",
-        description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}`,
-      });
+      toast({ title: "Odgovor poslan", description: `Odgovorili ste: ${answerValue ? "DA" : "NE"}` });
     } catch (error: any) {
       setAnswer(null);
-      console.error("[Player] ❌ Answer submission failed:", error);
-      toast({
-        title: "Greška",
-        description: error.message || "Vec si odgovorio na ovo pitanje",
-        variant: "destructive"
-      });
+      toast({ title: "Greška", description: error.message, variant: "destructive" });
     }
   };
 
   const renderTicketGrid = (ticketData: TicketData) => {
-    const numbers = ticketData.ticket_questions
-      .map(tq => tq.question_number)
-      .sort((a, b) => a - b);
-
+    const numbers = ticketData.ticket_questions.map(tq => tq.question_number).sort((a, b) => a - b);
     const drawnCount = numbers.filter(num => drawnNumbers.has(num)).length;
-    const ticketStats = event?.status === "finished" 
-      ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number)
-      : null;
-
+    const ticketStats = event?.status === "finished" ? stats?.ticket_stats.find(ts => ts.ticket_serial === ticketData.serial_number) : null;
     const details = detailedResults.get(ticketData.serial_number);
     const isExpanded = expandedTickets.has(ticketData.serial_number);
 
     return (
       <Card key={ticketData.id} className="relative bg-white/95 backdrop-blur-sm">
-        <button
-          onClick={() => handleRemoveTicket(ticketData.id)}
-          className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 z-10"
-        >
+        <button onClick={() => handleRemoveTicket(ticketData.id)} className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 z-10">
           <X className="w-4 h-4" />
         </button>
-
         <CardContent className="p-4">
           <div className="text-center mb-3">
-            <Badge className="bg-purple-600 text-white mb-1">
-              {ticketData.serial_number}
-            </Badge>
+            <Badge className="bg-purple-600 text-white mb-1">{ticketData.serial_number}</Badge>
             {ticketData.is_winner && (
               <div className="flex items-center justify-center gap-2 mt-2">
                 <Trophy className="w-6 h-6 text-yellow-500" />
@@ -472,113 +471,39 @@ export default function PlayerScreen() {
               </div>
             )}
           </div>
-
           <div className="grid grid-cols-5 gap-2">
             {numbers.map((num) => {
               const isDrawn = drawnNumbers.has(num);
               return (
-                <div
-                  key={num}
-                  className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg transition-all ${
-                    isDrawn
-                      ? "bg-green-500 text-white scale-105 shadow-lg"
-                      : "bg-purple-100 text-purple-900"
-                  }`}
-                >
+                <div key={num} className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg transition-all ${isDrawn ? "bg-green-500 text-white scale-105 shadow-lg" : "bg-purple-100 text-purple-900"}`}>
                   {num}
                 </div>
               );
             })}
           </div>
-
           <div className="text-center mt-3 space-y-1">
-            <div className="text-sm font-semibold text-gray-600">
-              {drawnCount} / 15 izvučeno
-            </div>
+            <div className="text-sm font-semibold text-gray-600">{drawnCount} / 15 izvučeno</div>
             {event?.status === "finished" && ticketStats && (
               <>
                 <div className="text-center mb-2 space-y-1">
-                  <div className="text-lg font-bold text-blue-600">
-                    ✓ {ticketStats.correct} / {ticketStats.drawnOnTicket} točno ({ticketStats.accuracy}%)
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    Izvučeno na ovoj ulaznici: {ticketStats.drawnOnTicket}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    Odgovoreno: {ticketStats.answered} / {ticketStats.drawnOnTicket}
-                  </div>
-                  {ticketStats.missed > 0 && (
-                    <div className="text-xs text-red-600">
-                      Propušteno: {ticketStats.missed}
-                    </div>
-                  )}
+                  <div className="text-lg font-bold text-blue-600">✓ {ticketStats.correct} / {ticketStats.drawnOnTicket} ({ticketStats.accuracy}%)</div>
                 </div>
                 {details && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => toggleTicketDetails(ticketData.serial_number)}
-                    className="w-full mt-2"
-                  >
-                    {isExpanded ? (
-                      <>
-                        <ChevronUp className="w-4 h-4 mr-2" />
-                        Sakrij detalje
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown className="w-4 h-4 mr-2" />
-                        Prikaži detalje
-                      </>
-                    )}
+                  <Button variant="outline" size="sm" onClick={() => toggleTicketDetails(ticketData.serial_number)} className="w-full mt-2">
+                    {isExpanded ? <><ChevronUp className="w-4 h-4 mr-2" />Sakrij</> : <><ChevronDown className="w-4 h-4 mr-2" />Detalji</>}
                   </Button>
                 )}
               </>
             )}
           </div>
-
           {isExpanded && details && event?.status === "finished" && (
-            <div className="mt-4 space-y-2 border-t pt-4">
-              <h4 className="font-bold text-sm text-gray-700 mb-3">Detalji po pitanjima:</h4>
+            <div className="mt-4 space-y-2 border-t pt-4 max-h-60 overflow-y-auto">
               {details.questions.map((q) => (
-                <div
-                  key={q.question_number}
-                  className={`p-3 rounded-lg border-2 ${
-                    q.result === "Točno"
-                      ? "bg-green-50 border-green-300"
-                      : "bg-red-50 border-red-300"
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    {q.result === "Točno" ? (
-                      <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-xs text-gray-600 mb-1">
-                        Pitanje #{q.question_number}
-                      </div>
-                      <div className="text-sm text-gray-800 mb-2 line-clamp-2">
-                        {q.question_text}
-                      </div>
-                      <div className="flex gap-3 text-xs">
-                        <span className="font-semibold">
-                          Točan odgovor: <span className="text-blue-600">{q.correct_answer}</span>
-                        </span>
-                        <span className="font-semibold">
-                          Vaš odgovor: <span className={q.player_answer === "Nije odgovoreno" ? "text-gray-500" : "text-purple-600"}>
-                            {q.player_answer}
-                          </span>
-                        </span>
-                      </div>
-                      <div className={`text-xs font-bold mt-1 ${
-                        q.result === "Točno" ? "text-green-600" : 
-                        q.result === "Propušteno" ? "text-orange-600" : "text-red-600"
-                      }`}>
-                        {q.result}
-                      </div>
-                    </div>
+                <div key={q.question_number} className={`p-2 rounded border text-xs ${q.result === "Točno" ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+                  <div className="font-bold">#{q.question_number}: {q.question_text.substring(0, 30)}...</div>
+                  <div className="flex justify-between mt-1">
+                    <span>Vaš: {q.player_answer}</span>
+                    <span className={q.result === "Točno" ? "text-green-600" : "text-red-600"}>{q.result}</span>
                   </div>
                 </div>
               ))}
@@ -589,226 +514,179 @@ export default function PlayerScreen() {
     );
   };
 
-  // No eventId
-  if (!eventId) {
+  // 1. Loading State
+  if (isLoadingEvent) {
     return (
-      <>
-        <SEO title="Player - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardContent className="pt-6 text-center">
-              <div className="text-6xl mb-4">⚠️</div>
-              <h1 className="text-2xl font-bold mb-2">Missing Event ID</h1>
-              <p className="text-gray-600 mb-4">
-                Please provide an event ID in the URL:
-              </p>
-              <code className="bg-gray-100 px-3 py-2 rounded text-sm">
-                /player?eventId=YOUR_EVENT_ID
-              </code>
-            </CardContent>
-          </Card>
-        </div>
-      </>
-    );
-  }
-
-  // Join screen
-  if (tickets.length === 0) {
-    return (
-      <>
-        <SEO title="Join Game - Pitalica Skitalica" />
-        <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardContent className="pt-6 space-y-4">
-              <div className="text-center mb-6">
-                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
-                  PRIDRUŽI SE IGRI
-                </h1>
-                <p className="text-gray-600">Unesi serijski broj ulaznice</p>
-              </div>
-
-              <Input
-                placeholder="Unesi serijski broj"
-                value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                className="text-lg"
-              />
-
-              <Button onClick={handleAddTicket} className="w-full" size="lg">
-                Pridruži se igri
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </>
-    );
-  }
-
-  // Multi-ticket display
-  return (
-    <>
-      <SEO title="Player - Pitalica Skitalica" />
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4">
-        <div className="container mx-auto max-w-4xl">
-          <div className="mb-6">
-            <h1 className="text-4xl font-black text-white mb-2">PITALICA SKITALICA</h1>
-            <p className="text-white/80">Odgovori na pitanja i osvoji nagradu!</p>
-          </div>
-
-          {event?.winner_ticket_id && (
-            <Card className="mb-4 border-4 border-yellow-500 bg-yellow-50">
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-center gap-3">
-                  <Trophy className="w-8 h-8 text-yellow-600" />
-                  <div className="text-center">
-                    <p className="text-2xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
-                    <p className="text-sm text-yellow-700 mt-1">Serijski broj ulaznice:</p>
-                    <p className="text-lg font-bold text-yellow-800">
-                      {winnerSerial || "..."}
-                    </p>
-                  </div>
-                  <Trophy className="w-8 h-8 text-yellow-600" />
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          <div className="mb-4 space-y-2">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Dodaj još jednu ulaznicu"
-                value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
-                disabled={tickets.length >= 4 || event?.status === "finished"}
-                className="flex-1"
-              />
-              <Button
-                onClick={handleAddTicket}
-                disabled={tickets.length >= 4 || event?.status === "finished"}
-                className="whitespace-nowrap"
-              >
-                Dodaj ({tickets.length}/4)
-              </Button>
-            </div>
-            <Button
-              onClick={handleClearTickets}
-              variant="destructive"
-              className="w-full"
-              size="sm"
-            >
-              Obriši sve
-            </Button>
-          </div>
-
-          {event?.status === "finished" && stats && (
-            <Card className="bg-white/95 backdrop-blur-sm mb-4">
-              <CardContent className="p-6 text-center space-y-3">
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
-                  Hvala na sudjelovanju!
-                </h2>
-                
-                <div className="text-2xl font-bold text-gray-700">
-                  Ukupno točno: {stats.total_correct} / {stats.drawn_in_game}
-                </div>
-                
-                {stats.drawn_in_game > 0 && (
-                  <div className="text-lg text-gray-600">
-                    Točnost: {Math.round((stats.total_correct / stats.drawn_in_game) * 100)}%
-                  </div>
-                )}
-                
-                <div className="text-sm text-gray-500 mt-2">
-                  Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            {tickets.map(ticketData => renderTicketGrid(ticketData))}
-          </div>
-
-          {event?.status === "active" && currentQuestion && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 space-y-4">
-                <div className="text-center">
-                  <Badge className="bg-blue-600 text-white text-lg px-4 py-1 mb-3">
-                    Pitanje #{currentQuestion.question_number}
-                  </Badge>
-                  <h2 className="text-2xl font-bold mb-4">
-                    {currentQuestion.questions?.text}
-                  </h2>
-                </div>
-
-                {timeRemaining > 0 ? (
-                  <>
-                    <div className="flex items-center gap-4">
-                      <div className="h-4 flex-1 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-green-500 to-green-300 transition-all duration-100"
-                          style={{ width: `${(timeRemaining / 10) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-2xl font-black font-mono text-green-600 min-w-[2ch]">
-                        {timeRemaining}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <Button
-                        onClick={() => handleSubmitAnswer(true)}
-                        disabled={hasAnswered}
-                        className="h-20 text-2xl font-black bg-green-600 hover:bg-green-700"
-                      >
-                        DA
-                      </Button>
-                      <Button
-                        onClick={() => handleSubmitAnswer(false)}
-                        disabled={hasAnswered}
-                        className="h-20 text-2xl font-black bg-red-600 hover:bg-red-700"
-                      >
-                        NE
-                      </Button>
-                    </div>
-
-                    {hasAnswered && (
-                      <div className="text-center text-lg font-semibold text-green-600">
-                        Odgovoreno: {answer ? "DA" : "NE"}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="bg-gray-100 rounded-lg p-4 text-center">
-                    <p className="text-lg font-semibold text-gray-600">Vrijeme je isteklo!</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {event?.status === "active" && !currentQuestion && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 text-center">
-                <p className="text-xl font-semibold text-gray-600">
-                  Čekamo sljedeće pitanje...
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {event?.status !== "active" && event?.status !== "finished" && (
-            <Card className="bg-white/95 backdrop-blur-sm">
-              <CardContent className="p-6 text-center">
-                <p className="text-xl font-semibold text-gray-600">
-                  Igra još nije počela
-                </p>
-              </CardContent>
-            </Card>
-          )}
+      <div className="min-h-screen bg-black flex items-center justify-center text-white">
+        <div className="text-center">
+          <div className="text-4xl mb-4 animate-spin">⏳</div>
+          <p>Tražim aktivni event...</p>
         </div>
       </div>
-    </>
+    );
+  }
+
+  // 2. No Active Event
+  if (noActiveEvent) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 to-indigo-900 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md bg-white/10 backdrop-blur border-white/20 text-white">
+          <CardContent className="pt-6 text-center">
+            <div className="text-6xl mb-4 animate-pulse">📡</div>
+            <h1 className="text-2xl font-bold mb-2">Čekam aktivni event</h1>
+            <p className="text-gray-300">
+              Igra još nije počela. Pričekajte da admin pokrene event.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // 3. Join Screen (if no tickets)
+  if (tickets.length === 0) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-500 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md shadow-2xl">
+          <CardContent className="pt-8 pb-8 space-y-6">
+            <div className="text-center">
+              <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600 mb-2">
+                {event?.name || "PITALICA SKITALICA"}
+              </h1>
+              <p className="text-gray-600 font-medium">Unesi broj ulaznice za igru</p>
+            </div>
+            <div className="space-y-4">
+              <Input
+                placeholder="npr. T1234-5678"
+                value={serialInput}
+                onChange={(e) => setSerialInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddTicket()}
+                className="text-lg h-12 text-center font-mono uppercase tracking-wider"
+              />
+              <Button onClick={handleAddTicket} className="w-full h-12 text-lg font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg transition-all hover:scale-[1.02]">
+                PRIDRUŽI SE IGRI 🚀
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // 4. Game Screen
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-600 via-purple-600 to-pink-600 p-4 pb-20">
+      <div className="container mx-auto max-w-4xl space-y-4">
+        <div className="flex justify-between items-center text-white">
+          <h1 className="text-xl font-bold truncate">{event?.name}</h1>
+          <Badge variant="outline" className="text-white border-white/30 bg-white/10">
+            {tickets.length} ulaznica
+          </Badge>
+        </div>
+
+        {event?.winner_ticket_id && (
+          <Card className="border-4 border-yellow-500 bg-yellow-50 animate-pulse">
+            <CardContent className="pt-6 flex items-center justify-center gap-3">
+              <Trophy className="w-8 h-8 text-yellow-600" />
+              <div className="text-center">
+                <p className="text-xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
+                <p className="font-mono text-yellow-800 font-bold">{winnerSerial || "..."}</p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* INPUT CONTROLS */}
+        {event?.status !== "finished" && (
+          <div className="flex gap-2 bg-white/10 p-2 rounded-lg backdrop-blur-sm">
+            <Input
+              placeholder="Dodaj još ulaznica..."
+              value={serialInput}
+              onChange={(e) => setSerialInput(e.target.value)}
+              disabled={tickets.length >= 4}
+              className="bg-white/90 border-0 focus-visible:ring-2 ring-white/50"
+            />
+            <Button onClick={handleAddTicket} disabled={tickets.length >= 4} variant="secondary">
+              Dodaj
+            </Button>
+            <Button onClick={handleClearTickets} variant="destructive" size="icon">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* ACTIVE QUESTION CARD */}
+        {event?.status === "active" && currentQuestion ? (
+          <Card className="bg-white shadow-2xl border-0 overflow-hidden">
+            <div className="h-2 bg-gray-100 w-full">
+              <div 
+                className="h-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-100 ease-linear"
+                style={{ width: `${(timeRemaining / 10) * 100}%` }}
+              />
+            </div>
+            <CardContent className="p-6 space-y-6 text-center">
+              <div>
+                <Badge className="bg-blue-100 text-blue-800 mb-2 hover:bg-blue-100 px-3 py-1 text-sm">
+                  Pitanje #{currentQuestion.question_number}
+                </Badge>
+                <h2 className="text-2xl md:text-3xl font-black text-gray-800 leading-tight">
+                  {currentQuestion.questions?.text}
+                </h2>
+              </div>
+
+              {timeRemaining > 0 ? (
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <Button
+                    onClick={() => handleSubmitAnswer(true)}
+                    disabled={hasAnswered}
+                    className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                      hasAnswered && answer === true 
+                        ? "bg-green-600 ring-4 ring-green-200" 
+                        : "bg-green-500 hover:bg-green-600 shadow-[0_4px_0_rgb(21,128,61)]"
+                    }`}
+                  >
+                    DA
+                  </Button>
+                  <Button
+                    onClick={() => handleSubmitAnswer(false)}
+                    disabled={hasAnswered}
+                    className={`h-24 text-3xl font-black rounded-xl transition-all active:scale-95 ${
+                      hasAnswered && answer === false
+                        ? "bg-red-600 ring-4 ring-red-200"
+                        : "bg-red-500 hover:bg-red-600 shadow-[0_4px_0_rgb(185,28,28)]"
+                    }`}
+                  >
+                    NE
+                  </Button>
+                </div>
+              ) : (
+                <div className="bg-gray-100 rounded-xl p-4 font-bold text-gray-500">
+                  Vrijeme je isteklo! ⏱️
+                </div>
+              )}
+              
+              {hasAnswered && (
+                <div className="text-sm font-medium text-gray-500 animate-in fade-in slide-in-from-bottom-2">
+                  Vaš odgovor: <span className="text-black font-bold">{answer ? "DA" : "NE"}</span>
+                  {timeRemaining > 0 && " • Čekamo kraj vremena..."}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ) : event?.status === "active" ? (
+          <Card className="bg-white/90 backdrop-blur text-center py-8 animate-pulse">
+            <CardContent>
+              <div className="text-4xl mb-2">🎲</div>
+              <h3 className="text-xl font-bold text-gray-700">Čekamo sljedeće pitanje...</h3>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {/* TICKETS GRID */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {tickets.map(ticketData => renderTicketGrid(ticketData))}
+        </div>
+      </div>
+    </div>
   );
 }

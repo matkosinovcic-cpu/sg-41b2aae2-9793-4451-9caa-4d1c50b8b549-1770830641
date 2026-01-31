@@ -16,6 +16,7 @@ export interface Event {
   question_open_until: string | null;
   winner_ticket_id: string | null;
   created_at: string;
+  updated_at: string; // ✅ ADDED for sync comparison
 }
 
 export interface EventQuestion {
