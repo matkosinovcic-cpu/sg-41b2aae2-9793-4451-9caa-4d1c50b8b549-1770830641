@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 // Helper to normalize answers for local comparison (matches service logic)
 function normalizeAnswer(value: any): boolean | null {
@@ -52,6 +53,7 @@ export default function PlayerScreen() {
   const [stats, setStats] = useState<AggregatedStats | null>(null);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
+  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
   const { toast } = useToast();
 
   // Load tickets from localStorage on mount
@@ -326,6 +328,35 @@ export default function PlayerScreen() {
       console.error("[Player] Failed to load detailed results:", error);
     }
   };
+
+  const fetchWinnerSerial = async (ticketId: string) => {
+    try {
+      console.log("[Player] 🔍 Fetching winner serial for ticket:", ticketId);
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('serial_number')
+        .eq('id', ticketId)
+        .single();
+      
+      if (error) throw error;
+      
+      const serial = data?.serial_number;
+      setWinnerSerial(serial || null);
+      console.log("[Player] ✅ Winner serial loaded:", serial);
+    } catch (error) {
+      console.error("[Player] ❌ Failed to load winner serial:", error);
+      setWinnerSerial(null);
+    }
+  };
+
+  useEffect(() => {
+    if (event?.winner_ticket_id) {
+      console.log("[Player] 🏆 Winner detected, fetching serial...");
+      fetchWinnerSerial(event.winner_ticket_id);
+    } else {
+      setWinnerSerial(null);
+    }
+  }, [event?.winner_ticket_id]);
 
   const toggleTicketDetails = (serial: string) => {
     setExpandedTickets(prev => {
@@ -745,8 +776,9 @@ export default function PlayerScreen() {
                   <Trophy className="w-8 h-8 text-yellow-600" />
                   <div className="text-center">
                     <p className="text-2xl font-black text-yellow-600">IMAMO POBJEDNIKA!</p>
-                    <p className="text-lg text-yellow-700">
-                      Ulaznica: {event.winner_ticket_id}
+                    <p className="text-sm text-yellow-700 mt-1">Serijski broj ulaznice:</p>
+                    <p className="text-lg font-bold text-yellow-800">
+                      {winnerSerial || "..."}
                     </p>
                   </div>
                   <Trophy className="w-8 h-8 text-yellow-600" />

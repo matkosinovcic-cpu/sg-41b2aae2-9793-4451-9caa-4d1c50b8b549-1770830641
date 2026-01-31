@@ -480,32 +480,6 @@ export default function TVScreen() {
     }
   };
 
-  const fetchWinnerSerial = async () => {
-    if (!event?.winner_ticket_id) return;
-    
-    try {
-      const { data, error } = await supabase
-        .from("tickets")
-        .select("serial_number")
-        .eq("id", event.winner_ticket_id)
-        .single();
-      
-      if (error) {
-        console.error("[TV] Failed to fetch winner serial number:", error);
-      } else {
-        console.log("[TV] ✅ Winner serial number fetched:", data?.serial_number);
-      }
-    } catch (error) {
-      console.error("[TV] Failed to fetch winner serial number:", error);
-    }
-  };
-
-  useEffect(() => {
-    if (event?.winner_ticket_id) {
-      fetchWinnerSerial();
-    }
-  }, [event?.winner_ticket_id]);
-
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
@@ -602,13 +576,13 @@ export default function TVScreen() {
                 IMAMO POBJEDNIKA!
               </h1>
               
-              {/* Winning ticket display */}
-              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-12 shadow-2xl">
-                <div className="text-3xl text-yellow-300 mb-4 tracking-wider">
-                  SERIJSKI BROJ ULAZNICE
-                </div>
-                <div className="text-9xl font-black text-yellow-400 drop-shadow-2xl">
-                  {event.winner_ticket_id || "???"}
+              {/* Winner display box */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-[4vh] shadow-2xl">
+                <div 
+                  className="font-extrabold text-yellow-400 text-center leading-none"
+                  style={{ fontSize: "clamp(52px, 11vw, 160px)" }}
+                >
+                  POBJEDNIK
                 </div>
               </div>
               
