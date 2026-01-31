@@ -380,7 +380,9 @@ export default function AdminPanel() {
   const handleDrawNextQuestion = async (eventId: string) => {
     setLoading(true);
     try {
-      // ✅ CRITICAL: Re-fetch event from DB to get latest state (SOURCE OF TRUTH)
+      console.log("[ADMIN DRAW] 🎲 Starting draw for event:", eventId.slice(0, 8));
+      
+      // ✅ CRITICAL: Re-fetch event to check current status
       const { data: freshEvent, error: fetchError } = await supabase
         .from("events")
         .select("*")
@@ -388,6 +390,7 @@ export default function AdminPanel() {
         .maybeSingle();
 
       if (fetchError || !freshEvent) {
+        console.error("[ADMIN DRAW] ❌ Failed to fetch event:", fetchError);
         toast({
           title: "Error",
           description: "Failed to fetch event state",
@@ -397,8 +400,16 @@ export default function AdminPanel() {
         return;
       }
 
+      console.log("[ADMIN DRAW] 📋 Current event state:", {
+        eventId: freshEvent.id.slice(0, 8),
+        status: freshEvent.status,
+        currentQuestion: freshEvent.current_question_number,
+        drawnCount: freshEvent.drawn_numbers?.length || 0
+      });
+
       // ✅ STATE MACHINE: Enforce strict status rules
       if (freshEvent.status === "finished") {
+        console.error("[ADMIN DRAW] ❌ Event is finished");
         toast({
           title: "Event završen",
           description: "Event je završen (pobjednik postoji). Za novo izvlačenje koristi 'Reset Event'.",
@@ -409,6 +420,7 @@ export default function AdminPanel() {
       }
 
       if (freshEvent.status === "paused") {
+        console.error("[ADMIN DRAW] ❌ Event is paused");
         toast({
           title: "Event pauziran",
           description: "Event je pauziran. Klikni 'Nastavi' za nastavak.",
@@ -419,6 +431,7 @@ export default function AdminPanel() {
       }
 
       if (freshEvent.status !== "active") {
+        console.error("[ADMIN DRAW] ❌ Invalid status:", freshEvent.status);
         toast({
           title: "Nevažeći status",
           description: `Event mora biti aktivan za izvlačenje (trenutni status: ${freshEvent.status})`,
@@ -429,19 +442,29 @@ export default function AdminPanel() {
       }
 
       // ✅ ACTIVE status: Allow draw
-      await eventService.drawNextQuestion(eventId);
+      console.log("[ADMIN DRAW] ✅ Event is active, proceeding with draw");
+      
+      const result = await eventService.drawNextQuestion(eventId);
+      
+      console.log("[ADMIN DRAW] 🎉 Draw completed successfully:", {
+        drawnNumber: result.drawnNumber,
+        questionOpenUntil: result.questionOpenUntil
+      });
+      
       await loadEvents();
       
       if (selectedEvent?.id === eventId) {
         const updatedEvent = await eventService.getEvent(eventId);
         setSelectedEvent(updatedEvent);
+        console.log("[ADMIN DRAW] 🔄 Selected event refreshed");
       }
       
       toast({
         title: "Success",
-        description: "Pitanje izvučeno",
+        description: `Pitanje #${result.drawnNumber} izvučeno`,
       });
     } catch (error: any) {
+      console.error("[ADMIN DRAW] ❌ ERROR:", error);
       toast({
         title: "Error",
         description: error.message || "Failed to draw question",

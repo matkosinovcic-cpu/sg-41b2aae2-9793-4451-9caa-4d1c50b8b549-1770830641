@@ -311,6 +311,12 @@ export const eventService = {
     const randomIndex = Math.floor(Math.random() * availableNumbers.length);
     const drawnNumber = availableNumbers[randomIndex];
 
+    console.log("[ADMIN DRAW] start", { 
+      eventId: eventId.slice(0, 8), 
+      nextNumber: drawnNumber,
+      previouslyDrawn: drawnNumbers.length 
+    });
+
     // Get the question for this number
     const { data: questionData } = await supabase
       .from("event_questions")
@@ -334,17 +340,36 @@ export const eventService = {
     // Update drawn numbers list and current drawn number
     const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
-    await supabase
+    // ✅ CRITICAL: UPDATE with updated_at and return row
+    const { data: returnedRow, error: updateError } = await supabase
       .from("events")
       .update({
         drawn_numbers: updatedDrawnNumbers,
         current_drawn_number: drawnNumber,
         current_question_number: drawnNumber,
-        question_open_until: questionOpenUntil
+        question_open_until: questionOpenUntil,
+        updated_at: new Date().toISOString()  // ✅ FORCE updated_at change
       })
-      .eq("id", eventId);
+      .eq("id", eventId)
+      .select('*')
+      .single();
 
-    console.log("[drawNextQuestion] ✅ Drew number:", drawnNumber, "Total drawn:", updatedDrawnNumbers.length);
+    if (updateError) {
+      console.error("[ADMIN DRAW] ERROR", { error: updateError });
+      throw updateError;
+    }
+
+    if (!returnedRow) {
+      console.error("[ADMIN DRAW] NO ROW UPDATED", { eventId: eventId.slice(0, 8) });
+      throw new Error("Failed to update event - no row returned");
+    }
+
+    console.log("[ADMIN DRAW] success", { 
+      eventId: returnedRow.id.slice(0, 8),
+      drawnNumber: returnedRow.current_drawn_number,
+      updatedAt: returnedRow.updated_at,
+      totalDrawn: returnedRow.drawn_numbers?.length || 0
+    });
 
     // ✅ CRITICAL: Check for winner after drawing (auto-sets FINISHED if winner found)
     await this.checkForWinner(eventId);

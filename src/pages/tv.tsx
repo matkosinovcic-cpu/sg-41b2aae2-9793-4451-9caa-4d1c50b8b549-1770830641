@@ -85,7 +85,9 @@ export default function TVScreen() {
       eventChannelRef.current = null;
     }
     
-    console.log("[TV] 📡 Subscribing to event updates:", eventId.slice(0, 8));
+    console.log("[TV] 📡 Subscribing to realtime updates");
+    console.log("[TV] 📡 Filter: id=eq." + eventId.slice(0, 8));
+    console.log("[TV] 📡 Full eventId:", eventId);
     
     const channel = supabase
       .channel(`tv-event-${eventId}`)
@@ -95,24 +97,37 @@ export default function TVScreen() {
         table: 'events',
         filter: `id=eq.${eventId}`
       }, async (payload) => {
-        console.log("[TV] ⚡ Realtime UPDATE received");
+        console.log("[TV] ⚡ realtime UPDATE received!");
+        console.log("[TV] 📦 Payload:", {
+          eventType: payload.eventType,
+          new_id: (payload.new as any)?.id?.slice(0, 8),
+          new_currentQuestionNumber: (payload.new as any)?.current_question_number,
+          new_currentDrawnNumber: (payload.new as any)?.current_drawn_number,
+          new_updatedAt: (payload.new as any)?.updated_at,
+          timestamp: Date.now()
+        });
         
         const newEvent = payload.new as Event;
         
-        // ✅ IMMEDIATE STATE UPDATE - NO GUARDS, NO DEBOUNCE
+        // ✅ DIRECT STATE UPDATE
         setEvent(newEvent);
         setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
         
         // ✅ LOAD QUESTION IF CHANGED
         if (newEvent.current_drawn_number && 
             newEvent.current_drawn_number !== currentQuestion?.question_number) {
-          console.log("[TV] 🔔 New question:", newEvent.current_drawn_number);
+          console.log("[TV] 🔔 New question detected:", newEvent.current_drawn_number);
           playBeep('start');
           await loadCurrentQuestion(newEvent.id, newEvent.current_drawn_number);
         }
       })
       .subscribe((status) => {
         console.log("[TV] 📡 Subscription status:", status);
+        if (status === 'SUBSCRIBED') {
+          console.log("[TV] ✅ Successfully subscribed to realtime updates");
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error("[TV] ❌ Subscription error:", status);
+        }
       });
     
     eventChannelRef.current = channel;

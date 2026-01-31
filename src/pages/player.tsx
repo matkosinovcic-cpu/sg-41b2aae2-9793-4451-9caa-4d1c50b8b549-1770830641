@@ -106,7 +106,9 @@ export default function PlayerScreen() {
       eventChannelRef.current = null;
     }
     
-    console.log("[Player] 📡 Subscribing to event updates:", eventId.slice(0, 8));
+    console.log("[Player] 📡 Subscribing to realtime updates");
+    console.log("[Player] 📡 Filter: id=eq." + eventId.slice(0, 8));
+    console.log("[Player] 📡 Full eventId:", eventId);
     
     const channel = supabase
       .channel(`player-event-${eventId}`)
@@ -116,18 +118,26 @@ export default function PlayerScreen() {
         table: 'events',
         filter: `id=eq.${eventId}`
       }, async (payload) => {
-        console.log("[Player] ⚡ Realtime UPDATE received");
+        console.log("[Player] ⚡ realtime UPDATE received!");
+        console.log("[Player] 📦 Payload:", {
+          eventType: payload.eventType,
+          new_id: (payload.new as any)?.id?.slice(0, 8),
+          new_currentQuestionNumber: (payload.new as any)?.current_question_number,
+          new_currentDrawnNumber: (payload.new as any)?.current_drawn_number,
+          new_updatedAt: (payload.new as any)?.updated_at,
+          timestamp: Date.now()
+        });
         
         const newEvent = payload.new as Event;
         
-        // ✅ IMMEDIATE STATE UPDATE - NO GUARDS, NO DEBOUNCE
+        // ✅ DIRECT STATE UPDATE
         setEvent(newEvent);
         setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
         
         // ✅ LOAD QUESTION IF CHANGED
         if (newEvent.current_question_number && 
             newEvent.current_question_number !== currentQuestion?.question_number) {
-          console.log("[Player] 🔔 New question:", newEvent.current_question_number);
+          console.log("[Player] 🔔 New question detected:", newEvent.current_question_number);
           await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
         }
         
@@ -139,6 +149,11 @@ export default function PlayerScreen() {
       })
       .subscribe((status) => {
         console.log("[Player] 📡 Subscription status:", status);
+        if (status === 'SUBSCRIBED') {
+          console.log("[Player] ✅ Successfully subscribed to realtime updates");
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error("[Player] ❌ Subscription error:", status);
+        }
       });
     
     eventChannelRef.current = channel;
