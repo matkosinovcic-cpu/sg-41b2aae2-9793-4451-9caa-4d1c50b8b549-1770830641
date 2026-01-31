@@ -360,10 +360,26 @@ export default function PlayerScreen() {
     const interval = setInterval(() => {
       const now = new Date().getTime();
       const deadline = new Date(event.question_open_until!).getTime();
+      
+      // Validate deadline
+      if (isNaN(deadline)) {
+        console.log("[Player-Timer] ⚠️ Invalid deadline, skipping timeout");
+        setTimeRemaining(0);
+        return;
+      }
+      
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+      
+      // Debug logging (only when value changes)
+      if (remaining !== timeRemaining && remaining > 0) {
+        console.log(`[Player-Timer] ⏱️ Countdown: ${remaining}s`);
+      }
+      
       setTimeRemaining(remaining);
       
-      if (remaining === 0 && !hasAnswered) {
+      // Only call timeout if we actually had time (prevent premature calls)
+      if (remaining === 0 && !hasAnswered && timeRemaining > 0) {
+        console.log("[Player-Timer] ⏱️ Time expired, calling handleTimeout");
         handleTimeout();
       }
     }, 100);
