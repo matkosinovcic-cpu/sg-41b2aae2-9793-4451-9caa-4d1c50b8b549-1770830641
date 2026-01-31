@@ -413,8 +413,30 @@ export default function AdminPanel() {
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>Pitanje: {event.current_question_number || 0} / 90</div>
-                        <div>Izvučeno: {event.drawn_numbers?.length || 0}</div>
+                        <div>
+                          <div className="text-gray-500">Status</div>
+                          <Badge variant={
+                            event.status === "active" ? "default" :
+                            event.status === "finished" ? "secondary" :
+                            "outline"
+                          }>
+                            {event.status}
+                          </Badge>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Pitanje</div>
+                          <div className="font-semibold">
+                            {lastDrawnNumber || 0} / {totalQuestions || 90}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Izvučeno</div>
+                          <div className="font-semibold">{questionIndex}</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500">Tiketa</div>
+                          <div className="font-semibold">{ticketCount}</div>
+                        </div>
                       </div>
 
                       {event.winner_ticket_id && (
