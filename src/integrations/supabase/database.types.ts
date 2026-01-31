@@ -100,6 +100,7 @@ export type Database = {
           name: string
           question_open_until: string | null
           status: string
+          updated_at: string | null
           winner_ticket_id: string | null
         }
         Insert: {
@@ -112,6 +113,7 @@ export type Database = {
           name: string
           question_open_until?: string | null
           status?: string
+          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Update: {
@@ -124,6 +126,7 @@ export type Database = {
           name?: string
           question_open_until?: string | null
           status?: string
+          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Relationships: []

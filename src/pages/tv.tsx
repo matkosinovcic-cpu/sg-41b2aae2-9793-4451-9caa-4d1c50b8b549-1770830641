@@ -54,13 +54,7 @@ export default function TVScreen() {
         return null;
       }
       
-      if (data) {
-        console.log("[TV] ✅ Active event found:", data.id.slice(0, 8), "-", data.name);
-      } else {
-        console.log("[TV] ⚠️ No active event found");
-      }
-      
-      return data;
+      return data as unknown as Event;
     } catch (error) {
       console.error("[TV] ❌ Exception in resolveActiveEvent:", error);
       return null;

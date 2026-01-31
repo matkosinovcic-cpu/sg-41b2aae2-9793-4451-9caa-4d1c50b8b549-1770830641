@@ -85,7 +85,7 @@ export default function PlayerScreen() {
         return null;
       }
       
-      return data as Event;
+      return data as unknown as Event;
     } catch (error) {
       console.error("[Player] ❌ Exception in resolveActiveEvent:", error);
       return null;
