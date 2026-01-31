@@ -860,17 +860,6 @@ export default function PlayerScreen() {
                   <div className="text-sm text-gray-500 mt-2">
                     Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
                   </div>
-                  
-                  {winnerTicket && (
-                    <div className="text-sm font-bold text-yellow-600 mt-2">
-                      (Prikazani rezultati za pobjednički tiket: {targetTicket.serial_number})
-                    </div>
-                  )}
-                  {!winnerTicket && tickets.length > 1 && (
-                    <div className="text-xs text-gray-400 mt-1">
-                      (Prikazani rezultati za tiket: {targetTicket.serial_number})
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             );

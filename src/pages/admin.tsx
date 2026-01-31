@@ -377,6 +377,32 @@ export default function AdminPanel() {
     }
   };
 
+  const handlePauseEvent = async (eventId: string) => {
+    setLoading(true);
+    try {
+      await eventService.pauseEvent(eventId);
+      await loadEvents();
+      
+      if (selectedEvent?.id === eventId) {
+        const updated = await eventService.getEvent(eventId);
+        setSelectedEvent(updated);
+      }
+      
+      toast({
+        title: "Success",
+        description: "Event pauziran"
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDrawNextQuestion = async (eventId: string) => {
     setLoading(true);
     try {
@@ -727,13 +753,12 @@ export default function AdminPanel() {
 
                             {event.status === "paused" && (
                               <Button
+                                size="sm"
                                 onClick={() => handleStartEvent(event.id)}
                                 disabled={loading}
-                                variant="default"
-                                size="sm"
                               >
                                 <Play className="w-4 h-4 mr-2" />
-                                Nastavi
+                                Nastavi Event
                               </Button>
                             )}
 

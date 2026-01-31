@@ -359,6 +359,21 @@ export const eventService = {
     if (error) throw error;
   },
 
+  async resetEvent(eventId: string) {
+    const { error } = await supabase
+      .from("events")
+      .update({
+        status: "draft",
+        drawn_numbers: [],
+        current_drawn_number: null,
+        current_question_number: null,
+        winner_ticket_id: null
+      })
+      .eq("id", eventId);
+    
+    if (error) throw error;
+  },
+
   async submitAnswer(ticketId: string, questionNumber: number, answer: boolean) {
     const { data: ticket } = await supabase
       .from("tickets")
