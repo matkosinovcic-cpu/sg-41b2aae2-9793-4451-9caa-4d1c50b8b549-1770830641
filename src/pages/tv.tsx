@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
-import { Gamepad2, Trophy, Clock } from "lucide-react";
+import { Trophy } from "lucide-react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -18,7 +18,7 @@ interface TicketData {
 
 export default function TVScreen() {
   const router = useRouter();
-  const eventId = router.query.eventId as string;
+  const urlEventId = router.query.eventId as string | undefined;
   
   const [event, setEvent] = useState<Event | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
@@ -28,56 +28,76 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
   const [animatedCount, setAnimatedCount] = useState(0);
+  const [isLoadingEvent, setIsLoadingEvent] = useState(true);
+  const [noActiveEvent, setNoActiveEvent] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
-  const channelRef = useRef<RealtimeChannel | null>(null);
+  const eventChannelRef = useRef<RealtimeChannel | null>(null);
+  const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
+  const lastUpdatedAtRef = useRef<string | null>(null);
 
-  // Initialize AudioContext
-  useEffect(() => {
+  // 🚀 RESOLVE ACTIVE EVENT
+  const resolveActiveEvent = async (): Promise<Event | null> => {
     try {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      console.log("[TV] ✅ AudioContext initialized");
-    } catch (error) {
-      console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
-    }
-  }, []);
-
-  // Fetch initial event state
-  useEffect(() => {
-    if (!eventId) return;
-    
-    const fetchEvent = async () => {
-      try {
-        console.log("[TV] 📥 Fetching initial event state for:", eventId.slice(0, 8));
-        const eventData = await eventService.getEvent(eventId);
-        
-        setEvent(eventData);
-        setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-        lastDrawnNumberRef.current = eventData.current_drawn_number;
-        
-        if (eventData.current_drawn_number) {
-          await loadCurrentQuestion(eventData.id, eventData.current_drawn_number);
-        }
-        
-        console.log("[TV] ✅ Initial state loaded:", {
-          currentNumber: eventData.current_drawn_number,
-          drawnCount: eventData.drawn_numbers?.length || 0,
-          status: eventData.status
-        });
-      } catch (error) {
-        console.error("[TV] ❌ Failed to fetch initial event:", error);
+      console.log("[TV] 🔍 Resolving active event...");
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[TV] ❌ Error fetching active event:", error);
+        return null;
       }
-    };
-    
-    fetchEvent();
-  }, [eventId]);
+      
+      if (data) {
+        console.log("[TV] ✅ Active event found:", data.id.slice(0, 8), "-", data.name);
+      } else {
+        console.log("[TV] ⚠️ No active event found");
+      }
+      
+      return data;
+    } catch (error) {
+      console.error("[TV] ❌ Exception in resolveActiveEvent:", error);
+      return null;
+    }
+  };
 
-  // Realtime subscription
-  useEffect(() => {
-    if (!eventId) return;
+  // 🎯 LOAD EVENT DATA
+  const loadEventData = async (eventId: string) => {
+    try {
+      console.log("[TV] 📥 Loading event data:", eventId.slice(0, 8));
+      const eventData = await eventService.getEvent(eventId);
+      
+      setEvent(eventData);
+      setDrawnNumbers(new Set(eventData.drawn_numbers || []));
+      lastDrawnNumberRef.current = eventData.current_drawn_number;
+      lastUpdatedAtRef.current = eventData.updated_at || null;
+      
+      if (eventData.current_drawn_number) {
+        await loadCurrentQuestion(eventData.id, eventData.current_drawn_number);
+      }
+      
+      console.log("[TV] ✅ Event data loaded");
+    } catch (error) {
+      console.error("[TV] ❌ Failed to load event data:", error);
+    }
+  };
+
+  // 🔄 SUBSCRIBE TO EVENT UPDATES
+  const subscribeToEventUpdates = (eventId: string) => {
+    // Unsubscribe from old channel if exists
+    if (eventChannelRef.current) {
+      console.log("[TV] 🧹 Unsubscribing from old event channel");
+      eventChannelRef.current.unsubscribe();
+      eventChannelRef.current = null;
+    }
     
-    console.log("[TV] 📡 Setting up realtime subscription for event:", eventId.slice(0, 8));
+    console.log("[TV] 📡 Subscribing to event updates:", eventId.slice(0, 8));
     
     const channel = supabase
       .channel(`tv-event-${eventId}`)
@@ -87,9 +107,17 @@ export default function TVScreen() {
         table: 'events',
         filter: `id=eq.${eventId}`
       }, async (payload) => {
-        console.log("[TV] ⚡ Realtime UPDATE received:", payload);
+        console.log("[TV] ⚡ Realtime UPDATE received");
         
         const newEvent = payload.new as Event;
+        
+        // 🎯 COMPARE GUARD - Prevent unnecessary updates
+        if (newEvent.updated_at === lastUpdatedAtRef.current) {
+          console.log("[TV] ⏭️ Same updated_at, skipping update");
+          return;
+        }
+        
+        lastUpdatedAtRef.current = newEvent.updated_at || null;
         
         // Update drawn numbers
         const newDrawnNumbers = new Set(newEvent.drawn_numbers || []);
@@ -97,7 +125,7 @@ export default function TVScreen() {
         
         // Check if current number changed
         if (newEvent.current_drawn_number !== lastDrawnNumberRef.current) {
-          console.log("[TV] 🔔 Current number changed:", lastDrawnNumberRef.current, "→", newEvent.current_drawn_number);
+          console.log("[TV] 🔔 New number drawn:", newEvent.current_drawn_number);
           
           playBeep('start');
           lastDrawnNumberRef.current = newEvent.current_drawn_number;
@@ -109,25 +137,161 @@ export default function TVScreen() {
         
         // Update event state
         setEvent(newEvent);
-        
-        console.log("[TV] ✅ State updated:", {
-          currentNumber: newEvent.current_drawn_number,
-          drawnCount: newEvent.drawn_numbers?.length || 0,
-          status: newEvent.status
-        });
       })
       .subscribe((status) => {
-        console.log("[TV] 📡 Subscription status:", status);
+        console.log("[TV] 📡 Event subscription status:", status);
       });
     
-    channelRef.current = channel;
+    eventChannelRef.current = channel;
+  };
+
+  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER
+  const subscribeToActiveEventTracker = () => {
+    console.log("[TV] 📡 Setting up active event tracker");
     
-    return () => {
-      console.log("[TV] 🧹 Cleaning up realtime subscription");
-      channel.unsubscribe();
-      channelRef.current = null;
+    const channel = supabase
+      .channel('active-event-tracker')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'events',
+        filter: 'status=eq.active'
+      }, async (payload) => {
+        console.log("[TV] ⚡ Active event change detected:", payload.eventType);
+        
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const newActiveEvent = payload.new as Event;
+          
+          // Check if it's a different event
+          if (event && newActiveEvent.id === event.id) {
+            console.log("[TV] ⏭️ Same event, ignoring");
+            return;
+          }
+          
+          console.log("[TV] 🆕 NEW ACTIVE EVENT detected:", newActiveEvent.id.slice(0, 8), "-", newActiveEvent.name);
+          
+          // Handle new active event
+          await handleNewActiveEvent(newActiveEvent);
+        }
+      })
+      .subscribe((status) => {
+        console.log("[TV] 📡 Active event tracker status:", status);
+      });
+    
+    activeEventTrackerRef.current = channel;
+  };
+
+  // 🔥 HANDLE NEW ACTIVE EVENT
+  const handleNewActiveEvent = async (newEvent: Event) => {
+    console.log("[TV] 🔥 Switching to new active event:", newEvent.id.slice(0, 8));
+    
+    // 1. Clear old state
+    setDrawnNumbers(new Set());
+    setCurrentQuestion(null);
+    setQuestionText(null);
+    setTimeRemaining(0);
+    setTickets([]);
+    setTicketStats([]);
+    setAnimatedCount(0);
+    lastDrawnNumberRef.current = null;
+    lastUpdatedAtRef.current = null;
+    
+    // 2. Clear localStorage/sessionStorage
+    localStorage.removeItem('eventId');
+    sessionStorage.clear();
+    
+    // 3. Load new event
+    await loadEventData(newEvent.id);
+    
+    // 4. Subscribe to new event
+    subscribeToEventUpdates(newEvent.id);
+    
+    console.log("[TV] ✅ Switched to new active event successfully");
+  };
+
+  // 🚀 INITIAL LOAD
+  useEffect(() => {
+    const initializeTV = async () => {
+      console.log("[TV] 🚀 Initializing TV screen...");
+      
+      // 1. Determine event ID (URL param OR active event)
+      let targetEventId = urlEventId;
+      
+      if (!targetEventId) {
+        console.log("[TV] 🔍 No eventId in URL, resolving active event...");
+        const activeEvent = await resolveActiveEvent();
+        
+        if (activeEvent) {
+          targetEventId = activeEvent.id;
+          console.log("[TV] ✅ Using active event:", targetEventId.slice(0, 8));
+        } else {
+          console.log("[TV] ⚠️ No active event found");
+          setNoActiveEvent(true);
+          setIsLoadingEvent(false);
+          return;
+        }
+      } else {
+        console.log("[TV] ✅ Using eventId from URL:", targetEventId.slice(0, 8));
+      }
+      
+      // 2. Load event data
+      await loadEventData(targetEventId);
+      
+      // 3. Subscribe to event updates
+      subscribeToEventUpdates(targetEventId);
+      
+      // 4. Subscribe to active event tracker (for auto-switch)
+      subscribeToActiveEventTracker();
+      
+      setIsLoadingEvent(false);
+      setNoActiveEvent(false);
     };
-  }, [eventId]);
+    
+    initializeTV();
+    
+    // Cleanup on unmount
+    return () => {
+      console.log("[TV] 🧹 Cleaning up subscriptions");
+      if (eventChannelRef.current) {
+        eventChannelRef.current.unsubscribe();
+      }
+      if (activeEventTrackerRef.current) {
+        activeEventTrackerRef.current.unsubscribe();
+      }
+    };
+  }, [urlEventId]);
+
+  // 🔄 POLLING FALLBACK (only if no event after 5s)
+  useEffect(() => {
+    if (!noActiveEvent) return;
+    
+    console.log("[TV] ⏰ Starting polling fallback for active event");
+    
+    const pollInterval = setInterval(async () => {
+      console.log("[TV-POLL] 🔄 Checking for active event...");
+      const activeEvent = await resolveActiveEvent();
+      
+      if (activeEvent) {
+        console.log("[TV-POLL] ✅ Active event found, initializing...");
+        setNoActiveEvent(false);
+        await loadEventData(activeEvent.id);
+        subscribeToEventUpdates(activeEvent.id);
+        subscribeToActiveEventTracker();
+      }
+    }, 3000); // Check every 3s
+    
+    return () => clearInterval(pollInterval);
+  }, [noActiveEvent]);
+
+  // Initialize AudioContext
+  useEffect(() => {
+    try {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      console.log("[TV] ✅ AudioContext initialized");
+    } catch (error) {
+      console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
+    }
+  }, []);
 
   // Timer countdown
   useEffect(() => {
@@ -215,7 +379,7 @@ export default function TVScreen() {
   };
 
   const loadTickets = async () => {
-    if (!eventId) return;
+    if (!event) return;
     try {
       const { data, error } = await supabase
         .from('tickets')
@@ -228,7 +392,7 @@ export default function TVScreen() {
             question_number
           )
         `)
-        .eq('event_id', eventId);
+        .eq('event_id', event.id);
 
       if (error) throw error;
       setTickets(data as any || []);
@@ -349,22 +513,31 @@ export default function TVScreen() {
     } catch (e) { console.error(e); }
   };
 
-  // No eventId
-  if (!eventId) {
+  // Loading state
+  if (isLoadingEvent) {
+    return (
+      <>
+        <SEO title="TV Display - Pitalica Skitalica" />
+        <div className="min-h-screen bg-black flex items-center justify-center">
+          <div className="text-white text-2xl">Učitavanje...</div>
+        </div>
+      </>
+    );
+  }
+
+  // No active event
+  if (noActiveEvent) {
     return (
       <>
         <SEO title="TV Display - Pitalica Skitalica" />
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
           <Card className="w-full max-w-md border-yellow-500 border-2">
             <CardContent className="pt-6 text-center">
-              <div className="text-6xl mb-4">⚠️</div>
-              <h1 className="text-2xl font-bold mb-2">Missing Event ID</h1>
-              <p className="text-gray-600 mb-4">
-                Please provide an event ID in the URL:
+              <div className="text-6xl mb-4 animate-pulse">⏳</div>
+              <h1 className="text-2xl font-bold mb-2">Čekam aktivni event</h1>
+              <p className="text-gray-600">
+                Još nema aktivnog eventa. Automatski će se prikazati kad admin pokrene event.
               </p>
-              <code className="bg-gray-100 px-3 py-2 rounded text-sm">
-                /tv?eventId=YOUR_EVENT_ID
-              </code>
             </CardContent>
           </Card>
         </div>
@@ -372,13 +545,13 @@ export default function TVScreen() {
     );
   }
 
-  // Loading
+  // No event loaded
   if (!event) {
     return (
       <>
         <SEO title="TV Display - Pitalica Skitalica" />
         <div className="min-h-screen bg-black flex items-center justify-center">
-          <div className="text-white text-2xl">Loading event...</div>
+          <div className="text-white text-2xl">Učitavanje eventa...</div>
         </div>
       </>
     );
