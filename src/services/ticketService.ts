@@ -118,6 +118,28 @@ export const ticketService = {
   },
 
   /**
+   * Get a ticket by ID
+   */
+  async getTicket(ticketId: string): Promise<Ticket | null> {
+    try {
+      const { data, error } = await supabase
+        .from("tickets")
+        .select("*, ticket_questions(*)")
+        .eq("id", ticketId)
+        .single();
+
+      if (error) {
+        if (error.code === "PGRST116") return null;
+        throw error;
+      }
+      return data as Ticket;
+    } catch (error) {
+      console.error("[TicketService] ❌ Failed to get ticket by ID:", error);
+      throw error;
+    }
+  },
+
+  /**
    * Get a ticket by serial number
    */
   async getTicketBySerial(serialNumber: string): Promise<Ticket | null> {
