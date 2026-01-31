@@ -204,5 +204,42 @@ export const answerService = {
       percentage: 0,
       incorrect: 0
     }));
+  },
+
+  subscribeToEventAnswers(eventId: string, callback: (payload: any) => void) {
+    return supabase
+      .channel(`event_answers:${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "player_answers",
+          filter: `event_id=eq.${eventId}`
+        },
+        callback
+      )
+      .subscribe();
+  },
+
+  async getEventTicketStats(eventId: string) {
+    const { data: tickets } = await supabase
+      .from("tickets")
+      .select("id, serial_number")
+      .eq("event_id", eventId);
+      
+    if (!tickets) return [];
+    
+    // Reuse basic stats structure
+    return tickets.map(t => ({
+      ticket_id: t.id,
+      ticket_serial: t.serial_number,
+      correct: 0,
+      answered: 0,
+      missed: 0,
+      drawn_on_ticket: 0,
+      percentage: 0,
+      incorrect: 0
+    }));
   }
 };

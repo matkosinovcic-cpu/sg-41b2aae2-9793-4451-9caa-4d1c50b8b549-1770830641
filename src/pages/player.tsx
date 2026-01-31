@@ -2,7 +2,7 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
-import { answerService, Session, TicketStats } from "@/services/answerService";
+import { answerService, PlayerSession as Session, TicketStats } from "@/services/answerService";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
