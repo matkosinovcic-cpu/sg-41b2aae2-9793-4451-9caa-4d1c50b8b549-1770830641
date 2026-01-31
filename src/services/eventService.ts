@@ -550,5 +550,16 @@ export const eventService = {
     
     if (error) throw error;
     return data as EventQuestion[];
+  },
+
+  async getActiveEvent() {
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("status", "active")
+      .single();
+    
+    if (error) throw error;
+    return data as Event;
   }
 };
