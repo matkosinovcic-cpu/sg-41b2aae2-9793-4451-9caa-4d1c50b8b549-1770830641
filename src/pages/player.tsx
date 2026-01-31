@@ -223,78 +223,6 @@ export default function PlayerScreen() {
     subscribeToEventUpdates(newEvent.id);
   };
 
-  // 🔄 POLLING FALLBACK (ONLY when realtime fails)
-  useEffect(() => {
-    if (!event || !session) return;
-    
-    const startPollingFallback = () => {
-      if (pollingIntervalRef.current) return;
-      
-      console.log("[Player] ⚠️ Starting polling fallback (realtime inactive)");
-      
-      pollingIntervalRef.current = setInterval(async () => {
-        const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
-        
-        if (timeSinceLastMessage < 5000) {
-          return;
-        }
-        
-        console.log("[Player-POLL] 🔄 Polling event state...");
-        
-        try {
-          const { data, error } = await supabase
-            .from('events')
-            .select('current_question_number, drawn_numbers, updated_at, status, winner_ticket_id')
-            .eq('id', event.id)
-            .single();
-          
-          if (error) throw error;
-          
-          if (data.updated_at === lastUpdatedAtRef.current) {
-            return;
-          }
-          
-          console.log("[Player-POLL] ✅ New data detected, updating...");
-          
-          lastUpdatedAtRef.current = data.updated_at;
-          setDrawnNumbers(new Set(data.drawn_numbers || []));
-          
-          if (data.current_question_number && 
-              data.current_question_number !== currentQuestion?.question_number) {
-            await loadCurrentQuestion(event.id, data.current_question_number);
-          }
-          
-          setEvent(prev => prev ? { ...prev, ...data } as unknown as Event : prev);
-          
-          if (data.status === "finished" && tickets.length > 0) {
-            loadStats();
-            loadDetailedResults();
-          }
-          
-        } catch (error) {
-          console.error("[Player-POLL] ❌ Polling failed:", error);
-        }
-      }, 5000);
-    };
-    
-    const healthCheckInterval = setInterval(() => {
-      const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
-      
-      if (!realtimeConnectedRef.current || timeSinceLastMessage > 10000) {
-        console.log("[Player] ⚠️ Realtime inactive, starting fallback polling");
-        startPollingFallback();
-      }
-    }, 10000);
-    
-    return () => {
-      clearInterval(healthCheckInterval);
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [event?.id, session?.id, currentQuestion]);
-
   // 🚀 INITIAL LOAD
   useEffect(() => {
     const initializePlayer = async () => {
@@ -332,23 +260,6 @@ export default function PlayerScreen() {
       if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
   }, [urlEventId]);
-
-  // 🔄 POLLING FALLBACK (only if no event)
-  useEffect(() => {
-    if (!noActiveEvent) return;
-    
-    const pollInterval = setInterval(async () => {
-      const activeEvent = await resolveActiveEvent();
-      if (activeEvent) {
-        setNoActiveEvent(false);
-        await loadEventData(activeEvent.id);
-        subscribeToEventUpdates(activeEvent.id);
-        subscribeToActiveEventTracker();
-      }
-    }, 3000);
-    
-    return () => clearInterval(pollInterval);
-  }, [noActiveEvent]);
 
   // Timer countdown
   useEffect(() => {

@@ -219,84 +219,6 @@ export default function TVScreen() {
     console.log("[TV] ✅ Switched to new active event successfully");
   };
 
-  // 🔄 POLLING FALLBACK (ONLY when realtime fails)
-  useEffect(() => {
-    if (!event) return;
-    
-    const startPollingFallback = () => {
-      if (pollingIntervalRef.current) return; // Already polling
-      
-      console.log("[TV] ⚠️ Starting polling fallback (realtime inactive)");
-      
-      pollingIntervalRef.current = setInterval(async () => {
-        const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
-        
-        // Only poll if realtime hasn't sent message in 5+ seconds
-        if (timeSinceLastMessage < 5000) {
-          return;
-        }
-        
-        console.log("[TV-POLL] 🔄 Polling event state...");
-        
-        try {
-          const { data, error } = await supabase
-            .from('events')
-            .select('current_drawn_number, drawn_numbers, updated_at, status, winner_ticket_id')
-            .eq('id', event.id)
-            .single();
-          
-          if (error) throw error;
-          
-          // Guard against unnecessary updates
-          if (data.updated_at === lastUpdatedAtRef.current) {
-            return;
-          }
-          
-          console.log("[TV-POLL] ✅ New data detected, updating...");
-          
-          lastUpdatedAtRef.current = data.updated_at;
-          
-          // Update drawn numbers
-          setDrawnNumbers(new Set(data.drawn_numbers || []));
-          
-          // Check if new number drawn
-          if (data.current_drawn_number !== lastDrawnNumberRef.current) {
-            playBeep('start');
-            lastDrawnNumberRef.current = data.current_drawn_number;
-            
-            if (data.current_drawn_number) {
-              await loadCurrentQuestion(event.id, data.current_drawn_number);
-            }
-          }
-          
-          // Update event
-          setEvent(prev => prev ? { ...prev, ...data } as unknown as Event : prev);
-          
-        } catch (error) {
-          console.error("[TV-POLL] ❌ Polling failed:", error);
-        }
-      }, 5000);
-    };
-    
-    // Check realtime health every 10s
-    const healthCheckInterval = setInterval(() => {
-      const timeSinceLastMessage = Date.now() - lastRealtimeMessageRef.current;
-      
-      if (!realtimeConnectedRef.current || timeSinceLastMessage > 10000) {
-        console.log("[TV] ⚠️ Realtime inactive, starting fallback polling");
-        startPollingFallback();
-      }
-    }, 10000);
-    
-    return () => {
-      clearInterval(healthCheckInterval);
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [event?.id]);
-
   // 🚀 INITIAL LOAD
   useEffect(() => {
     const initializeTV = async () => {
@@ -351,28 +273,6 @@ export default function TVScreen() {
       }
     };
   }, [urlEventId]);
-
-  // 🔄 POLLING FALLBACK (only if no event after 5s)
-  useEffect(() => {
-    if (!noActiveEvent) return;
-    
-    console.log("[TV] ⏰ Starting polling fallback for active event");
-    
-    const pollInterval = setInterval(async () => {
-      console.log("[TV-POLL] 🔄 Checking for active event...");
-      const activeEvent = await resolveActiveEvent();
-      
-      if (activeEvent) {
-        console.log("[TV-POLL] ✅ Active event found, initializing...");
-        setNoActiveEvent(false);
-        await loadEventData(activeEvent.id);
-        subscribeToEventUpdates(activeEvent.id);
-        subscribeToActiveEventTracker();
-      }
-    }, 3000);
-    
-    return () => clearInterval(pollInterval);
-  }, [noActiveEvent]);
 
   // Initialize AudioContext
   useEffect(() => {
