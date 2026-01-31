@@ -57,6 +57,86 @@ export default function PlayerScreen() {
     }
   };
 
+  // 📡 SUBSCRIBE TO REALTIME EVENT UPDATES
+  const subscribeToEventUpdates = (eventId: string) => {
+    console.log("═══════════════════════════════════════════════");
+    console.log("[PLAYER] 📡 SETTING UP REALTIME SUBSCRIPTION");
+    console.log("[PLAYER] 🔑 Event ID:", eventId);
+    console.log("[PLAYER] 📋 Full ID:", eventId);
+    console.log("[PLAYER] 🎯 Channel:", `player-event-${eventId}`);
+    console.log("[PLAYER] 🔍 Filter:", `id=eq.${eventId}`);
+    console.log("═══════════════════════════════════════════════");
+
+    const channel = supabase
+      .channel(`player-event-${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "events",
+          filter: `id=eq.${eventId}`,
+        },
+        async (payload) => {
+          console.log("═══════════════════════════════════════════════");
+          console.log("[PLAYER] ⚡ REALTIME UPDATE RECEIVED!");
+          console.log("[PLAYER] 📦 Payload:", payload);
+          console.log("[PLAYER] 🆔 Event ID from payload:", payload.new?.id?.slice(0, 8));
+          console.log("[PLAYER] 🔢 Current question:", payload.new?.current_question_number);
+          console.log("[PLAYER] 🎯 Drawn number:", payload.new?.current_drawn_number);
+          console.log("[PLAYER] ⏰ Deadline:", payload.new?.question_open_until);
+          console.log("[PLAYER] 🕒 Updated at:", payload.new?.updated_at);
+          console.log("═══════════════════════════════════════════════");
+
+          const newEvent = payload.new as Event;
+
+          // ✅ DIRECT STATE UPDATE
+          console.log("[PLAYER] 🔄 Updating state...");
+          setEvent(newEvent);
+          setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
+          console.log("[PLAYER] ✅ State updated");
+
+          // ✅ LOAD QUESTION IF CHANGED
+          if (
+            newEvent.current_question_number &&
+            newEvent.current_question_number !== currentQuestion?.question_number
+          ) {
+            console.log("[PLAYER] 🔔 NEW QUESTION DETECTED!");
+            console.log("[PLAYER] 📥 Loading question:", newEvent.current_question_number);
+            setHasAnswered(false); // Reset answer state
+            await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
+            console.log("[PLAYER] ✅ Question loaded and displayed");
+          }
+
+          // Load stats when finished
+          if (newEvent.status === "finished" && session && tickets.length > 0) {
+            console.log("[PLAYER] 🏁 Event finished, loading stats...");
+            loadStats();
+            loadDetailedResults();
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("[PLAYER] 📊 Subscription status:", status);
+        
+        if (status === "SUBSCRIBED") {
+          console.log("[PLAYER] ✅ REALTIME SUBSCRIPTION ACTIVE");
+          console.log("[PLAYER] 🎧 Listening for UPDATE events on events table");
+          console.log("[PLAYER] 🔍 Filtering by: id =", eventId.slice(0, 8));
+        } else if (status === "CHANNEL_ERROR") {
+          console.error("[PLAYER] ❌ SUBSCRIPTION ERROR!");
+          console.error("[PLAYER] ⚠️ Realtime connection failed");
+        } else if (status === "TIMED_OUT") {
+          console.error("[PLAYER] ⏰ SUBSCRIPTION TIMEOUT!");
+        } else if (status === "CLOSED") {
+          console.log("[PLAYER] 🔌 Subscription closed");
+        }
+      });
+
+    eventChannelRef.current = channel;
+    console.log("[PLAYER] 💾 Channel reference stored");
+  };
+
   // ✅ SIMPLE REALTIME INITIALIZATION
   useEffect(() => {
     console.log("[Player] 🚀 Player Screen mounting");

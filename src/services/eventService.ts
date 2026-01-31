@@ -267,81 +267,78 @@ export const eventService = {
   },
 
   async drawNextQuestion(eventId: string) {
-    // ✅ CRITICAL: Re-fetch event from DB (SOURCE OF TRUTH)
-    const { data: event } = await supabase
-      .from("events")
-      .select("*")
-      .eq("id", eventId)
-      .single();
+    console.log("═══════════════════════════════════════════════");
+    console.log("[DRAW] 🎲 STARTING DRAW");
+    console.log("[DRAW] 📋 Event ID:", eventId);
+    console.log("═══════════════════════════════════════════════");
 
-    if (!event) throw new Error("Event not found");
-
-    // ✅ STATE MACHINE: Enforce strict status rules
-    if (event.status === "finished") {
-      throw new Error("Event je završen. Za novo izvlačenje koristi 'Reset Event' u admin panelu.");
-    }
-
-    if (event.status === "paused") {
-      throw new Error("Event je pauziran. Klikni 'Nastavi' za nastavak.");
-    }
-
-    if (event.status !== "active") {
-      throw new Error(`Event mora biti aktivan za izvlačenje (trenutni status: ${event.status})`);
-    }
-
+    // Get current event state
+    const event = await this.getEvent(eventId);
     const drawnNumbers = event.drawn_numbers || [];
     
-    // Check if all 90 numbers are drawn
-    if (drawnNumbers.length >= 90) {
-      throw new Error("Svih 90 brojeva je izvučeno");
-    }
-
-    // Find all numbers from 1-90 that haven't been drawn yet
-    const availableNumbers = [];
-    for (let i = 1; i <= 90; i++) {
-      if (!drawnNumbers.includes(i)) {
-        availableNumbers.push(i);
-      }
-    }
-
-    if (availableNumbers.length === 0) {
-      throw new Error("Nema više dostupnih brojeva");
-    }
-
-    // Randomly select one number from available numbers
-    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
-    const drawnNumber = availableNumbers[randomIndex];
-
-    console.log("[ADMIN DRAW] start", { 
-      eventId: eventId.slice(0, 8), 
-      nextNumber: drawnNumber,
-      previouslyDrawn: drawnNumbers.length 
+    console.log("[DRAW] 📊 Current state:", {
+      eventId: event.id.slice(0, 8),
+      status: event.status,
+      currentQuestion: event.current_question_number,
+      totalDrawn: drawnNumbers.length
     });
 
-    // Get the question for this number
-    const { data: questionData } = await supabase
+    // Find available numbers
+    const availableNumbers = Array.from({ length: 90 }, (_, i) => i + 1).filter(
+      (num) => !drawnNumbers.includes(num)
+    );
+
+    if (availableNumbers.length === 0) {
+      console.error("[DRAW] ❌ No more questions available");
+      throw new Error("All questions have been drawn");
+    }
+
+    // Draw random number
+    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
+    const drawnNumber = availableNumbers[randomIndex];
+    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+
+    console.log("[DRAW] 🎯 Drew number:", drawnNumber);
+    console.log("[DRAW] 📈 Total drawn now:", updatedDrawnNumbers.length);
+
+    // Get question
+    const { data: questionData, error: questionError } = await supabase
       .from("event_questions")
       .select("*, questions(*)")
       .eq("event_id", eventId)
       .eq("question_number", drawnNumber)
       .single();
 
-    if (!questionData) {
-      throw new Error("Pitanje nije pronađeno za izvučeni broj");
+    if (questionError || !questionData) {
+      console.error("[DRAW] ❌ Failed to get question:", questionError);
+      throw new Error("Question not found for drawn number");
     }
 
-    const questionOpenUntil = new Date(Date.now() + 9000).toISOString();
+    console.log("[DRAW] ✅ Question loaded:", {
+      questionNumber: questionData.question_number,
+      questionId: questionData.question_id
+    });
 
-    // Mark question as drawn
-    await supabase
-      .from("event_questions")
-      .update({ drawn: true, drawn_at: new Date().toISOString() })
-      .eq("id", questionData.id);
+    // Calculate deadline (9 seconds from now)
+    const now = new Date();
+    const questionOpenUntil = new Date(now.getTime() + 9000).toISOString();
 
-    // Update drawn numbers list and current drawn number
-    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+    console.log("[DRAW] ⏰ Setting deadline:", {
+      now: now.toISOString(),
+      deadline: questionOpenUntil,
+      durationMs: 9000
+    });
 
-    // ✅ CRITICAL: UPDATE with updated_at and return row
+    // ✅ ONE UPDATE - TRIGGERS SUPABASE REALTIME
+    console.log("[DRAW] 📤 Executing UPDATE...");
+    console.log("[DRAW] 🔑 Update data:", {
+      drawn_numbers: `[${updatedDrawnNumbers.length} items]`,
+      current_drawn_number: drawnNumber,
+      current_question_number: drawnNumber,
+      question_open_until: questionOpenUntil,
+      updated_at: "NOW()"
+    });
+
     const { data: returnedRow, error: updateError } = await supabase
       .from("events")
       .update({
@@ -349,33 +346,45 @@ export const eventService = {
         current_drawn_number: drawnNumber,
         current_question_number: drawnNumber,
         question_open_until: questionOpenUntil,
-        updated_at: new Date().toISOString()  // ✅ FORCE updated_at change
+        updated_at: new Date().toISOString() // ✅ FORCE updated_at change
       })
       .eq("id", eventId)
-      .select('*')
+      .select("*")
       .single();
 
     if (updateError) {
-      console.error("[ADMIN DRAW] ERROR", { error: updateError });
+      console.error("[DRAW] ❌ UPDATE FAILED:", updateError);
       throw updateError;
     }
 
     if (!returnedRow) {
-      console.error("[ADMIN DRAW] NO ROW UPDATED", { eventId: eventId.slice(0, 8) });
+      console.error("[DRAW] ❌ NO ROW RETURNED");
       throw new Error("Failed to update event - no row returned");
     }
 
-    console.log("[ADMIN DRAW] success", { 
-      eventId: returnedRow.id.slice(0, 8),
-      drawnNumber: returnedRow.current_drawn_number,
-      updatedAt: returnedRow.updated_at,
-      totalDrawn: returnedRow.drawn_numbers?.length || 0
+    console.log("[DRAW] ✅ UPDATE SUCCESS!");
+    console.log("[DRAW] 📦 Returned row:", {
+      id: returnedRow.id.slice(0, 8),
+      current_drawn_number: returnedRow.current_drawn_number,
+      current_question_number: returnedRow.current_question_number,
+      question_open_until: returnedRow.question_open_until,
+      updated_at: returnedRow.updated_at,
+      drawn_count: returnedRow.drawn_numbers?.length || 0
     });
 
-    // ✅ CRITICAL: Check for winner after drawing (auto-sets FINISHED if winner found)
+    console.log("[DRAW] 📡 Realtime should now broadcast UPDATE to TV & Player");
+    console.log("═══════════════════════════════════════════════");
+    console.log("[DRAW] 🏁 DRAW COMPLETED");
+    console.log("═══════════════════════════════════════════════");
+
+    // Check for winner
     await this.checkForWinner(eventId);
 
-    return { question: questionData, questionOpenUntil, drawnNumber };
+    return { 
+      question: questionData, 
+      questionOpenUntil, 
+      drawnNumber 
+    };
   },
 
   async pauseEvent(eventId: string) {
