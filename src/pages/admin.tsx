@@ -426,12 +426,14 @@ export default function AdminPanel() {
                         <div>
                           <div className="text-gray-500">Pitanje</div>
                           <div className="font-semibold">
-                            {lastDrawnNumber || 0} / {totalQuestions || 90}
+                            {event.drawn_numbers?.length || 0} / 90
                           </div>
                         </div>
                         <div>
                           <div className="text-gray-500">Izvučeno</div>
-                          <div className="font-semibold">{questionIndex}</div>
+                          <div className="font-semibold">
+                            {event.current_drawn_number || "-"}
+                          </div>
                         </div>
                         <div>
                           <div className="text-gray-500">Tiketa</div>
