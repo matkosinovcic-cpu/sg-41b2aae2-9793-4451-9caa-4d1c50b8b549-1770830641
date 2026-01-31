@@ -54,7 +54,8 @@ export default function PlayerScreen() {
     const loadTicket = async () => {
       try {
         console.log("[PLAYER SYNC] loading_ticket", selectedTicketId.slice(0, 8));
-        const ticketData = await eventService.getTicket(selectedTicketId);
+        // ✅ FIX: Use getTicketBySerial since selectedTicketId is a serial number (e.g., "T1769832197876-0009")
+        const ticketData = await eventService.getTicketBySerial(selectedTicketId);
         setTicket(ticketData);
         console.log("[PLAYER SYNC] ticket_loaded", ticketData.serial_number);
       } catch (error) {
