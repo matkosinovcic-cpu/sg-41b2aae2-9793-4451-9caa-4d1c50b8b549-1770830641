@@ -50,18 +50,10 @@ export default function PlayerScreen() {
   
   const { toast } = useToast();
   
-  // Refs for tracking sync
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
-  const lastUpdatedAtRef = useRef<string | null>(null);
-  const lastRealtimeUpdateRef = useRef<number>(0);
 
-  // 🔍 SYNC DIAGNOSTICS LOGGER
-  const log = (type: string, data: any) => {
-    console.log(`[PLAYER SYNC] ${type}`, { ...data, ts: Date.now() });
-  };
-
-  // 🚀 RESOLVE ACTIVE EVENT
+  // 🚀 RESOLVE ACTIVE EVENT (ONCE ON MOUNT)
   const resolveActiveEvent = async (): Promise<Event | null> => {
     try {
       console.log("[Player] 🔍 Resolving active event...");
@@ -85,7 +77,7 @@ export default function PlayerScreen() {
     }
   };
 
-  // 🎯 LOAD EVENT DATA
+  // 🎯 LOAD EVENT DATA (ONCE ON MOUNT)
   const loadEventData = async (eventId: string) => {
     try {
       console.log("[Player] 📥 Loading event data:", eventId.slice(0, 8));
@@ -93,19 +85,7 @@ export default function PlayerScreen() {
       
       setEvent(eventData);
       setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-      lastUpdatedAtRef.current = eventData.updated_at || null;
       
-      // 🔍 SYNC DIAGNOSTIC: Log initial state
-      log("init", {
-        activeEventId: eventData.id.slice(0, 8),
-        eventName: eventData.name,
-        status: eventData.status,
-        currentQuestionNumber: eventData.current_question_number,
-        currentDrawnNumber: eventData.current_drawn_number,
-        drawnCount: eventData.drawn_numbers?.length || 0
-      });
-      
-      // Create/get session
       const sessionData = await answerService.getOrCreateSession(eventData.id);
       setSession(sessionData);
       
@@ -119,19 +99,14 @@ export default function PlayerScreen() {
     }
   };
 
-  // 🔄 SUBSCRIBE TO EVENT UPDATES (REALTIME PRIMARY)
+  // 📡 SUBSCRIBE TO EVENT UPDATES (REALTIME ONLY)
   const subscribeToEventUpdates = (eventId: string) => {
-    // Unsubscribe from old channel if exists
     if (eventChannelRef.current) {
-      console.log("[Player] 🧹 Unsubscribing from old event channel");
       eventChannelRef.current.unsubscribe();
       eventChannelRef.current = null;
     }
     
     console.log("[Player] 📡 Subscribing to event updates:", eventId.slice(0, 8));
-    
-    // 🔍 SYNC DIAGNOSTIC: Log subscription start
-    log("realtime_subscribe_start", { eventId: eventId.slice(0, 8) });
     
     const channel = supabase
       .channel(`player-event-${eventId}`)
@@ -145,50 +120,16 @@ export default function PlayerScreen() {
         
         const newEvent = payload.new as Event;
         
-        // 🔍 SYNC DIAGNOSTIC: Log realtime event
-        log("realtime_event", {
-          eventId: newEvent.id.slice(0, 8),
-          currentQuestionNumber: newEvent.current_question_number,
-          currentDrawnNumber: newEvent.current_drawn_number,
-          questionOpenUntil: newEvent.question_open_until,
-          updatedAt: newEvent.updated_at,
-          receivedAt: Date.now()
-        });
-        
-        // 🛡️ DEBOUNCE: Prevent duplicate updates
-        const now = Date.now();
-        if (now - lastRealtimeUpdateRef.current < 100) {
-          log("realtime_debounced", { timeSinceLastMs: now - lastRealtimeUpdateRef.current });
-          return;
-        }
-        lastRealtimeUpdateRef.current = now;
-        
-        // 🎯 COMPARE GUARD: Only update if changed
-        if (newEvent.updated_at === lastUpdatedAtRef.current) {
-          return;
-        }
-        
-        lastUpdatedAtRef.current = newEvent.updated_at || null;
-        
-        // Update drawn numbers
+        // ✅ IMMEDIATE STATE UPDATE - NO GUARDS, NO DEBOUNCE
+        setEvent(newEvent);
         setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
         
-        // Load current question if changed
+        // ✅ LOAD QUESTION IF CHANGED
         if (newEvent.current_question_number && 
             newEvent.current_question_number !== currentQuestion?.question_number) {
           console.log("[Player] 🔔 New question:", newEvent.current_question_number);
-          
-          // 🔍 SYNC DIAGNOSTIC: Log state change
-          log("apply_state", {
-            from: { questionNumber: currentQuestion?.question_number },
-            to: { questionNumber: newEvent.current_question_number }
-          });
-          
           await loadCurrentQuestion(newEvent.id, newEvent.current_question_number);
         }
-        
-        // Update event state
-        setEvent(newEvent);
         
         // Load stats when finished
         if (newEvent.status === "finished" && session && tickets.length > 0) {
@@ -197,25 +138,13 @@ export default function PlayerScreen() {
         }
       })
       .subscribe((status) => {
-        console.log("[Player] 📡 Event subscription status:", status);
-        
-        // 🔍 SYNC DIAGNOSTIC: Log subscription status
-        if (status === 'SUBSCRIBED') {
-          log("realtime_subscribed_ok", { 
-            channel: `player-event-${eventId.slice(0, 8)}`,
-            eventId: eventId.slice(0, 8)
-          });
-        } else if (status === 'CHANNEL_ERROR') {
-          log("realtime_error", { status, eventId: eventId.slice(0, 8) });
-        } else if (status === 'CLOSED') {
-          log("realtime_closed", { status, eventId: eventId.slice(0, 8) });
-        }
+        console.log("[Player] 📡 Subscription status:", status);
       });
     
     eventChannelRef.current = channel;
   };
 
-  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER
+  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER (AUTO-SWITCH)
   const subscribeToActiveEventTracker = () => {
     const channel = supabase
       .channel('player-active-event-tracker')
@@ -228,17 +157,19 @@ export default function PlayerScreen() {
         if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
           const newActiveEvent = payload.new as Event;
           
-          // Check if it's a different event
           if (event && newActiveEvent.id === event.id) {
             return;
           }
           
-          console.log("[Player] 🆕 NEW ACTIVE EVENT detected:", newActiveEvent.id.slice(0, 8));
+          console.log("[Player] 🆕 NEW ACTIVE EVENT:", newActiveEvent.id.slice(0, 8));
           
-          // Delay to avoid switching during transient states
-          setTimeout(async () => {
-            await handleNewActiveEvent(newActiveEvent);
-          }, 1000);
+          setEvent(null);
+          setCurrentQuestion(null);
+          setDrawnNumbers(new Set());
+          setTimeRemaining(0);
+          
+          await loadEventData(newActiveEvent.id);
+          subscribeToEventUpdates(newActiveEvent.id);
         }
       })
       .subscribe();
@@ -246,83 +177,67 @@ export default function PlayerScreen() {
     activeEventTrackerRef.current = channel;
   };
 
-  // 🔥 HANDLE NEW ACTIVE EVENT
-  const handleNewActiveEvent = async (newEvent: Event) => {
-    console.log("[Player] 🔥 Switching to new active event");
-    
-    // 1. Clear old state
-    setDrawnNumbers(new Set());
-    setCurrentQuestion(null);
-    setTimeRemaining(0);
-    
-    // 2. Clear cache
-    localStorage.removeItem('eventId');
-    sessionStorage.clear();
-    
-    // 3. Load new event
-    await loadEventData(newEvent.id);
-    
-    // 4. Subscribe to new event
-    subscribeToEventUpdates(newEvent.id);
-  };
-
-  // 🚀 INITIAL LOAD
+  // 🚀 INITIALIZE ON MOUNT (ONCE)
   useEffect(() => {
-    const initializePlayer = async () => {
-      console.log("[Player] 🚀 Initializing Player screen...");
-      
-      let targetEventId = urlEventId;
-      
-      if (!targetEventId) {
-        const activeEvent = await resolveActiveEvent();
-        
-        if (activeEvent) {
-          targetEventId = activeEvent.id;
-          console.log("[Player] ✅ Using active event:", targetEventId.slice(0, 8));
-        } else {
-          console.log("[Player] ⚠️ No active event found");
-          setNoActiveEvent(true);
-          setIsLoadingEvent(false);
-          return;
-        }
-      }
-      
-      await loadEventData(targetEventId);
-      subscribeToEventUpdates(targetEventId);
-      subscribeToActiveEventTracker();
-      
-      setIsLoadingEvent(false);
-      setNoActiveEvent(false);
-    };
+    console.log("[Player] 🚀 Player Screen mounted");
     
-    initializePlayer();
-    
-    // 🔍 SYNC DIAGNOSTIC: Expose __SYNC_STATUS__ helper
+    // ✅ EXPOSE __PLAYER_SYNC_STATUS__ HELPER
     (window as any).__PLAYER_SYNC_STATUS__ = () => ({
-      activeEventId: event?.id.slice(0, 8),
-      eventName: event?.name,
-      status: event?.status,
+      activeEventId: event?.id?.slice(0, 8) || 'none',
+      eventName: event?.name || 'none',
+      status: event?.status || 'none',
       realtimeConnected: eventChannelRef.current !== null,
-      lastRealtimeAt: lastRealtimeUpdateRef.current,
-      lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
       mode: 'realtime',
-      currentQuestionNumber: event?.current_question_number,
-      currentDrawnNumber: event?.current_drawn_number,
+      currentQuestionNumber: event?.current_question_number || null,
+      currentDrawnNumber: event?.current_drawn_number || null,
       drawnCount: event?.drawn_numbers?.length || 0,
       timeRemaining,
       hasAnswered,
       ticketsCount: tickets.length,
-      sessionId: session?.id.slice(0, 8),
-      channelState: eventChannelRef.current?.state
+      sessionId: session?.id?.slice(0, 8) || 'none'
     });
     
+    const initializePlayer = async () => {
+      try {
+        let targetEventId = urlEventId;
+        
+        if (!targetEventId) {
+          const activeEvent = await resolveActiveEvent();
+          
+          if (activeEvent) {
+            targetEventId = activeEvent.id;
+            console.log("[Player] ✅ Using active event:", targetEventId.slice(0, 8));
+          } else {
+            console.log("[Player] ⚠️ No active event found");
+            setNoActiveEvent(true);
+            setIsLoadingEvent(false);
+            return;
+          }
+        }
+        
+        await loadEventData(targetEventId);
+        subscribeToEventUpdates(targetEventId);
+        subscribeToActiveEventTracker();
+        
+        setIsLoadingEvent(false);
+        setNoActiveEvent(false);
+      } catch (error) {
+        console.error("[Player] ❌ Failed to initialize:", error);
+        setIsLoadingEvent(false);
+      }
+    };
+    
+    initializePlayer();
+    
     return () => {
+      console.log("[Player] 🧹 Cleanup");
       if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
       if (activeEventTrackerRef.current) activeEventTrackerRef.current.unsubscribe();
+      delete (window as any).__PLAYER_SYNC_STATUS__;
     };
   }, [urlEventId]);
 
-  // Timer countdown
+  // ⏱️ COUNTDOWN TIMER (LOCAL CALCULATION FROM question_open_until)
   useEffect(() => {
     if (!event?.question_open_until || !session || !currentQuestion) {
       setTimeRemaining(0);
@@ -333,25 +248,15 @@ export default function PlayerScreen() {
       const now = new Date().getTime();
       const deadline = new Date(event.question_open_until!).getTime();
       
-      // Validate deadline
       if (isNaN(deadline)) {
-        console.log("[Player-Timer] ⚠️ Invalid deadline, skipping timeout");
         setTimeRemaining(0);
         return;
       }
       
       const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
-      
-      // Debug logging (only when value changes)
-      if (remaining !== timeRemaining && remaining > 0) {
-        console.log(`[Player-Timer] ⏱️ Countdown: ${remaining}s`);
-      }
-      
       setTimeRemaining(remaining);
       
-      // Only call timeout if we actually had time (prevent premature calls)
       if (remaining === 0 && !hasAnswered && timeRemaining > 0) {
-        console.log("[Player-Timer] ⏱️ Time expired, calling handleTimeout");
         handleTimeout();
       }
     }, 100);
@@ -701,7 +606,6 @@ export default function PlayerScreen() {
                   </h2>
                 </div>
                 
-                {/* Countdown Timer Display */}
                 {timeRemaining > 0 && (
                   <div className="text-5xl font-black text-orange-600 animate-pulse">
                     ⏱️ {timeRemaining}s

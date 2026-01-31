@@ -32,18 +32,10 @@ export default function TVScreen() {
   const [noActiveEvent, setNoActiveEvent] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
-  const lastDrawnNumberRef = useRef<number | null>(null);
   const eventChannelRef = useRef<RealtimeChannel | null>(null);
   const activeEventTrackerRef = useRef<RealtimeChannel | null>(null);
-  const lastUpdatedAtRef = useRef<string | null>(null);
-  const lastRealtimeUpdateRef = useRef<number>(0);
 
-  // 🔍 SYNC DIAGNOSTICS LOGGER
-  const log = (type: string, data: any) => {
-    console.log(`[TV SYNC] ${type}`, { ...data, ts: Date.now() });
-  };
-
-  // 🚀 RESOLVE ACTIVE EVENT
+  // 🚀 RESOLVE ACTIVE EVENT (ONCE ON MOUNT)
   const resolveActiveEvent = async (): Promise<Event | null> => {
     try {
       console.log("[TV] 🔍 Resolving active event...");
@@ -67,7 +59,7 @@ export default function TVScreen() {
     }
   };
 
-  // 🎯 LOAD EVENT DATA
+  // 🎯 LOAD EVENT DATA (ONCE ON MOUNT)
   const loadEventData = async (eventId: string) => {
     try {
       console.log("[TV] 📥 Loading event data:", eventId.slice(0, 8));
@@ -75,18 +67,6 @@ export default function TVScreen() {
       
       setEvent(eventData);
       setDrawnNumbers(new Set(eventData.drawn_numbers || []));
-      lastUpdatedAtRef.current = eventData.updated_at || null;
-      lastDrawnNumberRef.current = eventData.current_drawn_number;
-      
-      // 🔍 SYNC DIAGNOSTIC: Log initial state
-      log("init", {
-        activeEventId: eventData.id.slice(0, 8),
-        eventName: eventData.name,
-        status: eventData.status,
-        currentQuestionNumber: eventData.current_question_number,
-        currentDrawnNumber: eventData.current_drawn_number,
-        drawnCount: eventData.drawn_numbers?.length || 0
-      });
       
       if (eventData.current_drawn_number) {
         await loadCurrentQuestion(eventData.id, eventData.current_drawn_number);
@@ -98,19 +78,14 @@ export default function TVScreen() {
     }
   };
 
-  // 🔄 SUBSCRIBE TO EVENT UPDATES (REALTIME PRIMARY)
+  // 📡 SUBSCRIBE TO EVENT UPDATES (REALTIME ONLY)
   const subscribeToEventUpdates = (eventId: string) => {
-    // Unsubscribe from old channel if exists
     if (eventChannelRef.current) {
-      console.log("[TV] 🧹 Unsubscribing from old event channel");
       eventChannelRef.current.unsubscribe();
       eventChannelRef.current = null;
     }
     
     console.log("[TV] 📡 Subscribing to event updates:", eventId.slice(0, 8));
-    
-    // 🔍 SYNC DIAGNOSTIC: Log subscription start
-    log("realtime_subscribe_start", { eventId: eventId.slice(0, 8) });
     
     const channel = supabase
       .channel(`tv-event-${eventId}`)
@@ -124,77 +99,26 @@ export default function TVScreen() {
         
         const newEvent = payload.new as Event;
         
-        // 🔍 SYNC DIAGNOSTIC: Log realtime event
-        log("realtime_event", {
-          eventId: newEvent.id.slice(0, 8),
-          currentQuestionNumber: newEvent.current_question_number,
-          currentDrawnNumber: newEvent.current_drawn_number,
-          questionOpenUntil: newEvent.question_open_until,
-          updatedAt: newEvent.updated_at,
-          receivedAt: Date.now()
-        });
-        
-        // 🛡️ DEBOUNCE: Prevent duplicate updates
-        const now = Date.now();
-        if (now - lastRealtimeUpdateRef.current < 100) {
-          log("realtime_debounced", { timeSinceLastMs: now - lastRealtimeUpdateRef.current });
-          return;
-        }
-        lastRealtimeUpdateRef.current = now;
-        
-        // 🎯 COMPARE GUARD - Prevent unnecessary updates
-        if (newEvent.updated_at === lastUpdatedAtRef.current) {
-          console.log("[TV] ⏭️ Same updated_at, skipping update");
-          return;
-        }
-        
-        lastUpdatedAtRef.current = newEvent.updated_at || null;
-        
-        // Update drawn numbers
-        const newDrawnNumbers = new Set(newEvent.drawn_numbers || []);
-        setDrawnNumbers(newDrawnNumbers);
-        
-        // Check if current number changed
-        if (newEvent.current_drawn_number !== lastDrawnNumberRef.current) {
-          console.log("[TV] 🔔 New number drawn:", newEvent.current_drawn_number);
-          
-          // 🔍 SYNC DIAGNOSTIC: Log state change
-          log("apply_state", {
-            from: { questionNumber: lastDrawnNumberRef.current },
-            to: { questionNumber: newEvent.current_drawn_number }
-          });
-          
-          playBeep('start');
-          lastDrawnNumberRef.current = newEvent.current_drawn_number;
-          
-          if (newEvent.current_drawn_number) {
-            await loadCurrentQuestion(newEvent.id, newEvent.current_drawn_number);
-          }
-        }
-        
-        // Update event state
+        // ✅ IMMEDIATE STATE UPDATE - NO GUARDS, NO DEBOUNCE
         setEvent(newEvent);
+        setDrawnNumbers(new Set(newEvent.drawn_numbers || []));
+        
+        // ✅ LOAD QUESTION IF CHANGED
+        if (newEvent.current_drawn_number && 
+            newEvent.current_drawn_number !== currentQuestion?.question_number) {
+          console.log("[TV] 🔔 New question:", newEvent.current_drawn_number);
+          playBeep('start');
+          await loadCurrentQuestion(newEvent.id, newEvent.current_drawn_number);
+        }
       })
       .subscribe((status) => {
-        console.log("[TV] 📡 Event subscription status:", status);
-        
-        // 🔍 SYNC DIAGNOSTIC: Log subscription status
-        if (status === 'SUBSCRIBED') {
-          log("realtime_subscribed_ok", { 
-            channel: `tv-event-${eventId.slice(0, 8)}`,
-            eventId: eventId.slice(0, 8)
-          });
-        } else if (status === 'CHANNEL_ERROR') {
-          log("realtime_error", { status, eventId: eventId.slice(0, 8) });
-        } else if (status === 'CLOSED') {
-          log("realtime_closed", { status, eventId: eventId.slice(0, 8) });
-        }
+        console.log("[TV] 📡 Subscription status:", status);
       });
     
     eventChannelRef.current = channel;
   };
 
-  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER
+  // 🔄 SUBSCRIBE TO ACTIVE EVENT TRACKER (AUTO-SWITCH)
   const subscribeToActiveEventTracker = () => {
     console.log("[TV] 📡 Setting up active event tracker");
     
@@ -206,23 +130,26 @@ export default function TVScreen() {
         table: 'events',
         filter: 'status=eq.active'
       }, async (payload) => {
-        console.log("[TV] ⚡ Active event change detected:", payload.eventType);
+        console.log("[TV] ⚡ Active event change:", payload.eventType);
         
         if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
           const newActiveEvent = payload.new as Event;
           
-          // Check if it's a different event
           if (event && newActiveEvent.id === event.id) {
-            console.log("[TV] ⏭️ Same event, ignoring");
             return;
           }
           
-          console.log("[TV] 🆕 NEW ACTIVE EVENT detected:", newActiveEvent.id.slice(0, 8), "-", newActiveEvent.name);
+          console.log("[TV] 🆕 NEW ACTIVE EVENT:", newActiveEvent.id.slice(0, 8));
           
-          // Delay to avoid switching during transient states
-          setTimeout(async () => {
-            await handleNewActiveEvent(newActiveEvent);
-          }, 1000);
+          // Switch to new event
+          setEvent(null);
+          setCurrentQuestion(null);
+          setQuestionText(null);
+          setDrawnNumbers(new Set());
+          setTimeRemaining(0);
+          
+          await loadEventData(newActiveEvent.id);
+          subscribeToEventUpdates(newActiveEvent.id);
         }
       })
       .subscribe((status) => {
@@ -232,71 +159,29 @@ export default function TVScreen() {
     activeEventTrackerRef.current = channel;
   };
 
-  // 🔥 HANDLE NEW ACTIVE EVENT
-  const handleNewActiveEvent = async (newEvent: Event) => {
-    console.log("[TV] 🔥 Switching to new active event:", newEvent.id.slice(0, 8));
-    
-    // 1. Clear old state
-    setDrawnNumbers(new Set());
-    setCurrentQuestion(null);
-    setQuestionText(null);
-    setTimeRemaining(0);
-    setTickets([]);
-    setTicketStats([]);
-    setAnimatedCount(0);
-    lastDrawnNumberRef.current = null;
-    lastUpdatedAtRef.current = null;
-    
-    // 2. Clear localStorage/sessionStorage
-    localStorage.removeItem('eventId');
-    sessionStorage.clear();
-    
-    // 3. Load new event
-    await loadEventData(newEvent.id);
-    
-    // 4. Subscribe to new event
-    subscribeToEventUpdates(newEvent.id);
-    
-    console.log("[TV] ✅ Switched to new active event successfully");
-  };
-
-  // 🚀 CRITICAL FIX: INITIALIZE REALTIME SYNC IMMEDIATELY ON MOUNT
+  // 🚀 INITIALIZE ON MOUNT (ONCE)
   useEffect(() => {
-    console.log("[TV] 🚀 TV Screen mounted - initializing realtime sync");
+    console.log("[TV] 🚀 TV Screen mounted");
     
-    // ✅ EXPOSE __TV_SYNC_STATUS__ IMMEDIATELY (before async operations)
-    (window as any).__TV_SYNC_STATUS__ = () => {
-      const currentEvent = event;
-      return {
-        activeEventId: currentEvent?.id?.slice(0, 8) || 'none',
-        eventName: currentEvent?.name || 'none',
-        status: currentEvent?.status || 'none',
-        realtimeConnected: eventChannelRef.current !== null,
-        lastRealtimeAt: lastRealtimeUpdateRef.current,
-        lastRealtimeAgeMs: lastRealtimeUpdateRef.current > 0 ? Date.now() - lastRealtimeUpdateRef.current : null,
-        mode: 'realtime',
-        currentQuestionNumber: currentEvent?.current_question_number || null,
-        currentDrawnNumber: currentEvent?.current_drawn_number || null,
-        drawnCount: currentEvent?.drawn_numbers?.length || 0,
-        timeRemaining,
-        channelState: eventChannelRef.current?.state || 'not_connected',
-        isLoadingEvent,
-        noActiveEvent
-      };
-    };
+    // ✅ EXPOSE __TV_SYNC_STATUS__ HELPER
+    (window as any).__TV_SYNC_STATUS__ = () => ({
+      activeEventId: event?.id?.slice(0, 8) || 'none',
+      eventName: event?.name || 'none',
+      status: event?.status || 'none',
+      realtimeConnected: eventChannelRef.current !== null,
+      mode: 'realtime',
+      currentQuestionNumber: event?.current_question_number || null,
+      currentDrawnNumber: event?.current_drawn_number || null,
+      drawnCount: event?.drawn_numbers?.length || 0,
+      timeRemaining
+    });
     
-    console.log("[TV] ✅ __TV_SYNC_STATUS__ exposed on window");
-    
-    // ✅ START ASYNC INITIALIZATION (doesn't block __TV_SYNC_STATUS__)
     const initializeTV = async () => {
       try {
-        console.log("[TV] 🔍 Starting async initialization...");
-        
-        // 1. Determine event ID (URL param OR active event)
+        // 1️⃣ Get event ID (URL param OR active event)
         let targetEventId = urlEventId;
         
         if (!targetEventId) {
-          console.log("[TV] 🔍 No eventId in URL, resolving active event...");
           const activeEvent = await resolveActiveEvent();
           
           if (activeEvent) {
@@ -306,65 +191,47 @@ export default function TVScreen() {
             console.log("[TV] ⚠️ No active event found");
             setNoActiveEvent(true);
             setIsLoadingEvent(false);
-            // ✅ STILL SUBSCRIBE TO ACTIVE EVENT TRACKER (wait for new event)
             subscribeToActiveEventTracker();
             return;
           }
-        } else {
-          console.log("[TV] ✅ Using eventId from URL:", targetEventId.slice(0, 8));
         }
         
-        // 2. Load event data
+        // 2️⃣ Load event data (ONCE)
         await loadEventData(targetEventId);
         
-        // 3. Subscribe to event updates (REALTIME PRIMARY)
+        // 3️⃣ Subscribe to realtime updates
         subscribeToEventUpdates(targetEventId);
-        
-        // 4. Subscribe to active event tracker (for auto-switch)
         subscribeToActiveEventTracker();
         
         setIsLoadingEvent(false);
         setNoActiveEvent(false);
-        
-        console.log("[TV] ✅ Async initialization complete");
       } catch (error) {
-        console.error("[TV] ❌ Failed to initialize TV:", error);
+        console.error("[TV] ❌ Failed to initialize:", error);
         setIsLoadingEvent(false);
-        
-        // ✅ STILL SUBSCRIBE TO ACTIVE EVENT TRACKER (wait for new event)
         subscribeToActiveEventTracker();
       }
     };
     
-    // ✅ KICK OFF ASYNC INIT (non-blocking)
     initializeTV();
     
-    // Cleanup on unmount
     return () => {
-      console.log("[TV] 🧹 Cleaning up subscriptions");
-      if (eventChannelRef.current) {
-        eventChannelRef.current.unsubscribe();
-      }
-      if (activeEventTrackerRef.current) {
-        activeEventTrackerRef.current.unsubscribe();
-      }
-      
-      // ✅ CLEANUP __TV_SYNC_STATUS__
+      console.log("[TV] 🧹 Cleanup");
+      if (eventChannelRef.current) eventChannelRef.current.unsubscribe();
+      if (activeEventTrackerRef.current) activeEventTrackerRef.current.unsubscribe();
       delete (window as any).__TV_SYNC_STATUS__;
     };
-  }, [urlEventId]); // Re-run if URL eventId changes
+  }, [urlEventId]);
 
-  // Initialize AudioContext
+  // 🎵 INITIALIZE AUDIO CONTEXT
   useEffect(() => {
     try {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      console.log("[TV] ✅ AudioContext initialized");
     } catch (error) {
-      console.warn("[TV] ⚠️ AudioContext initialization failed:", error);
+      console.warn("[TV] ⚠️ AudioContext failed:", error);
     }
   }, []);
 
-  // Timer countdown
+  // ⏱️ COUNTDOWN TIMER (LOCAL CALCULATION FROM question_open_until)
   useEffect(() => {
     if (!event?.question_open_until) {
       setTimeRemaining(0);
@@ -390,7 +257,7 @@ export default function TVScreen() {
     return () => clearInterval(interval);
   }, [event?.question_open_until, timeRemaining]);
 
-  // Load statistics when event finishes
+  // 📊 LOAD STATS WHEN FINISHED
   useEffect(() => {
     if (event?.status === "finished") {
       loadStats();
@@ -400,14 +267,14 @@ export default function TVScreen() {
     }
   }, [event?.status, event?.id]);
 
-  // Reset animation when status changes
+  // 🎨 RESET ANIMATION ON STATUS CHANGE
   useEffect(() => {
     if (event?.status !== "finished") {
       setAnimatedCount(0);
     }
   }, [event?.status]);
 
-  // Counter animation for winners
+  // 🏆 COUNTER ANIMATION FOR WINNERS
   useEffect(() => {
     if (event?.status === "finished" && tickets.length > 0) {
       const actualCount = tickets.filter(t => t.is_winner).length;
@@ -423,7 +290,7 @@ export default function TVScreen() {
     }
   }, [event?.status, tickets, animatedCount]);
 
-  // Audio effects
+  // 🎵 AUDIO EFFECTS FOR WINNERS
   useEffect(() => {
     if (!event || event.status !== "finished") return;
     
@@ -442,7 +309,6 @@ export default function TVScreen() {
     try {
       const statsData = await answerService.getEventTicketStats(event.id);
       setTicketStats(statsData);
-      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
     } catch (error) {
       console.error("[TV] Failed to load stats:", error);
       setTicketStats([]);
@@ -474,9 +340,8 @@ export default function TVScreen() {
 
   const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
     try {
-      console.log(`[TV] 🔍 Loading question #${questionNumber} for event ${eventId.slice(0, 8)}`);
+      console.log(`[TV] 🔍 Loading question #${questionNumber}`);
       const data = await eventService.getEventQuestion(eventId, questionNumber);
-      console.log("[TV] ✅ Question loaded:", data);
       
       setCurrentQuestion(data);
 
@@ -487,11 +352,8 @@ export default function TVScreen() {
           .eq("id", data.question_id)
           .single();
 
-        if (qError) {
-          console.error("[TV] ❌ Failed to load question text:", qError);
-        } else {
-          console.log("[TV] ✅ Question text loaded");
-          setQuestionText(qData?.text || null);
+        if (!qError && qData) {
+          setQuestionText(qData.text);
         }
       }
     } catch (error) {
@@ -584,7 +446,7 @@ export default function TVScreen() {
     } catch (e) { console.error(e); }
   };
 
-  // Loading state
+  // 🔄 LOADING STATE
   if (isLoadingEvent) {
     return (
       <>
@@ -596,7 +458,7 @@ export default function TVScreen() {
     );
   }
 
-  // No active event
+  // ⏳ NO ACTIVE EVENT
   if (noActiveEvent) {
     return (
       <>
@@ -616,7 +478,7 @@ export default function TVScreen() {
     );
   }
 
-  // No event loaded
+  // ❌ NO EVENT LOADED
   if (!event) {
     return (
       <>
@@ -628,7 +490,7 @@ export default function TVScreen() {
     );
   }
 
-  // Winner screen
+  // 🏆 WINNER SCREEN
   const shouldShowWinnerScreen = event.status === "finished" && tickets.filter(t => t.is_winner).length > 0;
 
   if (shouldShowWinnerScreen) {
@@ -679,7 +541,7 @@ export default function TVScreen() {
     );
   }
 
-  // Game screen
+  // 🎮 GAME SCREEN
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
@@ -719,7 +581,6 @@ export default function TVScreen() {
                       </div>
                     )}
                     
-                    {/* DA/NE Display for Yes/No Questions */}
                     {currentQuestion?.questions?.question_type === 'yes_no' && timeRemaining > 0 && (
                       <div className="mt-6 grid grid-cols-2 gap-6">
                         <div className="bg-green-500/20 border-2 border-green-400 rounded-2xl p-6 backdrop-blur">
