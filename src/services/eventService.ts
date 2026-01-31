@@ -35,6 +35,7 @@ export interface Ticket {
   serial_number: string;
   event_id: string;
   is_winner: boolean;
+  ticket_questions?: TicketQuestion[]; // Joined data
 }
 
 export interface TicketQuestion {
