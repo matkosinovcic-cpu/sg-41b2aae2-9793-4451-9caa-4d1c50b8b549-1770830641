@@ -134,6 +134,16 @@ export default function TVScreen() {
       console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
       setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
       
+      // ✅ CRITICAL: Log winner detection
+      if (updatedEvent.winner_ticket_id) {
+        console.log("[TV] 🏆 WINNER DETECTED:", updatedEvent.winner_ticket_id);
+      }
+      
+      // ✅ CRITICAL: Log status changes
+      if (updatedEvent.status !== event?.status) {
+        console.log("[TV] 📊 Status changed:", event?.status, "→", updatedEvent.status);
+      }
+      
       // Check if drawn number changed
       const numberChanged = updatedEvent.current_drawn_number !== lastDrawnNumberRef.current;
       
@@ -149,7 +159,8 @@ export default function TVScreen() {
       console.log("[TV] Event state updated:", {
         status: updatedEvent.status,
         current_number: updatedEvent.current_drawn_number,
-        drawn_count: updatedEvent.drawn_numbers?.length || 0
+        drawn_count: updatedEvent.drawn_numbers?.length || 0,
+        winner: updatedEvent.winner_ticket_id || "none"
       });
     });
 
@@ -469,6 +480,32 @@ export default function TVScreen() {
     }
   };
 
+  const fetchWinnerSerial = async () => {
+    if (!event?.winner_ticket_id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from("tickets")
+        .select("serial_number")
+        .eq("id", event.winner_ticket_id)
+        .single();
+      
+      if (error) {
+        console.error("[TV] Failed to fetch winner serial number:", error);
+      } else {
+        console.log("[TV] ✅ Winner serial number fetched:", data?.serial_number);
+      }
+    } catch (error) {
+      console.error("[TV] Failed to fetch winner serial number:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (event?.winner_ticket_id) {
+      fetchWinnerSerial();
+    }
+  }, [event?.winner_ticket_id]);
+
   return (
     <>
       <SEO title="TV Display - Pitalica Skitalica" />
@@ -542,8 +579,49 @@ export default function TVScreen() {
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-white text-2xl">Loading event...</div>
         </div>
+      ) : event.winner_ticket_id || event.status === "finished" ? (
+        /* ✅ WINNER SCREEN - TV DISPLAY */
+        <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
+          
+          {/* Background gradient */}
+          <div className="absolute inset-0 bg-gradient-to-br from-yellow-900 via-orange-900 to-red-900" />
+          
+          {/* 16:9 Container */}
+          <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
+            
+            {/* Content wrapper */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+              
+              {/* Trophy icon */}
+              <div className="mb-8 animate-bounce">
+                <Trophy className="w-32 h-32 text-yellow-300" />
+              </div>
+              
+              {/* Winner title */}
+              <h1 className="text-8xl font-black text-white mb-12 drop-shadow-2xl animate-pulse">
+                IMAMO POBJEDNIKA!
+              </h1>
+              
+              {/* Winning ticket display */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-3xl border-4 border-yellow-400 p-12 shadow-2xl">
+                <div className="text-3xl text-yellow-300 mb-4 tracking-wider">
+                  SERIJSKI BROJ ULAZNICE
+                </div>
+                <div className="text-9xl font-black text-yellow-400 drop-shadow-2xl">
+                  {event.winner_ticket_id || "???"}
+                </div>
+              </div>
+              
+              {/* Confetti effect */}
+              <div className="mt-12 text-6xl animate-pulse">
+                🎉 🎊 🏆 🎊 🎉
+              </div>
+              
+            </div>
+          </div>
+        </div>
       ) : (
-        /* ✅ MAIN TV DISPLAY - PROPER 16:9 LAYOUT */
+        /* ✅ MAIN TV DISPLAY - NORMAL GAME SCREEN */
         <div className="fixed inset-0 bg-black overflow-hidden flex items-center justify-center">
           
           {/* Background gradient (fills entire screen) */}
@@ -563,7 +641,7 @@ export default function TVScreen() {
                 </div>
                 
                 {/* Main title - centered */}
-                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-6xl font-black tracking-wider text-white drop-shadow-2xl">
+                <h1 className="absolute left-1/2 transform -translate-x-1/2 text-4xl sm:text-5xl lg:text-6xl font-black tracking-normal text-white drop-shadow-2xl whitespace-nowrap">
                   PITALICA SKITALICA
                 </h1>
               </div>
