@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, X, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useRouter } from "next/navigation";
 
 // Helper to normalize answers for local comparison (matches service logic)
 function normalizeAnswer(value: any): boolean | null {
@@ -55,6 +56,7 @@ export default function PlayerScreen() {
   const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set());
   const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
   const { toast } = useToast();
+  const router = useRouter();
 
   // Load tickets from localStorage on mount
   useEffect(() => {
