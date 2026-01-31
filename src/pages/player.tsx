@@ -788,6 +788,15 @@ export default function PlayerScreen() {
           )}
 
           {/* Header */}
+          <div className="text-center mb-6">
+            <h1 className="text-4xl font-black text-white mb-2">
+              Pitanje {event?.drawn_numbers?.length || 0} / 90
+            </h1>
+            <Badge className="bg-gradient-to-r from-blue-600 to-purple-600 text-white text-lg px-4 py-2">
+              #{event?.current_drawn_number}
+            </Badge>
+          </div>
+
           <div className="mb-4 space-y-2">
             <div className="flex gap-2">
               <Input
@@ -817,31 +826,55 @@ export default function PlayerScreen() {
           </div>
 
           {/* CRITICAL: Final Statistics - ONLY when event is finished */}
-          {event?.status === "finished" && stats && (
-            <Card className="bg-white/95 backdrop-blur-sm mb-4">
-              <CardContent className="p-6 text-center space-y-3">
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
-                  Hvala na sudjelovanju!
-                </h2>
-                
-                {/* ✅ FIX: Use drawn_in_game as denominator (SOURCE OF TRUTH) */}
-                <div className="text-2xl font-bold text-gray-700">
-                  Ukupno točno: {stats.total_correct} / {stats.drawn_in_game}
-                </div>
-                
-                {/* ✅ FIX: Accuracy based on drawnInGame, not answered */}
-                {stats.drawn_in_game > 0 && (
-                  <div className="text-lg text-gray-600">
-                    Točnost: {Math.round((stats.total_correct / stats.drawn_in_game) * 100)}%
+          {event?.status === "finished" && stats && (() => {
+            // Logic: Use Winner ticket if player has it, otherwise use First ticket
+            const winnerTicket = tickets.find(t => t.id === event.winner_ticket_id);
+            const targetTicket = winnerTicket || tickets[0];
+            const targetStats = stats.ticket_stats.find(s => s.ticket_serial === targetTicket.serial_number);
+            
+            if (!targetStats) return null;
+
+            // Calculate global accuracy: correct / total drawn in game
+            const globalAccuracy = stats.drawn_in_game > 0 
+              ? Math.round((targetStats.correct / stats.drawn_in_game) * 100) 
+              : 0;
+
+            return (
+              <Card className="bg-white/95 backdrop-blur-sm mb-4">
+                <CardContent className="p-6 text-center space-y-3">
+                  <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">
+                    Hvala na sudjelovanju!
+                  </h2>
+                  
+                  {/* Single ticket stats */}
+                  <div className="text-2xl font-bold text-gray-700">
+                    Ukupno točno: {targetStats.correct} / {stats.drawn_in_game}
                   </div>
-                )}
-                
-                <div className="text-sm text-gray-500 mt-2">
-                  Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                  
+                  {stats.drawn_in_game > 0 && (
+                    <div className="text-lg text-gray-600">
+                      Točnost: {globalAccuracy}%
+                    </div>
+                  )}
+                  
+                  <div className="text-sm text-gray-500 mt-2">
+                    Izvučeno u igri: {stats.drawn_in_game} / 90 pitanja
+                  </div>
+                  
+                  {winnerTicket && (
+                    <div className="text-sm font-bold text-yellow-600 mt-2">
+                      (Prikazani rezultati za pobjednički tiket: {targetTicket.serial_number})
+                    </div>
+                  )}
+                  {!winnerTicket && tickets.length > 1 && (
+                    <div className="text-xs text-gray-400 mt-1">
+                      (Prikazani rezultati za tiket: {targetTicket.serial_number})
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {/* Tickets Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
