@@ -139,8 +139,7 @@ export async function createFreeTicketsForPlayer(
   const { data: existingTickets, error: fetchError } = await supabase
     .from("tickets")
     .select("id")
-    .eq("session_id", sessionId)
-    .eq("event_id", eventId);
+    .match({ session_id: sessionId, event_id: eventId });
   
   if (fetchError) {
     console.error("Error fetching existing tickets:", fetchError);
