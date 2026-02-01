@@ -15,6 +15,8 @@ export interface TicketQuestion {
   question_number: number;
 }
 
+const MAX_FREE_TICKETS_PER_PLAYER = 4;
+
 /**
  * Generate a cryptographically unique ticket serial number
  * Format: T-{8_random_chars} (e.g., T-A7F3K9M2)
@@ -42,13 +44,77 @@ const generateTicketNumbers = (): number[] => {
   return numbers.sort((a, b) => a - b);
 };
 
+/**
+ * Get player ID from localStorage (device-based identification)
+ */
+const getPlayerId = (): string => {
+  if (typeof window === "undefined") return "";
+  
+  let playerId = localStorage.getItem("ps_player_id");
+  
+  if (!playerId) {
+    // Generate new player ID (UUID-like)
+    playerId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem("ps_player_id", playerId);
+  }
+  
+  return playerId;
+};
+
+/**
+ * Get free tickets count for current player and event from localStorage
+ */
+const getFreeTicketsCount = (eventId: string): number => {
+  if (typeof window === "undefined") return 0;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored).length : 0;
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Store free ticket serial in localStorage
+ */
+const storeFreeTicket = (eventId: string, serial: string): void => {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const tickets = JSON.parse(localStorage.getItem(key) || "[]");
+    if (!tickets.includes(serial)) {
+      tickets.push(serial);
+      localStorage.setItem(key, JSON.stringify(tickets));
+    }
+  } catch (err) {
+    console.error("[TicketService] Failed to store free ticket:", err);
+  }
+};
+
 export const ticketService = {
   /**
    * Create a free ticket for the given event
    * Returns the created ticket with its serial number
    * Handles duplicate serial numbers with automatic retry (max 5 attempts)
+   * ENFORCES MAX 4 FREE TICKETS PER PLAYER
    */
   async createFreeTicket(eventId: string): Promise<Ticket> {
+    const playerId = getPlayerId();
+    const freeTicketsCount = getFreeTicketsCount(eventId);
+    
+    console.log("[TicketService] 🎫 Creating free ticket:", {
+      playerId,
+      eventId,
+      currentFreeCount: freeTicketsCount,
+      limit: MAX_FREE_TICKETS_PER_PLAYER
+    });
+    
+    // ENFORCE FREE TICKETS LIMIT
+    if (freeTicketsCount >= MAX_FREE_TICKETS_PER_PLAYER) {
+      throw new Error(`FREE_LIMIT_REACHED: Dosegnut je limit od ${MAX_FREE_TICKETS_PER_PLAYER} besplatna tiketa u promo fazi.`);
+    }
+    
     const maxRetries = 5;
     let attempt = 0;
     
@@ -96,11 +162,15 @@ export const ticketService = {
 
         if (questionsError) throw questionsError;
 
+        // Store in localStorage (client-side tracking)
+        storeFreeTicket(eventId, serialNumber);
+
         console.log("[TicketService] ✅ Free ticket created:", {
           serial: serialNumber,
           event_id: eventId,
           questions: questionNumbers,
-          attempt
+          attempt,
+          freeTicketsCount: freeTicketsCount + 1
         });
 
         // Return full ticket object with questions
@@ -118,7 +188,10 @@ export const ticketService = {
           console.error("[TicketService] ❌ Failed to create free ticket after", maxRetries, "attempts:", error);
           throw new Error("Failed to create ticket. Please try again.");
         }
-        throw error;
+        // If it's not a duplicate error, throw immediately
+        if (error instanceof Error && !error.message.includes("duplicate")) {
+          throw error;
+        }
       }
     }
     
@@ -171,4 +244,25 @@ export const ticketService = {
       throw error;
     }
   },
+
+  /**
+   * Get free tickets count for current player and event
+   */
+  getFreeTicketsCount(eventId: string): number {
+    return getFreeTicketsCount(eventId);
+  },
+
+  /**
+   * Get max free tickets limit
+   */
+  getMaxFreeTickets(): number {
+    return MAX_FREE_TICKETS_PER_PLAYER;
+  },
+
+  /**
+   * Check if player can create more free tickets
+   */
+  canCreateFreeTicket(eventId: string): boolean {
+    return getFreeTicketsCount(eventId) < MAX_FREE_TICKETS_PER_PLAYER;
+  }
 };
