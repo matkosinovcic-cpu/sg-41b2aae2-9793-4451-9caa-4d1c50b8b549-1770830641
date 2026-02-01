@@ -1,231 +1,441 @@
-import { SEO } from "@/components/SEO";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
-import { eventService, Event } from "@/services/eventService";
+import { supabase } from "@/integrations/supabase/client";
+import { eventService } from "@/services/eventService";
 import { ticketService } from "@/services/ticketService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, Ticket } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-
-const FREE_TICKET_LIMIT = 4;
-
-// Get stored free tickets for a specific event
-function getStoredFreeTickets(eventId: string): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-}
-
-// Store free ticket for a specific event
-function storeFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const tickets = getStoredFreeTickets(eventId);
-    if (!tickets.includes(serial)) {
-      tickets.push(serial);
-      localStorage.setItem(key, JSON.stringify(tickets));
-    }
-  } catch (err) {
-    console.error("[Play] Failed to store free ticket:", err);
-  }
-}
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Loader2 } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export default function PlayPage() {
   const router = useRouter();
-  const { toast } = useToast();
-  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [freeTicketCount, setFreeTicketCount] = useState(0);
-  const [limitReached, setLimitReached] = useState(false);
-
-  // Load active event and check ticket limit
-  const loadActiveEvent = async () => {
-    setLoading(true);
-    try {
-      const event = await eventService.getActiveEvent();
-      setActiveEvent(event);
-
-      if (event) {
-        const storedTickets = getStoredFreeTickets(event.id);
-        setFreeTicketCount(storedTickets.length);
-        setLimitReached(storedTickets.length >= FREE_TICKET_LIMIT);
-      }
-    } catch (error) {
-      console.error("[Play] Failed to load active event:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri učitavanju aktivnog eventa.",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [activeEvent, setActiveEvent] = useState<any>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [ticketSerial, setTicketSerial] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Additional free tickets modal state
+  const [showAddMoreModal, setShowAddMoreModal] = useState(false);
+  const [existingTicketCount, setExistingTicketCount] = useState(0);
+  const [selectedAdditionalCount, setSelectedAdditionalCount] = useState<string>("1");
+  const [isCreatingAdditional, setIsCreatingAdditional] = useState(false);
 
   useEffect(() => {
     loadActiveEvent();
+    loadOrCreateSession();
   }, []);
 
-  // Handle free ticket creation
-  const handleGetFreeTicket = async () => {
-    if (!activeEvent) return;
-    if (limitReached) return;
-
-    setCreating(true);
+  async function loadActiveEvent() {
     try {
-      // Create ticket in database
-      const ticket = await ticketService.createFreeTicket(activeEvent.id);
-
-      // Store in localStorage for this event
-      storeFreeTicket(activeEvent.id, ticket.serial_number);
-
-      toast({
-        title: "✅ Tiket kreiran!",
-        description: `Tvoj tiket: ${ticket.serial_number}`
-      });
-
-      // Redirect to player with newly created ticket
-      router.push(`/player?ticket=${ticket.serial_number}`);
-    } catch (error) {
-      console.error("[Play] Failed to create free ticket:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri izradi tiketa. Pokušaj ponovno.",
-        variant: "destructive"
-      });
-      setCreating(false);
+      setLoading(true);
+      const result = await eventService.getActiveOrLastFinished();
+      
+      if (result.event) {
+        setActiveEvent(result.event);
+      } else {
+        setError("Trenutno nema aktivnog eventa. Pokušajte kasnije.");
+      }
+    } catch (err) {
+      console.error("Error loading event:", err);
+      setError("Greška pri učitavanju eventa.");
+    } finally {
+      setLoading(false);
     }
-  };
+  }
 
-  // Handle "Open my tickets" button
-  const handleOpenMyTickets = () => {
-    if (!activeEvent) return;
-    const storedTickets = getStoredFreeTickets(activeEvent.id);
-    if (storedTickets.length > 0) {
-      // Redirect to player with stored tickets
-      router.push(`/player?event=${activeEvent.id}`);
+  async function loadOrCreateSession() {
+    try {
+      let token = localStorage.getItem("player_session_token");
+      
+      if (!token) {
+        // Create new session
+        const result = await eventService.getActiveOrLastFinished();
+        if (!result.event) {
+          return;
+        }
+        
+        const { data: session, error: sessionError } = await supabase
+          .from("player_sessions")
+          .insert({ 
+            event_id: result.event.id,
+            session_token: crypto.randomUUID() 
+          })
+          .select("session_token")
+          .single();
+        
+        if (sessionError) throw sessionError;
+        
+        token = session.session_token;
+        localStorage.setItem("player_session_token", token);
+      }
+      
+      setSessionToken(token);
+    } catch (err) {
+      console.error("Error loading/creating session:", err);
     }
-  };
+  }
+
+  async function handleFreeTicket() {
+    if (!activeEvent || !sessionToken) {
+      setError("Nema aktivnog eventa ili sesije.");
+      return;
+    }
+    
+    try {
+      setIsSubmitting(true);
+      setError("");
+      setSuccess("");
+      
+      // Get session ID from token
+      const { data: session, error: sessionError } = await supabase
+        .from("player_sessions")
+        .select("id")
+        .eq("session_token", sessionToken)
+        .single();
+      
+      if (sessionError || !session) {
+        throw new Error("Sesija nije pronađena.");
+      }
+      
+      // Create first free ticket
+      const result = await ticketService.createFreeTicketsForPlayer(
+        activeEvent.id,
+        session.id,
+        1
+      );
+      
+      if (result.created === 0) {
+        setError("Već imaš maksimalan broj besplatnih tiketa (4/4).");
+        return;
+      }
+      
+      // Get existing ticket count for modal
+      const { data: existingTickets } = await supabase
+        .from("tickets")
+        .select("id")
+        .eq("session_id", session.id)
+        .eq("event_id", activeEvent.id);
+      
+      const existing = existingTickets?.length || 0;
+      setExistingTicketCount(existing);
+      
+      // Show modal for additional tickets if not at max
+      if (existing < 4) {
+        setShowAddMoreModal(true);
+      } else {
+        // Already at max, redirect to player
+        router.push("/player");
+      }
+      
+    } catch (err: any) {
+      console.error("Error creating free ticket:", err);
+      setError(err.message || "Greška pri kreiranju tiketa.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleAddAdditionalTickets() {
+    if (!activeEvent || !sessionToken) return;
+    
+    try {
+      setIsCreatingAdditional(true);
+      setError("");
+      
+      // Get session ID from token
+      const { data: session, error: sessionError } = await supabase
+        .from("player_sessions")
+        .select("id")
+        .eq("session_token", sessionToken)
+        .single();
+      
+      if (sessionError || !session) {
+        throw new Error("Sesija nije pronađena.");
+      }
+      
+      const requested = parseInt(selectedAdditionalCount, 10);
+      
+      const result = await ticketService.createFreeTicketsForPlayer(
+        activeEvent.id,
+        session.id,
+        requested
+      );
+      
+      if (result.created > 0) {
+        setSuccess(`Uspješno dodano ${result.created} tiketa!`);
+        setTimeout(() => {
+          router.push("/player");
+        }, 1000);
+      } else {
+        setError("Nema više dostupnih besplatnih tiketa.");
+      }
+      
+    } catch (err: any) {
+      console.error("Error adding additional tickets:", err);
+      setError(err.message || "Greška pri dodavanju tiketa.");
+    } finally {
+      setIsCreatingAdditional(false);
+    }
+  }
+
+  async function handleManualTicket() {
+    // Existing manual ticket logic
+    if (!ticketSerial.trim()) {
+      setError("Molimo unesite serijski broj tiketa.");
+      return;
+    }
+    
+    try {
+      setIsSubmitting(true);
+      setError("");
+      setSuccess("");
+      
+      const ticket = await ticketService.getTicketBySerial(ticketSerial.trim());
+      
+      if (!ticket) {
+        setError("Tiket s tim serijskim brojem nije pronađen.");
+        return;
+      }
+      
+      setSuccess("Tiket pronađen! Preusmjeravam...");
+      setTimeout(() => {
+        router.push("/player");
+      }, 1000);
+      
+    } catch (err: any) {
+      console.error("Error fetching ticket:", err);
+      setError(err.message || "Greška pri dohvaćanju tiketa.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const remaining = Math.max(0, 4 - existingTicketCount);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
 
   return (
-    <>
-      <SEO
-        title="Preuzmi tiket - Pitalica Skitalica"
-        description="Skeniraj QR i preuzmi besplatni tiket za aktivni event!"
-      />
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
-        <Card className="w-full max-w-md shadow-2xl">
-          <CardHeader className="text-center space-y-2">
-            <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-              PITALICA SKITALICA
-            </CardTitle>
-            <CardDescription className="text-lg">
-              Preuzmi besplatni tiket
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-12 space-y-4">
-                <Loader2 className="h-12 w-12 animate-spin text-purple-600" />
-                <p className="text-muted-foreground">Učitavam...</p>
-              </div>
-            ) : activeEvent ? (
-              <>
-                <div className="space-y-2 text-center">
-                  <p className="text-sm text-muted-foreground">Aktivni event:</p>
-                  <p className="text-xl font-bold text-foreground">{activeEvent.name}</p>
-                </div>
+    <div className="container mx-auto p-4 max-w-2xl">
+      <Card>
+        <CardHeader>
+          <CardTitle>Preuzmi Tiket</CardTitle>
+          <CardDescription>
+            {activeEvent ? `Event: ${activeEvent.name}` : "Nema aktivnog eventa"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          
+          {success && (
+            <Alert>
+              <AlertDescription>{success}</AlertDescription>
+            </Alert>
+          )}
 
-                {limitReached ? (
-                  <div className="space-y-4">
-                    <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg p-4 text-center">
-                      <Ticket className="h-8 w-8 mx-auto mb-2 text-orange-600" />
-                      <p className="font-semibold text-orange-900 dark:text-orange-100">
-                        Imaš maksimalno {FREE_TICKET_LIMIT} tiketa za ovaj event.
-                      </p>
-                      <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
-                        ({freeTicketCount}/{FREE_TICKET_LIMIT} tiketa)
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleOpenMyTickets}
-                      className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                      size="lg"
-                    >
-                      <Ticket className="mr-2 h-5 w-5" />
-                      Otvori moje tikete
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {freeTicketCount > 0 && (
-                      <p className="text-sm text-center text-muted-foreground">
-                        Imaš {freeTicketCount}/{FREE_TICKET_LIMIT} tiketa
-                      </p>
-                    )}
-                    <Button
-                      onClick={handleGetFreeTicket}
-                      disabled={creating}
-                      className="w-full h-16 text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg"
-                      size="lg"
-                    >
-                      {creating ? (
-                        <>
-                          <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-                          Izrađujem tiket...
-                        </>
-                      ) : (
-                        <>
-                          <Ticket className="mr-2 h-6 w-6" />
-                          Preuzmi tiket (FREE)
-                        </>
-                      )}
-                    </Button>
-                    {freeTicketCount > 0 && (
-                      <Button
-                        onClick={handleOpenMyTickets}
-                        variant="outline"
-                        className="w-full"
-                        size="lg"
-                      >
-                        Vidi sve moje tikete ({freeTicketCount})
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
-                  <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
-                    ⏳ Trenutno nema aktivnog eventa.
-                  </p>
-                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                    Molimo pričekajte da event započne.
-                  </p>
+          {activeEvent && (
+            <>
+              {/* Free ticket section */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-semibold">Besplatni Tiket</h3>
+                  <Badge variant="secondary">TEST FAZA</Badge>
                 </div>
-                <Button
-                  onClick={loadActiveEvent}
-                  variant="outline"
+                <p className="text-sm text-muted-foreground">
+                  Do 4 besplatna tiketa po igraču u test fazi.
+                </p>
+                <Button 
+                  onClick={handleFreeTicket}
+                  disabled={isSubmitting}
                   className="w-full"
                   size="lg"
                 >
-                  <RefreshCw className="mr-2 h-5 w-5" />
-                  Osvježi
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Kreiram...
+                    </>
+                  ) : (
+                    "Preuzmi tiket (FREE)"
+                  )}
+                </Button>
+              </div>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">ili</span>
+                </div>
+              </div>
+
+              {/* Manual ticket entry */}
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold">Unesi Serijski Broj</h3>
+                <div className="space-y-2">
+                  <Label htmlFor="ticketSerial">Serijski broj tiketa</Label>
+                  <Input
+                    id="ticketSerial"
+                    placeholder="T17699..."
+                    value={ticketSerial}
+                    onChange={(e) => setTicketSerial(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handleManualTicket();
+                      }
+                    }}
+                  />
+                </div>
+                <Button 
+                  onClick={handleManualTicket}
+                  disabled={isSubmitting || !ticketSerial.trim()}
+                  className="w-full"
+                  variant="outline"
+                >
+                  Potvrdi
+                </Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Additional Free Tickets Modal */}
+      <Dialog open={showAddMoreModal} onOpenChange={setShowAddMoreModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Dodaj još besplatnih tiketa</DialogTitle>
+            <DialogDescription>
+              Test faza - možeš dodati još besplatnih tiketa (maksimalno 4 ukupno)
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6 py-4">
+            {/* Current status */}
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">Trenutno imaš</p>
+              <p className="text-3xl font-bold">{existingTicketCount}/4</p>
+              <p className="text-sm text-muted-foreground">tiketa</p>
+            </div>
+
+            {remaining > 0 ? (
+              <>
+                {/* Segmented control for count selection */}
+                <div className="space-y-2">
+                  <Label>Odaberi broj tiketa za dodavanje:</Label>
+                  <ToggleGroup 
+                    type="single" 
+                    value={selectedAdditionalCount}
+                    onValueChange={(value) => {
+                      if (value) setSelectedAdditionalCount(value);
+                    }}
+                    className="justify-start"
+                  >
+                    <ToggleGroupItem 
+                      value="1" 
+                      disabled={remaining < 1}
+                      className="flex-1"
+                    >
+                      1 tiket
+                    </ToggleGroupItem>
+                    <ToggleGroupItem 
+                      value="2" 
+                      disabled={remaining < 2}
+                      className="flex-1"
+                    >
+                      2 tiketa
+                    </ToggleGroupItem>
+                    <ToggleGroupItem 
+                      value="3" 
+                      disabled={remaining < 3}
+                      className="flex-1"
+                    >
+                      3 tiketa
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                {success && (
+                  <Alert>
+                    <AlertDescription>{success}</AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Action buttons */}
+                <div className="flex gap-3">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowAddMoreModal(false);
+                      router.push("/player");
+                    }}
+                    className="flex-1"
+                    disabled={isCreatingAdditional}
+                  >
+                    Preskoči
+                  </Button>
+                  <Button
+                    onClick={handleAddAdditionalTickets}
+                    disabled={isCreatingAdditional}
+                    className="flex-1"
+                  >
+                    {isCreatingAdditional ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Dodajem...
+                      </>
+                    ) : (
+                      `Dodaj ${selectedAdditionalCount}`
+                    )}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <Alert>
+                  <AlertDescription>
+                    Dosegnut limit 4/4 tiketa. Ne možeš dodati više besplatnih tiketa.
+                  </AlertDescription>
+                </Alert>
+                <Button
+                  onClick={() => {
+                    setShowAddMoreModal(false);
+                    router.push("/player");
+                  }}
+                  className="w-full"
+                >
+                  Idi na tikete
                 </Button>
               </>
             )}
-          </CardContent>
-        </Card>
-      </div>
-    </>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
