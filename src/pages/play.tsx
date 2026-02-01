@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, RefreshCw, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+const FREE_TICKET_LIMIT = 4;
+
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
   if (typeof window === "undefined") return [];
@@ -44,8 +46,6 @@ export default function PlayPage() {
   const [freeTicketCount, setFreeTicketCount] = useState(0);
   const [limitReached, setLimitReached] = useState(false);
 
-  const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
-
   // Load active event and check ticket limit
   const loadActiveEvent = async () => {
     setLoading(true);
@@ -56,7 +56,7 @@ export default function PlayPage() {
       if (event) {
         const storedTickets = getStoredFreeTickets(event.id);
         setFreeTicketCount(storedTickets.length);
-        setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
+        setLimitReached(storedTickets.length >= FREE_TICKET_LIMIT);
       }
     } catch (error) {
       console.error("[Play] Failed to load active event:", error);
@@ -96,24 +96,11 @@ export default function PlayPage() {
       router.push(`/player?ticket=${ticket.serial_number}`);
     } catch (error) {
       console.error("[Play] Failed to create free ticket:", error);
-      
-      // Check if it's a limit error
-      if (error instanceof Error && error.message.includes("FREE_LIMIT_REACHED")) {
-        toast({
-          title: "Dosegnut limit",
-          description: `Imaš maksimalno ${MAX_FREE_TICKETS} besplatna tiketa u promo fazi.`,
-          variant: "destructive"
-        });
-        setLimitReached(true);
-        // Reload to refresh state
-        loadActiveEvent();
-      } else {
-        toast({
-          title: "Greška",
-          description: "Greška pri izradi tiketa. Pokušaj ponovno.",
-          variant: "destructive"
-        });
-      }
+      toast({
+        title: "Greška",
+        description: "Greška pri izradi tiketa. Pokušaj ponovno.",
+        variant: "destructive"
+      });
       setCreating(false);
     }
   };
@@ -162,10 +149,10 @@ export default function PlayPage() {
                     <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg p-4 text-center">
                       <Ticket className="h-8 w-8 mx-auto mb-2 text-orange-600" />
                       <p className="font-semibold text-orange-900 dark:text-orange-100">
-                        Imaš maksimalno {MAX_FREE_TICKETS} tiketa za ovaj event.
+                        Imaš maksimalno {FREE_TICKET_LIMIT} tiketa za ovaj event.
                       </p>
                       <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
-                        ({freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa u promo fazi)
+                        ({freeTicketCount}/{FREE_TICKET_LIMIT} tiketa)
                       </p>
                     </div>
                     <Button
@@ -181,7 +168,7 @@ export default function PlayPage() {
                   <div className="space-y-4">
                     {freeTicketCount > 0 && (
                       <p className="text-sm text-center text-muted-foreground">
-                        Imaš {freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa
+                        Imaš {freeTicketCount}/{FREE_TICKET_LIMIT} tiketa
                       </p>
                     )}
                     <Button
