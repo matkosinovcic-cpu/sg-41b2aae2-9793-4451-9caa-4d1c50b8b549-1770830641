@@ -38,6 +38,57 @@ const DEFAULT_TTS_SETTINGS: TTSSettings = {
   volume: 1.0
 };
 
+// Helper function to convert number to Croatian text (main cardinal number)
+const numberToText = (num: number): string => {
+  const numbers: { [key: number]: string } = {
+    1: "jedan",
+    2: "dva",
+    3: "tri",
+    4: "četiri",
+    5: "pet",
+    6: "šest",
+    7: "sedam",
+    8: "osam",
+    9: "devet",
+    10: "deset",
+    11: "jedanaest",
+    12: "dvanaest",
+    13: "trinaest",
+    14: "četrnaest",
+    15: "petnaest",
+    16: "šesnaest",
+    17: "sedamnaest",
+    18: "osamnaest",
+    19: "devetnaest",
+    20: "dvadeset",
+    30: "trideset",
+    40: "četrdeset",
+    50: "pedeset",
+    60: "šezdeset",
+    70: "sedamdeset",
+    80: "osamdeset",
+    90: "devedeset"
+  };
+
+  if (num <= 20) {
+    return numbers[num] || num.toString();
+  }
+
+  if (num < 100) {
+    const tens = Math.floor(num / 10) * 10;
+    const ones = num % 10;
+    
+    if (ones === 0) {
+      return numbers[tens];
+    }
+    
+    return `${numbers[tens]} ${numbers[ones]}`;
+  }
+
+  // For numbers >= 100, just return the number (shouldn't happen in 1-90 range)
+  return num.toString();
+};
+
 export default function TVScreen() {
   const router = useRouter();
   const [events, setEvents] = useState<Event[]>([]);
@@ -219,7 +270,7 @@ export default function TVScreen() {
     console.log("[TTS] 🧪 TEST BUTTON CLICKED");
     console.log("[TTS] 🧪 Current settings:", ttsSettings);
     console.log("[TTS] 🧪 Available voices:", availableVoices.length);
-    speak("Pitanje broj 1. Je li more hladno?");
+    speak("Pitanje broj jedan. Je li more hladno?");
   };
 
   // TTS effect - speak when question changes
@@ -262,7 +313,9 @@ export default function TVScreen() {
     // Debounce 500ms
     console.log("[TTS] ⏱️ Setting debounce timeout (500ms)...");
     speakTimeoutRef.current = setTimeout(() => {
-      const textToSpeak = `Pitanje broj ${event.current_drawn_number}. ${questionText}`;
+      // Convert number to text for proper pronunciation
+      const numberAsText = numberToText(event.current_drawn_number!);
+      const textToSpeak = `Pitanje broj ${numberAsText}. ${questionText}`;
       console.log("[TTS] 🎬 Debounce complete, speaking:", textToSpeak);
       speak(textToSpeak);
       setLastSpokenQuestionId(currentQuestion.id);
