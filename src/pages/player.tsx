@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, Question } from "@/services/eventService";
 import { answerService } from "@/services/answerService";
@@ -842,6 +842,72 @@ export default function PlayerPage() {
     ticketsCount: tickets.length
   });
 
+  // GLOBAL STATISTICS (for header scoreboard - all player answers across all tickets)
+  const globalStats = useMemo(() => {
+    const drawnNumbers = activeEvent?.drawn_numbers || [];
+    const drawnCount = drawnNumbers.length; // X = globalDrawn
+    
+    if (drawnCount === 0) {
+      return { 
+        drawnCount: 0, 
+        answeredCount: 0, 
+        correctCount: 0,
+        wrongCount: 0,
+        missedCount: 0,
+        accuracy: 0 
+      };
+    }
+    
+    // Get all player answers (across ALL tickets owned by this player)
+    const playerAnswers = answers.filter(a => 
+      tickets.some(t => t.serial_number === a.ticket_id)
+    );
+    
+    // ✅ A = Number of unique DRAWN questions that player answered
+    const answeredQuestionNumbers = new Set(
+      playerAnswers
+        .map(a => Number(a.question_number))
+        .filter(qNum => drawnNumbers.includes(qNum))
+    );
+    const answeredCount = answeredQuestionNumbers.size; // globalAnswered
+    
+    // ✅ Cg = Number of correct answers
+    let correctCount = 0;
+    answeredQuestionNumbers.forEach(qNum => {
+      const answer = playerAnswers.find(a => Number(a.question_number) === qNum);
+      
+      if (answer && correctAnswersMap[qNum] !== undefined) {
+        const playerAns = normalizeAnswer(answer.answer);
+        const correctAns = normalizeAnswer(correctAnswersMap[qNum]);
+        
+        if (playerAns === correctAns) {
+          correctCount++;
+        }
+      }
+    });
+    
+    // ✅ Wg = Number of wrong answers
+    const wrongCount = answeredCount - correctCount; // globalIncorrect
+    
+    // ✅ M = MISSED = DRAWN - ANSWERED (questions that were drawn but not answered)
+    const missedCount = Math.max(0, drawnCount - answeredCount); // globalMissed
+    
+    // ✅ CORRECT FORMULA: globalAccuracy = (Cg / X) * 100
+    // Missed questions automatically lower accuracy because they're in denominator
+    const accuracy = drawnCount > 0 
+      ? Math.round((correctCount / drawnCount) * 100)
+      : 0;
+    
+    return { 
+      drawnCount,           // X (globalDrawn)
+      answeredCount,        // A (globalAnswered)
+      correctCount,         // Cg (globalCorrect)
+      wrongCount,           // Wg (globalIncorrect)
+      missedCount,          // M (globalMissed) = X - A
+      accuracy              // P% = (Cg / X) * 100
+    };
+  }, [activeEvent, answers, tickets, correctAnswersMap]);
+
   // Compute GLOBAL stats (aggregate across ALL tickets)
   const globalStats = computeGlobalStats(tickets, drawnNumbers, globalAnswersMap);
 
@@ -1176,19 +1242,49 @@ export default function PlayerPage() {
 
           {/* MULTI-TICKET GRID - EACH TICKET USES SAME FUNCTION */}
           <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
-            {tickets.map((ticket) => {
+            {tickets.map((ticket, ticketIndex) => {
               const isFocused = ticket.id === focusedTicketId;
               
-              // CRITICAL: Normalize ticket numbers to Number[]
+              // ✅ CALCULATE STATS FOR THIS TICKET (not focused ticket)
               const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
+              const drawnNumbers = activeEvent?.drawn_numbers || [];
               
-              // CRITICAL: Compute stats using SAME function for ALL tickets
-              const ticketStats = computeTicketStats(
-                ticketNumbers,
-                drawnNumbers,
-                globalAnswersMap,
-                ticket.serial_number
+              // ✅ Td = Number of drawn questions that are on this ticket
+              const drawnOnTicket = ticketNumbers.filter(n => drawnNumbers.includes(n));
+              const drawnCountOnTicket = drawnOnTicket.length; // Td
+              
+              // ✅ Answers ON THIS TICKET (only for questions that are ON this ticket)
+              const thisTicketAnswers = answers.filter(a => 
+                a.ticket_id === ticket.serial_number && 
+                ticketNumbers.includes(Number(a.question_number))
               );
+              const answeredOnTicket = thisTicketAnswers.length;
+              
+              // ✅ Ct = Number of correct answers on this ticket
+              let correctOnTicket = 0;
+              thisTicketAnswers.forEach(a => {
+                const qNum = Number(a.question_number);
+                if (correctAnswersMap[qNum] !== undefined) {
+                  const playerAns = normalizeAnswer(a.answer);
+                  const correctAns = normalizeAnswer(correctAnswersMap[qNum]);
+                  if (playerAns === correctAns) {
+                    correctOnTicket++;
+                  }
+                }
+              });
+              
+              // ✅ Wt = Number of wrong answers on this ticket
+              const wrongOnTicket = answeredOnTicket - correctOnTicket;
+              
+              // ✅ FIXED: SAME FORMULA FOR ALL MODES
+              // Mt = MISSED = DRAWN ON TICKET - ANSWERED ON TICKET
+              const missedOnTicket = Math.max(0, drawnCountOnTicket - answeredOnTicket);
+              
+              // ✅ FIXED: SAME FORMULA FOR ALL MODES
+              // Pt = ACCURACY = (CORRECT / DRAWN ON TICKET) * 100
+              const thisTicketAccuracy = drawnCountOnTicket > 0 
+                ? Math.round((correctOnTicket / drawnCountOnTicket) * 100)
+                : 0;
               
               // Current question status for this ticket
               const isOnThisTicket = currentDrawnNumber !== null && ticketNumbers.includes(currentDrawnNumber);
@@ -1207,13 +1303,13 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* PER-TICKET STATS - SAME FOR ALL TICKETS */}
+                    {/* ✅ PER-TICKET STATS - CONSISTENT FOR ALL TICKETS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
-                        <span>Izvučeno: {ticketStats.drawnOnTicketCount}/15</span>
-                        <span>Točno: {ticketStats.correctOnTicket} • Netočno: {ticketStats.incorrectOnTicket}</span>
-                        <span>Propušteno: {ticketStats.missedOnTicket}</span>
-                        <span>Točnost: {ticketStats.accuracyPct}%</span>
+                        <span>Izvučeno: {drawnCountOnTicket}/15</span>
+                        <span>Točno: {correctOnTicket} • Netočno: {wrongOnTicket}</span>
+                        <span>Propušteno: {missedOnTicket}</span>
+                        <span>Točnost: {thisTicketAccuracy}%</span>
                       </div>
                     </div>
                     
@@ -1293,77 +1389,77 @@ export default function PlayerPage() {
                 </Card>
               );
             })}
+          </div>
 
-            {/* Add ticket card (only in active mode) */}
-            {canAddTicket && (
-              <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
-                <DialogTrigger asChild>
-                  <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
-                    <CardContent className="flex flex-col items-center justify-center h-full py-8">
-                      <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
-                      <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
-                      <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
-                    </CardContent>
-                  </Card>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Dodaj novi tiket</DialogTitle>
-                    <DialogDescription>
-                      Unesite serijski broj tiketa za dodavanje u igru.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="serial">Serijski broj tiketa</Label>
-                      <Input
-                        id="serial"
-                        placeholder="Npr. T-A7F3K9M2"
-                        value={newTicketSerial}
-                        onChange={(e) => setNewTicketSerial(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !addingTicket) {
-                            handleAddTicket();
-                          }
-                        }}
-                        disabled={addingTicket}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setAddTicketOpen(false);
-                        setNewTicketSerial("");
+          {/* Add ticket card (only in active mode) */}
+          {canAddTicket && (
+            <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
+              <DialogTrigger asChild>
+                <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
+                  <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                    <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                    <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                    <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
+                  </CardContent>
+                </Card>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Dodaj novi tiket</DialogTitle>
+                  <DialogDescription>
+                    Unesite serijski broj tiketa za dodavanje u igru.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="serial">Serijski broj tiketa</Label>
+                    <Input
+                      id="serial"
+                      placeholder="Npr. T-A7F3K9M2"
+                      value={newTicketSerial}
+                      onChange={(e) => setNewTicketSerial(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !addingTicket) {
+                          handleAddTicket();
+                        }
                       }}
                       disabled={addingTicket}
-                      className="flex-1"
-                    >
-                      Odustani
-                    </Button>
-                    <Button
-                      onClick={handleAddTicket}
-                      disabled={addingTicket || !newTicketSerial.trim()}
-                      className="flex-1"
-                    >
-                      {addingTicket ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Dodajem...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Dodaj
-                        </>
-                      )}
-                    </Button>
+                    />
                   </div>
-                </DialogContent>
-              </Dialog>
-            )}
-          </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setAddTicketOpen(false);
+                      setNewTicketSerial("");
+                    }}
+                    disabled={addingTicket}
+                    className="flex-1"
+                  >
+                    Odustani
+                  </Button>
+                  <Button
+                    onClick={handleAddTicket}
+                    disabled={addingTicket || !newTicketSerial.trim()}
+                    className="flex-1"
+                  >
+                    {addingTicket ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Dodajem...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Dodaj
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
 
           {tickets.length >= 4 && eventMode === "active" && (
             <p className="text-center text-xs text-white/80">Limit 4 tiketa (promo faza)</p>
@@ -1424,9 +1520,7 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-lg font-semibold text-muted-foreground">
-                          Vrijeme za odgovor je isteklo
-                        </p>
+                        <p className="text-lg text-muted-foreground">Vrijeme za odgovor je isteklo</p>
                       </div>
                     );
                   }
