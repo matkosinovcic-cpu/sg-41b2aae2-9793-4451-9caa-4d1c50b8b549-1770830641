@@ -577,5 +577,27 @@ export const eventService = {
     
     if (error) throw error;
     return data as Event;
+  },
+
+  async getActiveOrLastFinished() {
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("status", "active")
+      .single();
+    
+    if (error) {
+      const { data: lastFinished, error: lastFinishedError } = await supabase
+        .from("events")
+        .select("*")
+        .eq("status", "finished")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (lastFinishedError) throw lastFinishedError;
+      return { event: lastFinished as Event, mode: "lastFinished" };
+    }
+    return { event: data as Event, mode: "active" };
   }
 };
