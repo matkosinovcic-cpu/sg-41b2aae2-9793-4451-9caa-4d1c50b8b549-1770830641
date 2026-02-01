@@ -15,29 +15,19 @@ export interface TicketQuestion {
   question_number: number;
 }
 
+const MAX_FREE_TICKETS_PER_PLAYER = 4;
+
 /**
- * Generate a cryptographically secure unique serial number for a ticket
+ * Generate a cryptographically unique ticket serial number
+ * Format: T-{8_random_chars} (e.g., T-A7F3K9M2)
  */
 const generateUniqueSerial = (): string => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  
-  // Use crypto.getRandomValues for secure random generation
-  const randomBytes = new Uint8Array(4);
-  if (typeof window !== "undefined" && window.crypto) {
-    window.crypto.getRandomValues(randomBytes);
-  } else {
-    // Fallback for server-side
-    for (let i = 0; i < randomBytes.length; i++) {
-      randomBytes[i] = Math.floor(Math.random() * 256);
-    }
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Readable chars (no 0/O, 1/I)
+  let serial = "T-";
+  for (let i = 0; i < 8; i++) {
+    serial += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  
-  const randomPart = Array.from(randomBytes)
-    .map(b => b.toString(36).toUpperCase())
-    .join("")
-    .slice(0, 8);
-  
-  return `T${timestamp}${randomPart}`;
+  return serial;
 };
 
 /**
@@ -55,73 +45,51 @@ const generateTicketNumbers = (): number[] => {
 };
 
 /**
- * Create a single ticket with retry logic for unique serial number conflicts
+ * Get player ID from localStorage (device-based identification)
  */
-const createSingleTicketWithRetry = async (
-  eventId: string,
-  sessionId: string,
-  maxRetries: number = 5
-): Promise<{ id: string; serial_number: string }> => {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const serialNumber = generateUniqueSerial();
-      
-      // Insert ticket
-      // Explicitly cast to any to avoid "excessively deep" TS error on insert
-      const { data: ticket, error: ticketError } = await (supabase
-        .from("tickets")
-        .insert({
-          serial_number: serialNumber,
-          event_id: eventId,
-          session_id: sessionId,
-          is_winner: false,
-        })
-        .select("id, serial_number")
-        .single() as any);
-      
-      if (ticketError) {
-        // Check for unique constraint violation (duplicate serial)
-        if (ticketError.code === "23505" && attempt < maxRetries - 1) {
-          console.warn(`Serial collision on attempt ${attempt + 1}, retrying...`);
-          continue; // Retry with new serial
-        }
-        throw ticketError;
-      }
-      
-      if (!ticket) {
-        throw new Error("Failed to create ticket");
-      }
-      
-      // Generate 15 random question numbers
-      const numbers = generateTicketNumbers();
-      
-      // Insert ticket questions
-      const ticketQuestions = numbers.map(num => ({
-        ticket_id: ticket.id,
-        question_number: num,
-      }));
-      
-      const { error: questionsError } = await supabase
-        .from("ticket_questions")
-        .insert(ticketQuestions);
-      
-      if (questionsError) {
-        // Rollback: delete the ticket if questions failed
-        await supabase.from("tickets").delete().eq("id", ticket.id);
-        throw questionsError;
-      }
-      
-      return ticket;
-      
-    } catch (error) {
-      if (attempt === maxRetries - 1) {
-        throw error; // Last attempt failed, propagate error
-      }
-      // Continue to next attempt
-    }
+const getPlayerId = (): string => {
+  if (typeof window === "undefined") return "";
+  
+  let playerId = localStorage.getItem("ps_player_id");
+  
+  if (!playerId) {
+    // Generate new player ID (UUID-like)
+    playerId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem("ps_player_id", playerId);
   }
   
-  throw new Error("Failed to create ticket after maximum retries");
+  return playerId;
+};
+
+/**
+ * Get free tickets count for current player and event from localStorage
+ */
+const getFreeTicketsCount = (eventId: string): number => {
+  if (typeof window === "undefined") return 0;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored).length : 0;
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Store free ticket serial in localStorage
+ */
+const storeFreeTicket = (eventId: string, serial: string): void => {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const tickets = JSON.parse(localStorage.getItem(key) || "[]");
+    if (!tickets.includes(serial)) {
+      tickets.push(serial);
+      localStorage.setItem(key, JSON.stringify(tickets));
+    }
+  } catch (err) {
+    console.error("[TicketService] Failed to store free ticket:", err);
+  }
 };
 
 export const ticketService = {
@@ -129,9 +97,24 @@ export const ticketService = {
    * Create a free ticket for the given event
    * Returns the created ticket with its serial number
    * Handles duplicate serial numbers with automatic retry (max 5 attempts)
-   * @deprecated Use createFreeTicketsForPlayer instead
+   * ENFORCES MAX 4 FREE TICKETS PER PLAYER
    */
   async createFreeTicket(eventId: string): Promise<Ticket> {
+    const playerId = getPlayerId();
+    const freeTicketsCount = getFreeTicketsCount(eventId);
+    
+    console.log("[TicketService] 🎫 Creating free ticket:", {
+      playerId,
+      eventId,
+      currentFreeCount: freeTicketsCount,
+      limit: MAX_FREE_TICKETS_PER_PLAYER
+    });
+    
+    // ENFORCE FREE TICKETS LIMIT
+    if (freeTicketsCount >= MAX_FREE_TICKETS_PER_PLAYER) {
+      throw new Error(`FREE_LIMIT_REACHED: Dosegnut je limit od ${MAX_FREE_TICKETS_PER_PLAYER} besplatna tiketa u promo fazi.`);
+    }
+    
     const maxRetries = 5;
     let attempt = 0;
     
@@ -143,7 +126,7 @@ export const ticketService = {
         const serialNumber = generateUniqueSerial();
 
         // Create ticket
-        const { data: ticket, error: ticketError } = await (supabase
+        const { data: ticket, error: ticketError } = await supabase
           .from("tickets")
           .insert({
             serial_number: serialNumber,
@@ -151,7 +134,7 @@ export const ticketService = {
             is_winner: false,
           })
           .select()
-          .single() as any);
+          .single();
 
         if (ticketError) {
           // Check if it's a duplicate serial number error
@@ -179,11 +162,15 @@ export const ticketService = {
 
         if (questionsError) throw questionsError;
 
+        // Store in localStorage (client-side tracking)
+        storeFreeTicket(eventId, serialNumber);
+
         console.log("[TicketService] ✅ Free ticket created:", {
           serial: serialNumber,
           event_id: eventId,
           questions: questionNumbers,
-          attempt
+          attempt,
+          freeTicketsCount: freeTicketsCount + 1
         });
 
         // Return full ticket object with questions
@@ -201,7 +188,10 @@ export const ticketService = {
           console.error("[TicketService] ❌ Failed to create free ticket after", maxRetries, "attempts:", error);
           throw new Error("Failed to create ticket. Please try again.");
         }
-        throw error;
+        // If it's not a duplicate error, throw immediately
+        if (error instanceof Error && !error.message.includes("duplicate")) {
+          throw error;
+        }
       }
     }
     
@@ -256,66 +246,23 @@ export const ticketService = {
   },
 
   /**
-   * Get all tickets for a specific event
+   * Get free tickets count for current player and event
    */
-  async getTicketsForEvent(eventId: string): Promise<Ticket[]> {
-    try {
-      const { data, error } = await supabase
-        .from("tickets")
-        .select("*, ticket_questions(*)")
-        .eq("event_id", eventId);
-
-      if (error) throw error;
-      return (data || []) as Ticket[];
-    } catch (error) {
-      console.error("[TicketService] ❌ Failed to get tickets for event:", error);
-      throw error;
-    }
+  getFreeTicketsCount(eventId: string): number {
+    return getFreeTicketsCount(eventId);
   },
 
   /**
-   * TEST PHASE: Create multiple free tickets for a player
-   * Maximum 4 tickets per player per event
+   * Get max free tickets limit
    */
-  async createFreeTicketsForPlayer(
-    eventId: string,
-    sessionId: string,
-    requestedCount: number
-  ): Promise<{ created: number; tickets: Array<{ id: string; serial_number: string }> }> {
-    // 1. Get existing tickets for this session + event
-    // Cast supabase to any to avoid "excessively deep type instantiation" error
-    const { data: existingTickets, error: fetchError } = await (supabase as any)
-      .from("tickets")
-      .select("id")
-      .eq("session_id", sessionId)
-      .eq("event_id", eventId);
-    
-    if (fetchError) {
-      console.error("Error fetching existing tickets:", fetchError);
-      throw fetchError;
-    }
-    
-    const existing = existingTickets?.length || 0;
-    const MAX_FREE_TICKETS = 4;
-    const remaining = Math.max(0, MAX_FREE_TICKETS - existing);
-    const toCreate = Math.min(requestedCount, remaining);
-    
-    if (toCreate <= 0) {
-      return { created: 0, tickets: [] };
-    }
-    
-    // 2. Create toCreate tickets with retry logic
-    const createdTickets: Array<{ id: string; serial_number: string }> = [];
-    
-    for (let i = 0; i < toCreate; i++) {
-      try {
-        const ticket = await createSingleTicketWithRetry(eventId, sessionId);
-        createdTickets.push(ticket);
-      } catch (error) {
-        console.error(`Failed to create ticket ${i + 1}/${toCreate}:`, error);
-      }
-    }
-    
-    return { created: createdTickets.length, tickets: createdTickets };
+  getMaxFreeTickets(): number {
+    return MAX_FREE_TICKETS_PER_PLAYER;
+  },
+
+  /**
+   * Check if player can create more free tickets
+   */
+  canCreateFreeTicket(eventId: string): boolean {
+    return getFreeTicketsCount(eventId) < MAX_FREE_TICKETS_PER_PLAYER;
   }
 };

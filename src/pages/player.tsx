@@ -265,6 +265,11 @@ export default function PlayerPage() {
   const [ticketDetailOpen, setTicketDetailOpen] = useState(false);
   const [selectedTicketForDetail, setSelectedTicketForDetail] = useState<TicketData | null>(null);
 
+  // Post-event review state
+  const [showDetailedReview, setShowDetailedReview] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState<"all" | "correct" | "incorrect">("all");
+  const [allDrawnQuestions, setAllDrawnQuestions] = useState<Array<{ number: number; text: string; correct_answer: boolean }>>([]);
+
   // Load tickets from URL or localStorage
   useEffect(() => {
     const loadTickets = async () => {
@@ -427,6 +432,30 @@ export default function PlayerPage() {
         const answersMap = await eventService.getDrawnQuestions(event.id);
         setCorrectAnswersMap(answersMap);
         console.log("[PLAYER] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
+        
+        // If event is finished, load full question data for review
+        if (event.status === "finished" && event.drawn_numbers && event.drawn_numbers.length > 0) {
+          console.log("[PLAYER] 📖 Loading full question data for review...");
+          const questionsData: Array<{ number: number; text: string; correct_answer: boolean }> = [];
+          
+          for (const qNum of event.drawn_numbers) {
+            try {
+              const questionData = await eventService.getQuestionForNumber(event.id, qNum);
+              if (questionData && questionData.questions) {
+                questionsData.push({
+                  number: qNum,
+                  text: questionData.questions.text,
+                  correct_answer: questionData.questions.correct_answer
+                });
+              }
+            } catch (err) {
+              console.warn(`[PLAYER] ⚠️ Failed to load question ${qNum}:`, err);
+            }
+          }
+          
+          setAllDrawnQuestions(questionsData.sort((a, b) => a.number - b.number));
+          console.log("[PLAYER] 📖 Loaded", questionsData.length, "questions for review");
+        }
       } catch (err) {
         console.error("[PLAYER] ❌ Failed to load drawn questions map:", err);
       }
@@ -1395,7 +1424,7 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-xl font-semibold text-muted-foreground">
+                        <p className="text-lg font-semibold text-muted-foreground">
                           Vrijeme za odgovor je isteklo
                         </p>
                       </div>
@@ -1448,10 +1477,171 @@ export default function PlayerPage() {
                 <p className="text-muted-foreground mb-6">
                   Izvučeno {drawnNumbers.length} od 90 brojeva
                 </p>
-                <Button onClick={() => router.push("/play")} size="lg">
-                  <Ticket className="mr-2 h-5 w-5" />
-                  Preuzmi tiket za novi event
-                </Button>
+                
+                {/* Show winner if exists */}
+                {winnerSerial && (
+                  <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4 mb-6">
+                    <p className="text-lg font-bold text-yellow-800">🏆 Pobjednik: {winnerSerial}</p>
+                  </div>
+                )}
+                
+                {/* Action buttons */}
+                <div className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+                  <Button 
+                    onClick={() => setShowDetailedReview(!showDetailedReview)} 
+                    variant="outline"
+                    size="lg"
+                    className="flex-1"
+                  >
+                    📊 {showDetailedReview ? "Sakrij" : "Prikaži"} detaljan pregled
+                  </Button>
+                  <Button 
+                    onClick={() => router.push("/play")} 
+                    size="lg"
+                    className="flex-1"
+                  >
+                    <Ticket className="mr-2 h-5 w-5" />
+                    Novi event
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Detailed Review Section (FINISHED events only) */}
+          {eventMode === "finished" && showDetailedReview && allDrawnQuestions.length > 0 && (
+            <Card className="bg-white/95 backdrop-blur">
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-xl">📊 Detaljan Pregled Pitanja</CardTitle>
+                    <CardDescription>
+                      Izvučeno {allDrawnQuestions.length} pitanja - Tvoji odgovori vs Točni odgovori
+                    </CardDescription>
+                  </div>
+                  
+                  {/* Filter buttons */}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={reviewFilter === "all" ? "default" : "outline"}
+                      onClick={() => setReviewFilter("all")}
+                    >
+                      Sva ({allDrawnQuestions.length})
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={reviewFilter === "correct" ? "default" : "outline"}
+                      onClick={() => setReviewFilter("correct")}
+                      className="text-green-600 border-green-600 hover:bg-green-50"
+                    >
+                      Točna ({globalStats.correctCount})
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={reviewFilter === "incorrect" ? "default" : "outline"}
+                      onClick={() => setReviewFilter("incorrect")}
+                      className="text-red-600 border-red-600 hover:bg-red-50"
+                    >
+                      Netočna ({globalStats.incorrectCount + globalStats.missedCount})
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              
+              <CardContent className="space-y-3">
+                {allDrawnQuestions
+                  .filter((q) => {
+                    if (reviewFilter === "all") return true;
+                    
+                    const ans = globalAnswersMap.get(q.number);
+                    if (!ans) {
+                      // Missed question = incorrect
+                      return reviewFilter === "incorrect";
+                    }
+                    
+                    if (reviewFilter === "correct") return ans.isCorrect;
+                    if (reviewFilter === "incorrect") return !ans.isCorrect;
+                    return true;
+                  })
+                  .map((q) => {
+                    const ans = globalAnswersMap.get(q.number);
+                    const isCorrect = ans?.isCorrect || false;
+                    const isMissed = !ans;
+                    
+                    return (
+                      <div
+                        key={q.number}
+                        className={cn(
+                          "border-l-4 p-4 rounded-lg transition-all",
+                          isCorrect && "border-green-500 bg-green-50/50",
+                          !isCorrect && !isMissed && "border-red-500 bg-red-50/50",
+                          isMissed && "border-gray-400 bg-gray-50/50"
+                        )}
+                      >
+                        {/* Header */}
+                        <div className="flex items-center justify-between mb-3">
+                          <Badge variant="outline" className="text-base font-bold">
+                            #{q.number}
+                          </Badge>
+                          <Badge
+                            variant={isCorrect ? "default" : "destructive"}
+                            className={cn(
+                              "text-sm",
+                              isCorrect && "bg-green-600",
+                              isMissed && "bg-gray-500"
+                            )}
+                          >
+                            {isMissed ? "⏭️ Propušteno" : isCorrect ? "✅ Točno" : "❌ Netočno"}
+                          </Badge>
+                        </div>
+                        
+                        {/* Question text */}
+                        <p className="text-lg font-medium mb-4">{q.text}</p>
+                        
+                        {/* Answers comparison */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className={cn(
+                            "p-3 rounded-md",
+                            isMissed ? "bg-gray-100" : isCorrect ? "bg-green-100" : "bg-red-100"
+                          )}>
+                            <p className="text-xs text-muted-foreground mb-1">Tvoj odgovor:</p>
+                            <p className={cn(
+                              "text-xl font-bold",
+                              isMissed ? "text-gray-600" : isCorrect ? "text-green-700" : "text-red-700"
+                            )}>
+                              {isMissed ? "—" : ans?.answer ? "DA" : "NE"}
+                            </p>
+                          </div>
+                          
+                          <div className="bg-green-100 p-3 rounded-md">
+                            <p className="text-xs text-muted-foreground mb-1">Točan odgovor:</p>
+                            <p className="text-xl font-bold text-green-700">
+                              {q.correct_answer ? "DA" : "NE"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                
+                {/* No results message */}
+                {allDrawnQuestions.filter((q) => {
+                  if (reviewFilter === "all") return true;
+                  const ans = globalAnswersMap.get(q.number);
+                  if (!ans) return reviewFilter === "incorrect";
+                  if (reviewFilter === "correct") return ans.isCorrect;
+                  if (reviewFilter === "incorrect") return !ans.isCorrect;
+                  return true;
+                }).length === 0 && (
+                  <div className="text-center py-8">
+                    <p className="text-muted-foreground">
+                      {reviewFilter === "correct" 
+                        ? "Nemaš točnih odgovora" 
+                        : "Nemaš netočnih odgovora"}
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
