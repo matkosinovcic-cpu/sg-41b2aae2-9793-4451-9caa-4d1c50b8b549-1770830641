@@ -39,19 +39,19 @@ interface Answer {
   created_at: string;
 }
 
-// Normalize answer values
+// Normalize answer values to boolean
 function normalizeAnswer(value: any): boolean | null {
   if (value === true || value === "true" || value === 1) return true;
   if (value === false || value === "false" || value === 0) return false;
   return null;
 }
 
-// Compute per-ticket stats (INDEPENDENT for each ticket)
+// CORE FUNCTION: Compute stats for ONE ticket (MUST be identical for all 4 tickets)
 function computeTicketStats(
   ticketNumbers: number[],
   drawnNumbers: number[],
-  answersForThisTicket: Answer[],
-  correctAnswersMap: Record<number, boolean>
+  answersMap: Map<number, { answer: boolean | null; isCorrect: boolean }>,
+  ticketSerial: string
 ): {
   drawnOnTicketCount: number;
   answeredOnTicket: number;
@@ -61,11 +61,12 @@ function computeTicketStats(
   accuracyPct: number;
 } {
   // 1. Intersection: drawn numbers that are on this ticket
-  const ticketNumbersSet = new Set(ticketNumbers.map(Number));
-  const drawnOnTicket = drawnNumbers.filter(n => ticketNumbersSet.has(Number(n)));
+  const ticketNumbersSet = new Set(ticketNumbers);
+  const drawnOnTicket = drawnNumbers.filter(n => ticketNumbersSet.has(n));
   const drawnOnTicketCount = drawnOnTicket.length;
 
   if (drawnOnTicketCount === 0) {
+    console.log(`[STATS] ${ticketSerial}: No drawn numbers on this ticket`);
     return {
       drawnOnTicketCount: 0,
       answeredOnTicket: 0,
@@ -76,22 +77,7 @@ function computeTicketStats(
     };
   }
 
-  // 2. Build answers map for this ticket (KEY = question_number as Number)
-  const answersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
-  
-  for (const ans of answersForThisTicket) {
-    const qNum = Number(ans.question_number);
-    if (!ticketNumbersSet.has(qNum)) continue; // Only questions on this ticket
-    if (!drawnNumbers.includes(qNum)) continue; // Only drawn questions
-    
-    const correctAns = correctAnswersMap[qNum];
-    const isCorrect = correctAns !== undefined && 
-                      normalizeAnswer(ans.answer) === normalizeAnswer(correctAns);
-    
-    answersMap.set(qNum, { answer: ans.answer, isCorrect });
-  }
-
-  // 3. Count stats
+  // 2. Count stats from answersMap (global map by question number)
   let answeredOnTicket = 0;
   let correctOnTicket = 0;
   let incorrectOnTicket = 0;
@@ -113,6 +99,19 @@ function computeTicketStats(
     ? Math.round((correctOnTicket / drawnOnTicketCount) * 100)
     : 0;
 
+  // DEBUG LOG (to identify key mismatch issues)
+  console.log(`[STATS] ${ticketSerial}:`, {
+    intersection: drawnOnTicketCount,
+    answered: answeredOnTicket,
+    correct: correctOnTicket,
+    incorrect: incorrectOnTicket,
+    missed: missedOnTicket,
+    accuracy: accuracyPct,
+    ticketNumbers: ticketNumbers.slice(0, 3) + "...",
+    drawnOnTicket: drawnOnTicket.slice(0, 3) + "...",
+    answersMapSize: answersMap.size
+  });
+
   return {
     drawnOnTicketCount,
     answeredOnTicket,
@@ -121,6 +120,26 @@ function computeTicketStats(
     missedOnTicket,
     accuracyPct
   };
+}
+
+// CORE FUNCTION: Get cell state for grid coloring (MUST be identical for all 4 tickets)
+function getCellState(
+  questionNumber: number,
+  drawnNumbers: number[],
+  answersMap: Map<number, { answer: boolean | null; isCorrect: boolean }>
+): "not-drawn" | "correct" | "wrong" | "missed" {
+  const isDrawn = drawnNumbers.includes(questionNumber);
+  
+  if (!isDrawn) {
+    return "not-drawn";
+  }
+  
+  const ans = answersMap.get(questionNumber);
+  if (ans) {
+    return ans.isCorrect ? "correct" : "wrong";
+  }
+  
+  return "missed";
 }
 
 // Compute GLOBAL stats (across ALL tickets)
@@ -260,6 +279,11 @@ export default function PlayerPage() {
         const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
         setTickets(loadedTickets);
 
+        console.log("[PLAYER] Loaded tickets:", loadedTickets.map(t => ({
+          id: t.id,
+          serial: t.serial_number
+        })));
+
         // Set focused ticket
         if (ticketSerial) {
           const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
@@ -336,14 +360,17 @@ export default function PlayerPage() {
         console.error("Failed to load drawn questions map:", err);
       }
 
-      // Load answers for ALL tickets
+      // CRITICAL: Load answers for ALL tickets using SERIAL_NUMBER as key
       const allAnswers: Answer[] = [];
       for (const ticket of loadedTickets) {
+        console.log(`[PLAYER] Loading answers for ticket: ${ticket.serial_number}`);
         const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
+        console.log(`[PLAYER] Found ${ticketAnswers.length} answers for ${ticket.serial_number}`);
         allAnswers.push(...ticketAnswers);
       }
       setAnswers([...allAnswers]);
       
+      console.log(`[PLAYER] Total answers loaded: ${allAnswers.length}`);
       console.log("[Player] ✅ Event data refetched");
     } catch (error) {
       console.error("[Player] Failed to refetch event data:", error);
@@ -538,8 +565,30 @@ export default function PlayerPage() {
     }
   };
 
+  // CRITICAL: Normalize all numbers and build global answersMap
+  const drawnNumbers = (activeEvent?.drawn_numbers || []).map(Number);
+  const globalAnswersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
+  
+  // Build global answers map by question number (NOT by ticket!)
+  for (const ans of answers) {
+    const qNum = Number(ans.question_number);
+    if (!drawnNumbers.includes(qNum)) continue;
+    
+    const correctAns = correctAnswersMap[qNum];
+    const isCorrect = correctAns !== undefined && 
+                      normalizeAnswer(ans.answer) === normalizeAnswer(correctAns);
+    
+    // Keep latest answer (already sorted in state)
+    if (!globalAnswersMap.has(qNum)) {
+      globalAnswersMap.set(qNum, { answer: ans.answer, isCorrect });
+    }
+  }
+
+  console.log(`[PLAYER] Global answersMap size: ${globalAnswersMap.size}`, 
+    `Drawn: ${drawnNumbers.length}`,
+    `Total answers: ${answers.length}`);
+
   // Compute GLOBAL stats
-  const drawnNumbers = activeEvent?.drawn_numbers || [];
   const globalStats = computeGlobalStats(drawnNumbers, answers, correctAnswersMap);
 
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
@@ -671,20 +720,20 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* MULTI-TICKET GRID */}
+          {/* MULTI-TICKET GRID - EACH TICKET USES SAME FUNCTION */}
           <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
             {tickets.map((ticket) => {
               const isFocused = ticket.id === focusedTicketId;
               
-              // COMPUTE STATS FOR THIS TICKET (INDEPENDENT)
+              // CRITICAL: Normalize ticket numbers to Number[]
               const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
-              const answersForThisTicket = answers.filter(a => a.ticket_id === ticket.serial_number);
               
+              // CRITICAL: Compute stats using SAME function for ALL tickets
               const ticketStats = computeTicketStats(
                 ticketNumbers,
                 drawnNumbers,
-                answersForThisTicket,
-                correctAnswersMap
+                globalAnswersMap,
+                ticket.serial_number
               );
               
               // Current question status for this ticket
@@ -704,7 +753,7 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* PER-TICKET STATS */}
+                    {/* PER-TICKET STATS - SAME FOR ALL 4 TICKETS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
                         <span>Izvučeno: {ticketStats.drawnOnTicketCount}/15</span>
@@ -739,40 +788,36 @@ export default function PlayerPage() {
                   </CardHeader>
                   
                   <CardContent className="p-3 sm:p-4 pt-0">
-                    {/* Ticket grid (5x3) */}
+                    {/* Ticket grid (5x3) - SAME getCellState FOR ALL */}
                     <div className="grid grid-cols-5 gap-2">
                       {ticket.ticket_questions
                         .sort((a, b) => a.question_number - b.question_number)
                         .map((tq) => {
                           const qNum = Number(tq.question_number);
-                          const isDrawn = drawnNumbers.includes(qNum);
                           const isCurrent = currentDrawnNumber === qNum;
                           
-                          // Find answer for THIS ticket and THIS question
-                          const answer = answersForThisTicket.find(a => Number(a.question_number) === qNum);
+                          // CRITICAL: Use SAME function for cell state
+                          const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
                           let textColor = "text-gray-900 dark:text-gray-100";
                           
-                          if (isDrawn) {
-                            if (answer) {
-                              // Has answer - check if correct
-                              const correctAns = correctAnswersMap[qNum];
-                              const isCorrect = correctAns !== undefined && 
-                                                normalizeAnswer(answer.answer) === normalizeAnswer(correctAns);
-                              
-                              if (isCorrect) {
-                                bgColor = "bg-green-500";
-                                textColor = "text-white";
-                              } else {
-                                bgColor = "bg-red-500";
-                                textColor = "text-white";
-                              }
-                            } else {
-                              // Missed (drawn but no answer)
+                          switch (cellState) {
+                            case "correct":
+                              bgColor = "bg-green-500";
+                              textColor = "text-white";
+                              break;
+                            case "wrong":
+                              bgColor = "bg-red-500";
+                              textColor = "text-white";
+                              break;
+                            case "missed":
                               bgColor = "bg-gray-400 dark:bg-gray-600";
                               textColor = "text-white";
-                            }
+                              break;
+                            case "not-drawn":
+                              // Keep default
+                              break;
                           }
                           
                           return (
