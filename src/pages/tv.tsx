@@ -71,12 +71,10 @@ export default function TVScreen() {
       if (stored) {
         const parsed = JSON.parse(stored);
         setTtsSettings({ ...DEFAULT_TTS_SETTINGS, ...parsed });
-        console.log("[TTS] ✅ Settings loaded from localStorage:", parsed);
-      } else {
-        console.log("[TTS] ℹ️ No stored settings, using defaults");
+        console.log("[TTS] Settings loaded from localStorage:", parsed);
       }
     } catch (error) {
-      console.error("[TTS] ❌ Failed to load settings:", error);
+      console.error("[TTS] Failed to load settings:", error);
     }
   }, []);
 
@@ -86,32 +84,22 @@ export default function TVScreen() {
     
     try {
       localStorage.setItem("tv_tts_settings", JSON.stringify(ttsSettings));
-      console.log("[TTS] 💾 Settings saved to localStorage:", ttsSettings);
+      console.log("[TTS] Settings saved to localStorage:", ttsSettings);
     } catch (error) {
-      console.error("[TTS] ❌ Failed to save settings:", error);
+      console.error("[TTS] Failed to save settings:", error);
     }
   }, [ttsSettings]);
 
   // Load available voices
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) {
-      console.warn("[TTS] ⚠️ SpeechSynthesis not available in this browser");
+      console.warn("[TTS] SpeechSynthesis not available");
       return;
     }
 
-    console.log("[TTS] 🔊 Initializing TTS...");
-
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
-      console.log("[TTS] 📋 Voices loaded:", voices.length, "voices");
-      
-      if (voices.length === 0) {
-        console.warn("[TTS] ⚠️ No voices available yet");
-        return;
-      }
-      
-      // Log all available voices for debugging
-      console.log("[TTS] 📋 Available voices:", voices.map(v => `${v.name} (${v.lang})`).join(", "));
+      console.log("[TTS] Voices loaded:", voices.length);
       
       // Filter and sort voices: hr-HR → sr-RS → en-US → others
       const sortedVoices = voices.sort((a, b) => {
@@ -125,18 +113,16 @@ export default function TVScreen() {
       });
       
       setAvailableVoices(sortedVoices);
-      console.log("[TTS] ✅ Voices sorted, first voice:", sortedVoices[0]?.name, sortedVoices[0]?.lang);
       
       // Auto-select first Croatian voice or fallback
       if (!ttsSettings.voiceURI && sortedVoices.length > 0) {
         const hrVoice = sortedVoices.find(v => v.lang.startsWith("hr"));
         const fallbackVoice = hrVoice || sortedVoices[0];
         setTtsSettings(prev => ({ ...prev, voiceURI: fallbackVoice.voiceURI }));
-        console.log("[TTS] ✅ Auto-selected voice:", fallbackVoice.name, fallbackVoice.lang);
+        console.log("[TTS] Auto-selected voice:", fallbackVoice.name, fallbackVoice.lang);
       }
     };
 
-    // Load immediately
     loadVoices();
     
     // Listen for voice changes (Chrome needs this)
@@ -150,24 +136,20 @@ export default function TVScreen() {
   // TTS Speak function
   const speak = (text: string) => {
     if (typeof window === "undefined" || !window.speechSynthesis) {
-      console.warn("[TTS] ⚠️ SpeechSynthesis not available");
+      console.warn("[TTS] SpeechSynthesis not available");
       return;
     }
 
     try {
-      console.log("[TTS] 🎤 Starting speech...");
-      
       // Cancel any ongoing speech
       window.speechSynthesis.cancel();
-      console.log("[TTS] 🛑 Cancelled any ongoing speech");
       
       // Clear any pending speak timeout
       if (speakTimeoutRef.current) {
         clearTimeout(speakTimeoutRef.current);
-        console.log("[TTS] ⏱️ Cleared pending timeout");
       }
 
-      console.log("[TTS] 📢 Speaking:", text);
+      console.log("[TTS] Speaking:", text);
 
       const utterance = new SpeechSynthesisUtterance(text);
       
@@ -175,9 +157,9 @@ export default function TVScreen() {
       const selectedVoice = availableVoices.find(v => v.voiceURI === ttsSettings.voiceURI);
       if (selectedVoice) {
         utterance.voice = selectedVoice;
-        console.log("[TTS] 🎙️ Using voice:", selectedVoice.name, selectedVoice.lang);
+        console.log("[TTS] Using voice:", selectedVoice.name, selectedVoice.lang);
       } else {
-        console.warn("[TTS] ⚠️ Selected voice not found, using default. Available:", availableVoices.length);
+        console.warn("[TTS] Selected voice not found, using default");
       }
       
       // Apply settings
@@ -185,85 +167,64 @@ export default function TVScreen() {
       utterance.pitch = ttsSettings.pitch;
       utterance.volume = ttsSettings.volume;
       
-      console.log("[TTS] ⚙️ Settings:", {
-        rate: utterance.rate,
-        pitch: utterance.pitch,
-        volume: utterance.volume,
-        voice: utterance.voice?.name
-      });
-      
       // Event listeners
       utterance.onstart = () => {
-        console.log("[TTS] ✅ Speech STARTED");
+        console.log("[TTS] Speech started");
       };
       
       utterance.onend = () => {
-        console.log("[TTS] ✅ Speech ENDED");
+        console.log("[TTS] Speech ended");
       };
       
       utterance.onerror = (error) => {
-        console.error("[TTS] ❌ Speech ERROR:", error);
+        console.error("[TTS] Speech error:", error);
       };
       
       // Speak
-      console.log("[TTS] 🚀 Calling speechSynthesis.speak()...");
       window.speechSynthesis.speak(utterance);
-      console.log("[TTS] ✅ Speech queued");
     } catch (error) {
-      console.error("[TTS] ❌ Failed to speak:", error);
+      console.error("[TTS] Failed to speak:", error);
     }
   };
 
   // Test TTS
   const testTTS = () => {
-    console.log("[TTS] 🧪 TEST BUTTON CLICKED");
-    console.log("[TTS] 🧪 Current settings:", ttsSettings);
-    console.log("[TTS] 🧪 Available voices:", availableVoices.length);
     speak("Pitanje broj 1. Je li more hladno?");
   };
 
   // TTS effect - speak when question changes
   useEffect(() => {
-    console.log("[TTS] 🔄 TTS Effect triggered");
-    console.log("[TTS] 🔄 Enabled:", ttsSettings.enabled);
-    console.log("[TTS] 🔄 Current question:", currentQuestion?.id);
-    console.log("[TTS] 🔄 Question text:", questionText);
-    console.log("[TTS] 🔄 Drawn number:", event?.current_drawn_number);
-    console.log("[TTS] 🔄 Last spoken:", lastSpokenQuestionId);
-    
     // Guards
     if (!ttsSettings.enabled) {
-      console.log("[TTS] ⏸️ TTS disabled, skipping");
+      console.log("[TTS] TTS disabled, skipping");
       return;
     }
     
     if (!currentQuestion || !questionText) {
-      console.log("[TTS] ⏸️ No current question or text, skipping");
+      console.log("[TTS] No current question, skipping");
       return;
     }
     
     if (!event?.current_drawn_number) {
-      console.log("[TTS] ⏸️ No drawn number, skipping");
+      console.log("[TTS] No drawn number, skipping");
       return;
     }
     
     // Check if already spoken
     if (lastSpokenQuestionId === currentQuestion.id) {
-      console.log("[TTS] ⏸️ Already spoken question:", currentQuestion.id);
+      console.log("[TTS] Already spoken question:", currentQuestion.id);
       return;
     }
     
-    console.log("[TTS] ✅ New question detected:", {
+    console.log("[TTS] New question detected:", {
       id: currentQuestion.id,
       number: event.current_drawn_number,
       text: questionText
     });
     
     // Debounce 500ms
-    console.log("[TTS] ⏱️ Setting debounce timeout (500ms)...");
     speakTimeoutRef.current = setTimeout(() => {
       const textToSpeak = `Pitanje broj ${event.current_drawn_number}. ${questionText}`;
-      console.log("[TTS] 🎬 Debounce complete, speaking:", textToSpeak);
       speak(textToSpeak);
       setLastSpokenQuestionId(currentQuestion.id);
     }, 500);
@@ -271,7 +232,6 @@ export default function TVScreen() {
     return () => {
       if (speakTimeoutRef.current) {
         clearTimeout(speakTimeoutRef.current);
-        console.log("[TTS] 🧹 Cleanup: cleared timeout");
       }
     };
   }, [currentQuestion?.id, questionText, ttsSettings.enabled, event?.current_drawn_number]);
@@ -874,10 +834,7 @@ export default function TVScreen() {
                     <Switch 
                       id="tts-enabled"
                       checked={ttsSettings.enabled}
-                      onCheckedChange={(checked) => {
-                        console.log("[TTS] 🎚️ Toggle switched to:", checked);
-                        setTtsSettings(prev => ({ ...prev, enabled: checked }));
-                      }}
+                      onCheckedChange={(checked) => setTtsSettings(prev => ({ ...prev, enabled: checked }))}
                     />
                   </div>
                   
@@ -886,10 +843,7 @@ export default function TVScreen() {
                     <Label htmlFor="tts-voice">Glas</Label>
                     <Select 
                       value={ttsSettings.voiceURI}
-                      onValueChange={(value) => {
-                        console.log("[TTS] 🎙️ Voice changed to:", value);
-                        setTtsSettings(prev => ({ ...prev, voiceURI: value }));
-                      }}
+                      onValueChange={(value) => setTtsSettings(prev => ({ ...prev, voiceURI: value }))}
                     >
                       <SelectTrigger id="tts-voice">
                         <SelectValue placeholder="Odaberi glas" />
@@ -952,13 +906,6 @@ export default function TVScreen() {
                     <Volume2 className="mr-2 h-4 w-4" />
                     Test glas
                   </Button>
-                  
-                  {/* Debug Info */}
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <p>✅ Enabled: {ttsSettings.enabled ? "DA" : "NE"}</p>
-                    <p>🎙️ Voices: {availableVoices.length} available</p>
-                    <p>🎤 Current: {availableVoices.find(v => v.voiceURI === ttsSettings.voiceURI)?.name || "None"}</p>
-                  </div>
                 </div>
               </DialogContent>
             </Dialog>
