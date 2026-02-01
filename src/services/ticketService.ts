@@ -172,3 +172,21 @@ export const ticketService = {
     }
   },
 };
+
+export async function createFreeTicketsForPlayer(
+  eventId: string,
+  sessionId: string,
+  requestedCount: number
+): Promise<{ created: number; tickets: Array<{ id: string; serial_number: string }> }> {
+  // 1. Get existing tickets for this session + event
+  const { data: existingTickets, error: fetchError } = await supabase
+    .from("tickets")
+    .select("id")
+    .eq("session_id", sessionId)
+    .eq("event_id", eventId);
+  
+  if (fetchError) {
+    console.error("Error fetching existing tickets:", fetchError);
+    throw fetchError;
+  }
+}
