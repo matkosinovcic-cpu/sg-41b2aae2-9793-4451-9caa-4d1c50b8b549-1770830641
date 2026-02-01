@@ -283,12 +283,12 @@ export const ticketService = {
     requestedCount: number
   ): Promise<{ created: number; tickets: Array<{ id: string; serial_number: string }> }> {
     // 1. Get existing tickets for this session + event
-    // Cast to any to avoid "excessively deep type instantiation" error
-    const { data: existingTickets, error: fetchError } = await (supabase
+    // Cast supabase to any to avoid "excessively deep type instantiation" error
+    const { data: existingTickets, error: fetchError } = await (supabase as any)
       .from("tickets")
       .select("id")
       .eq("session_id", sessionId)
-      .eq("event_id", eventId) as any);
+      .eq("event_id", eventId);
     
     if (fetchError) {
       console.error("Error fetching existing tickets:", fetchError);
