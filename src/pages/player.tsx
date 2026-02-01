@@ -283,28 +283,16 @@ export default function PlayerPage() {
         console.log("[PLAYER] 🎯 Loading tickets for event:", eventId);
 
         // 2. Fetch ALL tickets for this player + event from DB (Unified Query)
-        const playerId = ticketService.getPlayerId();
-        const dbTickets = await ticketService.getTicketsForPlayerAndEvent(playerId, eventId);
+        const sessionId = await ticketService.getOrCreateSessionId(eventId);
+        const dbTickets = await ticketService.getTicketsForSessionAndEvent(sessionId, eventId);
         
         console.log(`[PLAYER] 📚 Fetched ${dbTickets.length} tickets from DB`);
 
-        // If the URL ticket is NOT in the DB list (e.g. created on another device/browser?), 
-        // we might want to show it or "claim" it?
-        // For strict unified logic, we only show what's in DB for this player.
-        // BUT, if user just created a ticket in /play (which sets player_id correctly), it SHOULD be in dbTickets.
-        
-        // Edge case: User manually enters a serial that belongs to them but DB fetch lagged? Unlikely.
-        
-        const ticketsToShow = [...dbTickets];
-        
-        // If we have an initial ticket from URL that isn't in the list (shouldn't happen if player_id matches),
-        // we merge it just in case to avoid confusion, but ideally DB is truth.
-        if (initialTicket && !ticketsToShow.some(t => t.id === initialTicket!.id)) {
-             console.warn("[PLAYER] ⚠️ URL ticket not found in player's DB list. Might belong to another session.");
-             // Optional: Add it to view? Or enforce ownership?
-             // Prompt says: "SVI tiketi moraju biti učitani i brojani istim queryjem"
-             // So we should strictly stick to dbTickets.
-        }
+        // Convert DB tickets to TicketData format (ensure ticket_questions is present)
+        const ticketsToShow: TicketData[] = dbTickets.map(t => ({
+          ...t,
+          ticket_questions: t.ticket_questions || []
+        }));
 
         setTickets(ticketsToShow);
 
@@ -364,7 +352,8 @@ export default function PlayerPage() {
       
       // Handle winner
       if (event.winner_ticket_id) {
-        const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
+        // Use getTicketBySerial or eventService.getTicket
+        const winnerTicket = await eventService.getTicket(event.winner_ticket_id);
         setWinnerSerial(winnerTicket?.serial_number || null);
         console.log("[PLAYER] 🏆 Winner ticket:", winnerTicket?.serial_number);
       } else {
@@ -455,6 +444,48 @@ export default function PlayerPage() {
     }
   };
 
+  // Load tickets for active event
+  const loadTickets = async () => {
+    if (!activeEvent || !activeEvent.id) return;
+
+    try {
+      setLoading(true); // Fixed: setIsLoadingTickets -> setLoading
+      const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
+      
+      // Use the session-based method
+      const dbTickets = await ticketService.getTicketsForSessionAndEvent(sessionId, activeEvent.id);
+      
+      const ticketsData: TicketData[] = dbTickets.map(t => ({
+        ...t,
+        ticket_questions: t.ticket_questions || []
+      }));
+      
+      setTickets(ticketsData); // Fixed: setPlayerTickets -> setTickets
+      
+      // If we have a requested ticket in URL, select it
+      const queryTicketSerial = router.query.ticket as string;
+      if (queryTicketSerial) {
+        const found = ticketsData.find(t => t.serial_number === queryTicketSerial);
+        if (found) setFocusedTicketId(found.id); // Fixed: setCurrentTicket -> setFocusedTicketId
+        else if (ticketsData.length > 0 && !focusedTicketId) setFocusedTicketId(ticketsData[0].id);
+      } else {
+        // Default to first ticket if none selected
+        if (ticketsData.length > 0 && !focusedTicketId) {
+          setFocusedTicketId(ticketsData[0].id);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading tickets:", error);
+      toast({
+        title: "Greška",
+        description: "Neuspješno učitavanje tiketa.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false); // Fixed: setIsLoadingTickets -> setLoading
+    }
+  };
+
   // Setup realtime subscription (only for active events)
   const setupRealtimeSubscription = (eventId: string) => {
     let reconnectAttempts = 0;
@@ -486,7 +517,7 @@ export default function PlayerPage() {
             
             // Update winner
             if (updatedEvent.winner_ticket_id) {
-              ticketService.getTicket(updatedEvent.winner_ticket_id).then(t => {
+              eventService.getTicket(updatedEvent.winner_ticket_id).then(t => {
                 setWinnerSerial(t?.serial_number || null);
                 console.log("[Player] 🏆 Winner updated:", t?.serial_number);
               });
@@ -665,89 +696,47 @@ export default function PlayerPage() {
     }
   };
 
-  // Handle add ticket (Manual Entry)
+  // Add new ticket
   const handleAddTicket = async () => {
-    if (!newTicketSerial.trim() || !activeEvent) return;
-
-    // Client-side limit check
-    if (tickets.length >= MAX_FREE_TICKETS) {
-       toast({
-          title: "Limit dosegnut",
-          description: `Maksimalno ${MAX_FREE_TICKETS} besplatna tiketa po igraču.`,
-          variant: "destructive"
-        });
-        return;
+    if (!activeEvent?.id) return;
+    
+    // Check limit first using local state (tickets = playerTickets)
+    if (tickets.length >= 4) {
+      toast({
+        title: "Limit dosegnut",
+        description: "Maksimalno 4 besplatna tiketa po igraču.",
+        variant: "destructive"
+      });
+      return;
     }
 
     setAddingTicket(true);
     try {
-      console.log("[Player] 🎫 Adding ticket by serial:", newTicketSerial.trim());
+      const ticket = await ticketService.createFreeTicket(activeEvent.id);
       
-      const ticket = await ticketService.getTicketBySerial(newTicketSerial.trim());
+      toast({
+        title: "Tiket dodan",
+        description: `Uspješno dodan tiket ${ticket.serial_number}`,
+      });
       
-      if (!ticket) {
+      await loadTickets(); // Reload list
+      setFocusedTicketId(ticket.id); // Fixed: setCurrentTicket -> setFocusedTicketId
+      
+    } catch (error: any) {
+      console.error("Error adding ticket:", error);
+      if (error.message?.includes("FREE_LIMIT_REACHED")) {
         toast({
-          title: "Tiket nije pronađen",
-          description: "Provjerite serijski broj i pokušajte ponovo.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      if (ticket.event_id !== activeEvent.id) {
-        toast({
-          title: "Pogrešan event",
-          description: "Ovaj tiket pripada drugom eventu.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Check ownership or claim?
-      // For now, we just reload everything to ensure we are in sync
-      // If the ticket belongs to another player, we probably shouldn't be able to "add" it here 
-      // without changing its ownership.
-      // BUT current requirement is mainly about LIMIT.
-      
-      // If we want to support "Add by Serial" for tickets generated elsewhere, we'd need a "Claim" function.
-      // Given the constraints, let's assume "Add Ticket" here is checking if it's OUR ticket we missed?
-      // OR user wants to create a NEW one?
-      // Since the UI is "Unesi serijski broj", it implies existing.
-      
-      // Let's just try to refresh the list, maybe it was created and we just didn't sync?
-      // If it's not in the list, we can't add it if we strictly follow "Unified Query".
-      
-      // However, if the user really wants to create a NEW ticket from here, we should probably offer that.
-      // But let's stick to the requested UI logic:
-      
-      // If the user inputs a serial, we check if it's already in our list.
-      if (tickets.some(t => t.serial_number === ticket.serial_number)) {
-        toast({
-          title: "Tiket već dodan",
-          description: "Ovaj tiket je već u vašoj listi.",
+          title: "Limit dosegnut",
+          description: "Imaš maksimalno 4 besplatna tiketa.",
           variant: "destructive"
         });
       } else {
-         // It's a valid ticket for this event, but not in our "player_id" list.
-         // We can't "add" it to the view if we strictly filter by player_id.
-         toast({
-          title: "Tiket nije vaš",
-          description: "Ovaj tiket pripada drugom uređaju/igraču.",
+        toast({
+          title: "Greška",
+          description: "Neuspješno dodavanje tiketa.",
           variant: "destructive"
         });
       }
-      
-      setAddTicketOpen(false);
-      setNewTicketSerial("");
-    } catch (error) {
-      console.error("[Player] ❌ Failed to add ticket:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri dodavanju tiketa.",
-        variant: "destructive"
-      });
     } finally {
       setAddingTicket(false);
     }
@@ -1414,7 +1403,7 @@ export default function PlayerPage() {
                         >
                           {isCorrect ? "✅" : "❌"}
                         </div>
-                        <p className="text-xl font-bold">
+                        <p className="text-lg font-bold">
                           {isCorrect ? "Točan odgovor!" : "Netočan odgovor"}
                         </p>
                         <p className="text-muted-foreground">
@@ -1433,9 +1422,7 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-lg font-bold text-muted-foreground">
-                          Vrijeme za odgovor je isteklo
-                        </p>
+                        <p className="text-lg text-muted-foreground">Vrijeme za odgovor je isteklo</p>
                       </div>
                     );
                   }

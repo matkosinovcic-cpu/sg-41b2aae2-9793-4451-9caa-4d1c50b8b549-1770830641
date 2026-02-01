@@ -27,9 +27,9 @@ export default function PlayPage() {
       setActiveEvent(event);
 
       if (event) {
-        // UNIFIED: Get count from DATABASE
-        const playerId = ticketService.getPlayerId();
-        const count = await ticketService.getFreeTicketsCountForPlayer(playerId, event.id);
+        // UNIFIED: Get count from DATABASE using session
+        const sessionId = await ticketService.getOrCreateSessionId(event.id);
+        const count = await ticketService.getFreeTicketsCountForSession(sessionId, event.id);
         
         console.log(`[Play] 📊 Free tickets: ${count}/${MAX_FREE_TICKETS}`);
         
@@ -51,6 +51,21 @@ export default function PlayPage() {
   useEffect(() => {
     loadActiveEvent();
   }, []);
+
+  // Check for existing tickets
+  useEffect(() => {
+    const checkLimit = async () => {
+      if (!activeEvent?.id) return;
+      try {
+        const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
+        const count = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
+        setFreeTicketCount(count);
+      } catch (error) {
+        console.error("Error checking ticket limit:", error);
+      }
+    };
+    checkLimit();
+  }, [activeEvent?.id]);
 
   // Handle free ticket creation
   const handleGetFreeTicket = async () => {
@@ -95,12 +110,69 @@ export default function PlayPage() {
     }
   };
 
+  const handleCreateFreeTicket = async () => {
+    if (!activeEvent?.id) return;
+
+    try {
+      setLoading(true);
+      
+      // Double check limit before calling service
+      const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
+      const currentCount = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
+      
+      if (currentCount >= 4) {
+        toast({
+          title: "Limit dosegnut",
+          description: "Već imate maksimalan broj besplatnih tiketa (4).",
+          variant: "destructive",
+        });
+        setFreeTicketCount(currentCount);
+        return;
+      }
+
+      const ticket = await ticketService.createFreeTicket(activeEvent.id);
+      
+      toast({
+        title: "Tiket kreiran!",
+        description: `Tvoj tiket: ${ticket.serial_number}`,
+      });
+
+      // Update count
+      setFreeTicketCount(currentCount + 1);
+
+      // Redirect to player view
+      router.push(`/player?ticket=${ticket.serial_number}`);
+    } catch (error: any) {
+      console.error("Error creating ticket:", error);
+      
+      if (error.message?.includes("FREE_LIMIT_REACHED")) {
+        toast({
+          title: "Limit dosegnut",
+          description: "Imaš maksimalno 4 besplatna tiketa u promo fazi.",
+          variant: "destructive",
+        });
+        // Refresh count
+        const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
+        const count = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
+        setFreeTicketCount(count);
+      } else {
+        toast({
+          title: "Greška",
+          description: "Neuspješno kreiranje tiketa. Pokušaj ponovno.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle "Open my tickets" button
   const handleOpenMyTickets = async () => {
     if (!activeEvent) return;
     
-    const playerId = ticketService.getPlayerId();
-    const tickets = await ticketService.getTicketsForPlayerAndEvent(playerId, activeEvent.id);
+    const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
+    const tickets = await ticketService.getTicketsForSessionAndEvent(sessionId, activeEvent.id);
     
     if (tickets.length > 0) {
       // Redirect to player with first ticket
