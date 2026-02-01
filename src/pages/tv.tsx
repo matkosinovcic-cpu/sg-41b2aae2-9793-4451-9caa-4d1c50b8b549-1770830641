@@ -5,9 +5,14 @@ import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Gamepad2, Trophy, Clock } from "lucide-react";
+import { Gamepad2, Trophy, Clock, Volume2, VolumeX } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 
 interface TicketData {
   id: string;
@@ -16,6 +21,22 @@ interface TicketData {
   is_winner: boolean;
   ticket_questions: Array<{ question_number: number }>;
 }
+
+interface TTSSettings {
+  enabled: boolean;
+  voiceURI: string;
+  rate: number;
+  pitch: number;
+  volume: number;
+}
+
+const DEFAULT_TTS_SETTINGS: TTSSettings = {
+  enabled: false,
+  voiceURI: "",
+  rate: 1.0,
+  pitch: 1.0,
+  volume: 1.0
+};
 
 export default function TVScreen() {
   const router = useRouter();
@@ -33,6 +54,187 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+
+  // TTS State
+  const [ttsSettings, setTtsSettings] = useState<TTSSettings>(DEFAULT_TTS_SETTINGS);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [lastSpokenQuestionId, setLastSpokenQuestionId] = useState<string | null>(null);
+  const [ttsSettingsOpen, setTtsSettingsOpen] = useState(false);
+  const speakTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Load TTS settings from localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    try {
+      const stored = localStorage.getItem("tv_tts_settings");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setTtsSettings({ ...DEFAULT_TTS_SETTINGS, ...parsed });
+        console.log("[TTS] Settings loaded from localStorage:", parsed);
+      }
+    } catch (error) {
+      console.error("[TTS] Failed to load settings:", error);
+    }
+  }, []);
+
+  // Save TTS settings to localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    try {
+      localStorage.setItem("tv_tts_settings", JSON.stringify(ttsSettings));
+      console.log("[TTS] Settings saved to localStorage:", ttsSettings);
+    } catch (error) {
+      console.error("[TTS] Failed to save settings:", error);
+    }
+  }, [ttsSettings]);
+
+  // Load available voices
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      console.warn("[TTS] SpeechSynthesis not available");
+      return;
+    }
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      console.log("[TTS] Voices loaded:", voices.length);
+      
+      // Filter and sort voices: hr-HR → sr-RS → en-US → others
+      const sortedVoices = voices.sort((a, b) => {
+        if (a.lang.startsWith("hr")) return -1;
+        if (b.lang.startsWith("hr")) return 1;
+        if (a.lang.startsWith("sr")) return -1;
+        if (b.lang.startsWith("sr")) return 1;
+        if (a.lang.startsWith("en")) return -1;
+        if (b.lang.startsWith("en")) return 1;
+        return 0;
+      });
+      
+      setAvailableVoices(sortedVoices);
+      
+      // Auto-select first Croatian voice or fallback
+      if (!ttsSettings.voiceURI && sortedVoices.length > 0) {
+        const hrVoice = sortedVoices.find(v => v.lang.startsWith("hr"));
+        const fallbackVoice = hrVoice || sortedVoices[0];
+        setTtsSettings(prev => ({ ...prev, voiceURI: fallbackVoice.voiceURI }));
+        console.log("[TTS] Auto-selected voice:", fallbackVoice.name, fallbackVoice.lang);
+      }
+    };
+
+    loadVoices();
+    
+    // Listen for voice changes (Chrome needs this)
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    
+    return () => {
+      window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+    };
+  }, []);
+
+  // TTS Speak function
+  const speak = (text: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      console.warn("[TTS] SpeechSynthesis not available");
+      return;
+    }
+
+    try {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
+      // Clear any pending speak timeout
+      if (speakTimeoutRef.current) {
+        clearTimeout(speakTimeoutRef.current);
+      }
+
+      console.log("[TTS] Speaking:", text);
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      // Find selected voice
+      const selectedVoice = availableVoices.find(v => v.voiceURI === ttsSettings.voiceURI);
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+        console.log("[TTS] Using voice:", selectedVoice.name, selectedVoice.lang);
+      } else {
+        console.warn("[TTS] Selected voice not found, using default");
+      }
+      
+      // Apply settings
+      utterance.rate = ttsSettings.rate;
+      utterance.pitch = ttsSettings.pitch;
+      utterance.volume = ttsSettings.volume;
+      
+      // Event listeners
+      utterance.onstart = () => {
+        console.log("[TTS] Speech started");
+      };
+      
+      utterance.onend = () => {
+        console.log("[TTS] Speech ended");
+      };
+      
+      utterance.onerror = (error) => {
+        console.error("[TTS] Speech error:", error);
+      };
+      
+      // Speak
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error("[TTS] Failed to speak:", error);
+    }
+  };
+
+  // Test TTS
+  const testTTS = () => {
+    speak("Pitanje broj 1. Je li more hladno?");
+  };
+
+  // TTS effect - speak when question changes
+  useEffect(() => {
+    // Guards
+    if (!ttsSettings.enabled) {
+      console.log("[TTS] TTS disabled, skipping");
+      return;
+    }
+    
+    if (!currentQuestion || !questionText) {
+      console.log("[TTS] No current question, skipping");
+      return;
+    }
+    
+    if (!event?.current_drawn_number) {
+      console.log("[TTS] No drawn number, skipping");
+      return;
+    }
+    
+    // Check if already spoken
+    if (lastSpokenQuestionId === currentQuestion.id) {
+      console.log("[TTS] Already spoken question:", currentQuestion.id);
+      return;
+    }
+    
+    console.log("[TTS] New question detected:", {
+      id: currentQuestion.id,
+      number: event.current_drawn_number,
+      text: questionText
+    });
+    
+    // Debounce 500ms
+    speakTimeoutRef.current = setTimeout(() => {
+      const textToSpeak = `Pitanje broj ${event.current_drawn_number}. ${questionText}`;
+      speak(textToSpeak);
+      setLastSpokenQuestionId(currentQuestion.id);
+    }, 500);
+    
+    return () => {
+      if (speakTimeoutRef.current) {
+        clearTimeout(speakTimeoutRef.current);
+      }
+    };
+  }, [currentQuestion?.id, questionText, ttsSettings.enabled, event?.current_drawn_number]);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -600,6 +802,114 @@ export default function TVScreen() {
           
           {/* Background gradient (fills entire screen) */}
           <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900" />
+          
+          {/* TTS Settings Button - Fixed top-right */}
+          <div className="absolute top-4 right-4 z-50">
+            <Dialog open={ttsSettingsOpen} onOpenChange={setTtsSettingsOpen}>
+              <DialogTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  size="icon"
+                  className="bg-white/10 backdrop-blur-sm border-white/20 hover:bg-white/20"
+                >
+                  {ttsSettings.enabled ? (
+                    <Volume2 className="h-5 w-5 text-white" />
+                  ) : (
+                    <VolumeX className="h-5 w-5 text-white" />
+                  )}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>AI Voditeljica</DialogTitle>
+                  <DialogDescription>
+                    Postavke automatskog čitanja pitanja
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <div className="space-y-6 py-4">
+                  {/* Enable/Disable */}
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="tts-enabled" className="text-base">AI Voditeljica</Label>
+                    <Switch 
+                      id="tts-enabled"
+                      checked={ttsSettings.enabled}
+                      onCheckedChange={(checked) => setTtsSettings(prev => ({ ...prev, enabled: checked }))}
+                    />
+                  </div>
+                  
+                  {/* Voice Selection */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tts-voice">Glas</Label>
+                    <Select 
+                      value={ttsSettings.voiceURI}
+                      onValueChange={(value) => setTtsSettings(prev => ({ ...prev, voiceURI: value }))}
+                    >
+                      <SelectTrigger id="tts-voice">
+                        <SelectValue placeholder="Odaberi glas" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableVoices.map((voice) => (
+                          <SelectItem key={voice.voiceURI} value={voice.voiceURI}>
+                            {voice.name} ({voice.lang})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  {/* Rate */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tts-rate">Brzina: {ttsSettings.rate.toFixed(1)}</Label>
+                    <Slider
+                      id="tts-rate"
+                      min={0.8}
+                      max={1.2}
+                      step={0.1}
+                      value={[ttsSettings.rate]}
+                      onValueChange={([value]) => setTtsSettings(prev => ({ ...prev, rate: value }))}
+                    />
+                  </div>
+                  
+                  {/* Pitch */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tts-pitch">Visina tona: {ttsSettings.pitch.toFixed(1)}</Label>
+                    <Slider
+                      id="tts-pitch"
+                      min={0.8}
+                      max={1.2}
+                      step={0.1}
+                      value={[ttsSettings.pitch]}
+                      onValueChange={([value]) => setTtsSettings(prev => ({ ...prev, pitch: value }))}
+                    />
+                  </div>
+                  
+                  {/* Volume */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tts-volume">Glasnoća: {Math.round(ttsSettings.volume * 100)}%</Label>
+                    <Slider
+                      id="tts-volume"
+                      min={0.5}
+                      max={1.0}
+                      step={0.1}
+                      value={[ttsSettings.volume]}
+                      onValueChange={([value]) => setTtsSettings(prev => ({ ...prev, volume: value }))}
+                    />
+                  </div>
+                  
+                  {/* Test Button */}
+                  <Button 
+                    onClick={testTTS}
+                    variant="outline"
+                    className="w-full"
+                  >
+                    <Volume2 className="mr-2 h-4 w-4" />
+                    Test glas
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
           
           {/* 16:9 Container (constrained, centered, letterboxed if needed) */}
           <div className="relative w-full h-full max-w-[177.78vh] max-h-[56.25vw]">
