@@ -29,6 +29,8 @@ interface TTSSettings {
   pitch: number;
   volume: number;
   funMode: boolean; // NEW: Enable fun interjections
+  readQuestionNumber: boolean; // NEW: Read "Pitanje broj X"
+  readQuestionText: boolean; // NEW: Read question text
 }
 
 const DEFAULT_TTS_SETTINGS: TTSSettings = {
@@ -37,7 +39,9 @@ const DEFAULT_TTS_SETTINGS: TTSSettings = {
   rate: 1.0,
   pitch: 1.0,
   volume: 1.0,
-  funMode: true // Enabled by default for fun!
+  funMode: true, // Enabled by default for fun!
+  readQuestionNumber: true, // Read number by default
+  readQuestionText: true // Read text by default
 };
 
 // Fun interjections BEFORE the question
@@ -53,7 +57,18 @@ const INTERJECTIONS_BEFORE = [
   "Evo... ",
   "E vidiš... ",
   "A sada... ",
-  "I sad... "
+  "I sad... ",
+  // BRUTAL additions
+  "Ajmooo... šta ste se smrzli... ",
+  "E sad... ako ovo ne znaš, ubij se... ",
+  "Pa... srami se ako ne znaš... ",
+  "Dobro... ovo i moja pokojna baba zna... ",
+  "Dakle... ovo bi trebalo i dijete znati... ",
+  "Hmm... lagano pitanje za vas, jelda... ",
+  "Znači... ako ovo ne znaš, javi se u školu... ",
+  "Evo... pripremite se za sramotu... ",
+  "E vidiš... sad ćemo vidjeti jesi li pametan... ",
+  "A sada... ne seri da ovo ne znaš... "
 ];
 
 // Fun interjections AFTER the question
@@ -69,7 +84,23 @@ const INTERJECTIONS_AFTER = [
   " ...he he.",
   " ...ups.",
   " ...zaboravih.",
-  " ...pardon."
+  " ...pardon.",
+  // BRUTAL additions
+  " ...ha? Jesi li pametan?",
+  " ...šta? Znaš li to?",
+  " ...ili ćeš fulati?",
+  " ...ajde, ne budi glup.",
+  " ...brzo, nemoj razmišljati!",
+  " ...mislim, ovo je očito.",
+  " ...makar ti mozak govori ne?",
+  " ...sretno, trebat će ti.",
+  " ...ne brini, nitko drugi ne zna.",
+  " ...ups, teško pitanje?",
+  " ...*podrigne* ...pardon, ali stvarno?",
+  " ...*kašlje* ...srami se.",
+  " ...*zijev* ...dosadno je ovo.",
+  " ...he he, fulat ćeš.",
+  " ...zaboravih, al ti sigurno ne znaš."
 ];
 
 // Helper function to get random interjection
@@ -360,11 +391,28 @@ export default function TVScreen() {
     // Debounce 500ms
     console.log("[TTS] ⏱️ Setting debounce timeout (500ms)...");
     speakTimeoutRef.current = setTimeout(() => {
-      // Convert number to text for proper pronunciation
-      const numberAsText = numberToText(event.current_drawn_number!);
+      // Build text to speak based on settings
+      let textToSpeak = "";
       
-      // Build text to speak
-      let textToSpeak = `Pitanje broj ${numberAsText}. ${questionText}`;
+      // Add question number if enabled
+      if (ttsSettings.readQuestionNumber) {
+        const numberAsText = numberToText(event.current_drawn_number!);
+        textToSpeak += `Pitanje broj ${numberAsText}`;
+      }
+      
+      // Add question text if enabled
+      if (ttsSettings.readQuestionText) {
+        if (textToSpeak) {
+          textToSpeak += ". "; // Add period if number was included
+        }
+        textToSpeak += questionText;
+      }
+      
+      // If nothing to speak (both disabled), skip
+      if (!textToSpeak.trim()) {
+        console.log("[TTS] ⏸️ Nothing to speak (both number and text disabled)");
+        return;
+      }
       
       // Add fun interjections if enabled
       if (ttsSettings.funMode) {
@@ -1001,12 +1049,48 @@ export default function TVScreen() {
                     />
                   </div>
                   
+                  {/* Read Question Number Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="tts-read-number" className="text-base">Čitaj broj pitanja</Label>
+                      <p className="text-xs text-muted-foreground">
+                        "Pitanje broj šesnaest..."
+                      </p>
+                    </div>
+                    <Switch 
+                      id="tts-read-number"
+                      checked={ttsSettings.readQuestionNumber}
+                      onCheckedChange={(checked) => {
+                        console.log("[TTS] 🔢 Read number switched to:", checked);
+                        setTtsSettings(prev => ({ ...prev, readQuestionNumber: checked }));
+                      }}
+                    />
+                  </div>
+                  
+                  {/* Read Question Text Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="tts-read-text" className="text-base">Čitaj tekst pitanja</Label>
+                      <p className="text-xs text-muted-foreground">
+                        "Je li more hladno?"
+                      </p>
+                    </div>
+                    <Switch 
+                      id="tts-read-text"
+                      checked={ttsSettings.readQuestionText}
+                      onCheckedChange={(checked) => {
+                        console.log("[TTS] 📝 Read text switched to:", checked);
+                        setTtsSettings(prev => ({ ...prev, readQuestionText: checked }));
+                      }}
+                    />
+                  </div>
+                  
                   {/* Fun Mode Toggle */}
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
                       <Label htmlFor="tts-fun-mode" className="text-base">Zabavni mod 🎭</Label>
                       <p className="text-xs text-muted-foreground">
-                        Dodaje uzdahe, kašalj, podrigivanja...
+                        Dodaje uzdahe, kašalj, podrigivanja, brutalne komentare...
                       </p>
                     </div>
                     <Switch 
@@ -1094,6 +1178,8 @@ export default function TVScreen() {
                   {/* Debug Info */}
                   <div className="text-xs text-muted-foreground space-y-1">
                     <p>✅ Enabled: {ttsSettings.enabled ? "DA" : "NE"}</p>
+                    <p>🔢 Broj: {ttsSettings.readQuestionNumber ? "DA" : "NE"}</p>
+                    <p>📝 Tekst: {ttsSettings.readQuestionText ? "DA" : "NE"}</p>
                     <p>🎭 Fun Mode: {ttsSettings.funMode ? "DA" : "NE"}</p>
                     <p>🎙️ Voices: {availableVoices.length} available</p>
                     <p>🎤 Current: {availableVoices.find(v => v.voiceURI === ttsSettings.voiceURI)?.name || "None"}</p>
