@@ -580,6 +580,7 @@ export const eventService = {
   },
 
   async getActiveOrLastFinished() {
+    // First try to get active event
     const { data, error } = await supabase
       .from("events")
       .select("*")
@@ -599,5 +600,25 @@ export const eventService = {
       return { event: lastFinished as Event, mode: "lastFinished" };
     }
     return { event: data as Event, mode: "active" };
+  },
+
+  async getDrawnQuestions(eventId: string) {
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("question_number, questions(id, text, correct_answer)")
+      .eq("event_id", eventId)
+      .eq("drawn", true);
+    
+    if (error) throw error;
+    
+    // Transform to simple map: question_number -> correct_answer
+    const correctAnswersMap: Record<number, boolean> = {};
+    data.forEach((item: any) => {
+      if (item.questions) {
+        correctAnswersMap[item.question_number] = item.questions.correct_answer;
+      }
+    });
+    
+    return correctAnswersMap;
   }
 };
