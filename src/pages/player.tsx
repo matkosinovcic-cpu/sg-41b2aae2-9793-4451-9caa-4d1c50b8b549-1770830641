@@ -387,22 +387,17 @@ export default function PlayerPage() {
   // Calculate stats for focused ticket
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
   
-  // GLOBAL STATISTICS (from event data)
+  // GLOBAL STATISTICS (for header scoreboard - all player answers across all tickets)
   const globalStats = useMemo(() => {
-    if (!activeEvent) {
-      return { drawnCount: 0, totalQuestions: 90, answeredCount: 0, accuracy: 0 };
-    }
-    
-    const drawnNumbers = activeEvent.drawn_numbers || [];
+    const drawnNumbers = activeEvent?.drawn_numbers || [];
     const drawnCount = drawnNumbers.length;
-    const totalQuestions = 90;
     
-    // Get all player answers (across all tickets)
+    // All player answers (across all tickets)
     const playerAnswers = answers.filter(a => 
       tickets.some(t => t.serial_number === a.ticket_id)
     );
     
-    // Count unique answered question numbers (that are in drawn_numbers)
+    // Count UNIQUE answered question numbers (global, not per-ticket)
     const answeredQuestionNumbers = new Set(
       playerAnswers
         .map(a => Number(a.question_number))
@@ -410,12 +405,10 @@ export default function PlayerPage() {
     );
     const answeredCount = answeredQuestionNumbers.size;
     
-    // Count correct answers
+    // Count CORRECT answers (global)
     let correctCount = 0;
     if (currentQuestion && currentDrawnNumber !== null) {
       const correctAnswer = normalizeAnswer(currentQuestion.correct_answer);
-      
-      // Count unique question numbers that were answered correctly
       const correctQuestionNumbers = new Set(
         playerAnswers
           .filter(a => {
@@ -430,11 +423,12 @@ export default function PlayerPage() {
       correctCount = correctQuestionNumbers.size;
     }
     
+    // Calculate derived stats
     const accuracy = answeredCount > 0 
       ? Math.min(100, Math.round((correctCount / answeredCount) * 100))
       : 0;
     
-    return { drawnCount, totalQuestions, answeredCount, accuracy };
+    return { drawnCount, totalQuestions: 90, answeredCount, accuracy };
   }, [activeEvent, answers, tickets, currentQuestion, currentDrawnNumber]);
   
   // PER-TICKET STATISTICS
@@ -561,18 +555,20 @@ export default function PlayerPage() {
                     {tickets.length} / 4 tiketa
                   </Badge>
                 </div>
+
+                {/* Global player stats grid */}
                 <div className="grid grid-cols-3 gap-2 text-center pt-2">
                   <div>
                     <p className="text-xs text-muted-foreground">Izvučeno</p>
-                    <p className="text-lg sm:text-xl font-bold">{globalStats.drawnCount}/{globalStats.totalQuestions}</p>
+                    <p className="text-lg font-bold">{globalStats.drawnCount}/{globalStats.totalQuestions}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg sm:text-xl font-bold">{globalStats.answeredCount}/{globalStats.drawnCount}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredCount}/{globalStats.drawnCount}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Točnost</p>
-                    <p className="text-lg sm:text-xl font-bold">{globalStats.accuracy}%</p>
+                    <p className="text-lg font-bold">{globalStats.accuracy}%</p>
                   </div>
                 </div>
               </CardHeader>
