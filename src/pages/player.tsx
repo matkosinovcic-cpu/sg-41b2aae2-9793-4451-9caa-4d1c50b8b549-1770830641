@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Clock, Trophy, Ticket, Plus, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { computeEventLevelGlobalStats } from "@/lib/statsHelper";
 
 // localStorage helpers for multi-ticket support
 function getStoredFreeTickets(eventId: string): string[] {
@@ -270,6 +271,23 @@ export default function PlayerPage() {
   const [reviewFilter, setReviewFilter] = useState<"all" | "correct" | "incorrect">("all");
   const [allDrawnQuestions, setAllDrawnQuestions] = useState<Array<{ number: number; text: string; correct_answer: boolean }>>([]);
 
+  // Event-level global stats state
+  const [globalStats, setGlobalStats] = useState<{
+    totalDrawn: number;
+    answeredTotal: number;
+    correctTotal: number;
+    incorrectTotal: number;
+    skippedTotal: number;
+    accuracyPct: number;
+  }>({
+    totalDrawn: 0,
+    answeredTotal: 0,
+    correctTotal: 0,
+    incorrectTotal: 0,
+    skippedTotal: 0,
+    accuracyPct: 0
+  });
+
   // Load tickets from URL or localStorage
   useEffect(() => {
     const loadTickets = async () => {
@@ -473,6 +491,13 @@ export default function PlayerPage() {
       
       console.log(`[PLAYER] ✅ Total answers loaded: ${allAnswers.length}`);
       console.log("[Player] ✅ Event data refetch complete");
+
+      // Compute EVENT-LEVEL global stats
+      console.log("[PLAYER] 📊 Computing event-level global stats...");
+      const ticketSerials = loadedTickets.map(t => t.serial_number);
+      const eventGlobalStats = await computeEventLevelGlobalStats(event.id, ticketSerials);
+      setGlobalStats(eventGlobalStats);
+      console.log("[PLAYER] 📊 Event-level global stats set:", eventGlobalStats);
     } catch (error) {
       console.error("[Player] ❌ Failed to refetch event data:", error);
     }
@@ -903,11 +928,11 @@ export default function PlayerPage() {
                 <p className="text-sm text-muted-foreground mb-2">Tvoja statistika:</p>
                 <div className="grid grid-cols-3 gap-2 text-sm">
                   <div>
-                    <p className="font-semibold">{globalStats.correctCount}</p>
+                    <p className="font-semibold">{globalStats.correctTotal}</p>
                     <p className="text-muted-foreground">Točno</p>
                   </div>
                   <div>
-                    <p className="font-semibold">{globalStats.incorrectCount}</p>
+                    <p className="font-semibold">{globalStats.incorrectTotal}</p>
                     <p className="text-muted-foreground">Netočno</p>
                   </div>
                   <div>
@@ -1145,24 +1170,24 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.missedCount}</p>
+                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center pt-1">
                   <div>
                     <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectCount}</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
                   </div>
                   
                   <div>
@@ -1424,9 +1449,7 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-lg font-semibold text-muted-foreground">
-                          Vrijeme za odgovor je isteklo
-                        </p>
+                        <p className="text-lg text-muted-foreground">Vrijeme za odgovor je isteklo</p>
                       </div>
                     );
                   }
@@ -1535,7 +1558,7 @@ export default function PlayerPage() {
                       onClick={() => setReviewFilter("correct")}
                       className="text-green-600 border-green-600 hover:bg-green-50"
                     >
-                      Točna ({globalStats.correctCount})
+                      Točna ({globalStats.correctTotal})
                     </Button>
                     <Button
                       size="sm"
@@ -1543,7 +1566,7 @@ export default function PlayerPage() {
                       onClick={() => setReviewFilter("incorrect")}
                       className="text-red-600 border-red-600 hover:bg-red-50"
                     >
-                      Netočna ({globalStats.incorrectCount + globalStats.missedCount})
+                      Netočna ({globalStats.incorrectTotal + globalStats.skippedTotal})
                     </Button>
                   </div>
                 </div>

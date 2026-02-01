@@ -28,6 +28,141 @@ export interface EventStats {
 }
 
 /**
+ * EVENT-LEVEL GLOBAL STATS (for /player global header)
+ * Computes stats from event.drawn_numbers and ALL player_answers
+ * MUST NOT depend on tickets or "active tickets"
+ */
+export interface EventLevelGlobalStats {
+  totalDrawn: number;
+  answeredTotal: number;
+  correctTotal: number;
+  incorrectTotal: number;
+  skippedTotal: number;
+  accuracyPct: number;
+}
+
+/**
+ * Compute event-level global stats for a player
+ * 
+ * RULES:
+ * - TOTAL_DRAWN = event.drawn_numbers.length
+ * - ANSWERED_TOTAL = unique question numbers answered by player
+ * - CORRECT_TOTAL = count of is_correct = true
+ * - INCORRECT_TOTAL = count of is_correct = false
+ * - SKIPPED_TOTAL = TOTAL_DRAWN - ANSWERED_TOTAL
+ * - ACCURACY = (CORRECT_TOTAL / TOTAL_DRAWN) * 100
+ * 
+ * @param eventId - Event ID
+ * @param ticketSerials - Array of ticket serials to get answers for (player's tickets)
+ * @returns Event-level global stats
+ */
+export async function computeEventLevelGlobalStats(
+  eventId: string,
+  ticketSerials: string[]
+): Promise<EventLevelGlobalStats> {
+  if (ticketSerials.length === 0) {
+    return {
+      totalDrawn: 0,
+      answeredTotal: 0,
+      correctTotal: 0,
+      incorrectTotal: 0,
+      skippedTotal: 0,
+      accuracyPct: 0
+    };
+  }
+
+  // 1. Get TOTAL_DRAWN from event
+  const drawnNumbers = await getDrawnQuestionNumbers(eventId);
+  const totalDrawn = drawnNumbers.length;
+
+  if (totalDrawn === 0) {
+    return {
+      totalDrawn: 0,
+      answeredTotal: 0,
+      correctTotal: 0,
+      incorrectTotal: 0,
+      skippedTotal: 0,
+      accuracyPct: 0
+    };
+  }
+
+  // 2. Get ALL player answers for these tickets (from player_answers log)
+  const { data: allAnswers, error } = await supabase
+    .from("player_answers")
+    .select("question_number, is_correct, created_at, ticket_id")
+    .eq("event_id", eventId)
+    .in("ticket_id", ticketSerials)
+    .order("created_at", { ascending: false });
+
+  if (error || !allAnswers) {
+    console.error("[statsHelper] Failed to fetch player answers:", error);
+    return {
+      totalDrawn,
+      answeredTotal: 0,
+      correctTotal: 0,
+      incorrectTotal: 0,
+      skippedTotal: totalDrawn,
+      accuracyPct: 0
+    };
+  }
+
+  // 3. Deduplicate answers by question_number (keep latest)
+  const drawnSet = new Set(drawnNumbers);
+  const answerMap = new Map<number, { is_correct: boolean }>();
+
+  for (const ans of allAnswers) {
+    const qNum = Number(ans.question_number);
+    
+    // Only count answers for drawn questions
+    if (!drawnSet.has(qNum)) continue;
+    
+    // Keep first (latest due to DESC sort)
+    if (!answerMap.has(qNum)) {
+      answerMap.set(qNum, { is_correct: ans.is_correct });
+    }
+  }
+
+  // 4. Compute stats
+  const answeredTotal = answerMap.size;
+  let correctTotal = 0;
+  let incorrectTotal = 0;
+
+  for (const [, ans] of answerMap) {
+    if (ans.is_correct) {
+      correctTotal++;
+    } else {
+      incorrectTotal++;
+    }
+  }
+
+  const skippedTotal = totalDrawn - answeredTotal;
+  
+  // ACCURACY = (CORRECT / TOTAL_DRAWN) * 100
+  // Propuštena pitanja SE RAČUNAJU kao netočna u postotku
+  const accuracyPct = totalDrawn > 0 
+    ? Math.round((correctTotal / totalDrawn) * 100)
+    : 0;
+
+  console.log("[statsHelper] EVENT-LEVEL GLOBAL STATS:", {
+    totalDrawn,
+    answeredTotal,
+    correctTotal,
+    incorrectTotal,
+    skippedTotal,
+    accuracyPct
+  });
+
+  return {
+    totalDrawn,
+    answeredTotal,
+    correctTotal,
+    incorrectTotal,
+    skippedTotal,
+    accuracyPct
+  };
+}
+
+/**
  * Calculate stats for a single ticket (client-side helper for /player)
  * Used for real-time display without DB queries
  */
