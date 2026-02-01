@@ -8,6 +8,35 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, RefreshCw, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+const FREE_TICKET_LIMIT = 4;
+
+// Get stored free tickets for a specific event
+function getStoredFreeTickets(eventId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Store free ticket for a specific event
+function storeFreeTicket(eventId: string, serial: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const tickets = getStoredFreeTickets(eventId);
+    if (!tickets.includes(serial)) {
+      tickets.push(serial);
+      localStorage.setItem(key, JSON.stringify(tickets));
+    }
+  } catch (err) {
+    console.error("[Play] Failed to store free ticket:", err);
+  }
+}
+
 export default function PlayPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -17,8 +46,6 @@ export default function PlayPage() {
   const [freeTicketCount, setFreeTicketCount] = useState(0);
   const [limitReached, setLimitReached] = useState(false);
 
-  const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
-
   // Load active event and check ticket limit
   const loadActiveEvent = async () => {
     setLoading(true);
@@ -27,14 +54,9 @@ export default function PlayPage() {
       setActiveEvent(event);
 
       if (event) {
-        // UNIFIED: Get count from DATABASE using session
-        const sessionId = await ticketService.getOrCreateSessionId(event.id);
-        const count = await ticketService.getFreeTicketsCountForSession(sessionId, event.id);
-        
-        console.log(`[Play] 📊 Free tickets: ${count}/${MAX_FREE_TICKETS}`);
-        
-        setFreeTicketCount(count);
-        setLimitReached(count >= MAX_FREE_TICKETS);
+        const storedTickets = getStoredFreeTickets(event.id);
+        setFreeTicketCount(storedTickets.length);
+        setLimitReached(storedTickets.length >= FREE_TICKET_LIMIT);
       }
     } catch (error) {
       console.error("[Play] Failed to load active event:", error);
@@ -52,21 +74,6 @@ export default function PlayPage() {
     loadActiveEvent();
   }, []);
 
-  // Check for existing tickets
-  useEffect(() => {
-    const checkLimit = async () => {
-      if (!activeEvent?.id) return;
-      try {
-        const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
-        const count = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
-        setFreeTicketCount(count);
-      } catch (error) {
-        console.error("Error checking ticket limit:", error);
-      }
-    };
-    checkLimit();
-  }, [activeEvent?.id]);
-
   // Handle free ticket creation
   const handleGetFreeTicket = async () => {
     if (!activeEvent) return;
@@ -74,10 +81,11 @@ export default function PlayPage() {
 
     setCreating(true);
     try {
-      console.log("[Play] 🎫 Creating free ticket...");
-      
-      // UNIFIED: Backend enforces limit
+      // Create ticket in database
       const ticket = await ticketService.createFreeTicket(activeEvent.id);
+
+      // Store in localStorage for this event
+      storeFreeTicket(activeEvent.id, ticket.serial_number);
 
       toast({
         title: "✅ Tiket kreiran!",
@@ -88,95 +96,22 @@ export default function PlayPage() {
       router.push(`/player?ticket=${ticket.serial_number}`);
     } catch (error) {
       console.error("[Play] Failed to create free ticket:", error);
-      
-      // Check if it's a limit error
-      if (error instanceof Error && error.message.includes("FREE_LIMIT_REACHED")) {
-        toast({
-          title: "Dosegnut limit",
-          description: `Imaš maksimalno ${MAX_FREE_TICKETS} besplatna tiketa u promo fazi.`,
-          variant: "destructive"
-        });
-        setLimitReached(true);
-        // Reload to refresh state
-        loadActiveEvent();
-      } else {
-        toast({
-          title: "Greška",
-          description: "Greška pri izradi tiketa. Pokušaj ponovno.",
-          variant: "destructive"
-        });
-      }
+      toast({
+        title: "Greška",
+        description: "Greška pri izradi tiketa. Pokušaj ponovno.",
+        variant: "destructive"
+      });
       setCreating(false);
     }
   };
 
-  const handleCreateFreeTicket = async () => {
-    if (!activeEvent?.id) return;
-
-    try {
-      setLoading(true);
-      
-      // Double check limit before calling service
-      const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
-      const currentCount = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
-      
-      if (currentCount >= 4) {
-        toast({
-          title: "Limit dosegnut",
-          description: "Već imate maksimalan broj besplatnih tiketa (4).",
-          variant: "destructive",
-        });
-        setFreeTicketCount(currentCount);
-        return;
-      }
-
-      const ticket = await ticketService.createFreeTicket(activeEvent.id);
-      
-      toast({
-        title: "Tiket kreiran!",
-        description: `Tvoj tiket: ${ticket.serial_number}`,
-      });
-
-      // Update count
-      setFreeTicketCount(currentCount + 1);
-
-      // Redirect to player view
-      router.push(`/player?ticket=${ticket.serial_number}`);
-    } catch (error: any) {
-      console.error("Error creating ticket:", error);
-      
-      if (error.message?.includes("FREE_LIMIT_REACHED")) {
-        toast({
-          title: "Limit dosegnut",
-          description: "Imaš maksimalno 4 besplatna tiketa u promo fazi.",
-          variant: "destructive",
-        });
-        // Refresh count
-        const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
-        const count = await ticketService.getFreeTicketsCountForSession(sessionId, activeEvent.id);
-        setFreeTicketCount(count);
-      } else {
-        toast({
-          title: "Greška",
-          description: "Neuspješno kreiranje tiketa. Pokušaj ponovno.",
-          variant: "destructive",
-        });
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Handle "Open my tickets" button
-  const handleOpenMyTickets = async () => {
+  const handleOpenMyTickets = () => {
     if (!activeEvent) return;
-    
-    const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
-    const tickets = await ticketService.getTicketsForSessionAndEvent(sessionId, activeEvent.id);
-    
-    if (tickets.length > 0) {
-      // Redirect to player with first ticket
-      router.push(`/player?ticket=${tickets[0].serial_number}`);
+    const storedTickets = getStoredFreeTickets(activeEvent.id);
+    if (storedTickets.length > 0) {
+      // Redirect to player with stored tickets
+      router.push(`/player?event=${activeEvent.id}`);
     }
   };
 
@@ -214,10 +149,10 @@ export default function PlayPage() {
                     <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg p-4 text-center">
                       <Ticket className="h-8 w-8 mx-auto mb-2 text-orange-600" />
                       <p className="font-semibold text-orange-900 dark:text-orange-100">
-                        Imaš maksimalno {MAX_FREE_TICKETS} tiketa za ovaj event.
+                        Imaš maksimalno {FREE_TICKET_LIMIT} tiketa za ovaj event.
                       </p>
                       <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
-                        ({freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa u promo fazi)
+                        ({freeTicketCount}/{FREE_TICKET_LIMIT} tiketa)
                       </p>
                     </div>
                     <Button
@@ -233,7 +168,7 @@ export default function PlayPage() {
                   <div className="space-y-4">
                     {freeTicketCount > 0 && (
                       <p className="text-sm text-center text-muted-foreground">
-                        Imaš {freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa
+                        Imaš {freeTicketCount}/{FREE_TICKET_LIMIT} tiketa
                       </p>
                     )}
                     <Button

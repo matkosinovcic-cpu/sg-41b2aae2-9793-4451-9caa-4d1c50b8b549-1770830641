@@ -100,7 +100,6 @@ export type Database = {
           name: string
           question_open_until: string | null
           status: string
-          updated_at: string | null
           winner_ticket_id: string | null
         }
         Insert: {
@@ -113,7 +112,6 @@ export type Database = {
           name: string
           question_open_until?: string | null
           status?: string
-          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Update: {
@@ -126,7 +124,6 @@ export type Database = {
           name?: string
           question_open_until?: string | null
           status?: string
-          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Relationships: []
@@ -257,21 +254,18 @@ export type Database = {
           correct_answer: boolean
           created_at: string | null
           id: string
-          question_type: string | null
           text: string
         }
         Insert: {
           correct_answer: boolean
           created_at?: string | null
           id?: string
-          question_type?: string | null
           text: string
         }
         Update: {
           correct_answer?: boolean
           created_at?: string | null
           id?: string
-          question_type?: string | null
           text?: string
         }
         Relationships: []
@@ -309,7 +303,6 @@ export type Database = {
           id: string
           is_winner: boolean | null
           serial_number: string
-          session_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -317,7 +310,6 @@ export type Database = {
           id?: string
           is_winner?: boolean | null
           serial_number: string
-          session_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -325,7 +317,6 @@ export type Database = {
           id?: string
           is_winner?: boolean | null
           serial_number?: string
-          session_id?: string | null
         }
         Relationships: [
           {
@@ -333,13 +324,6 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "tickets_session_id_fkey"
-            columns: ["session_id"]
-            isOneToOne: false
-            referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
         ]

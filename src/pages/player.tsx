@@ -15,9 +15,31 @@ import { Loader2, Clock, Trophy, Ticket, Plus, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
-// localStorage helpers for multi-ticket support - REMOVED as we use DB now
-// function getStoredFreeTickets... REMOVED
-// function addStoredFreeTicket... REMOVED
+// localStorage helpers for multi-ticket support
+function getStoredFreeTickets(eventId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addStoredFreeTicket(eventId: string, serial: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `ps_free_tickets_${eventId}`;
+    const stored = getStoredFreeTickets(eventId);
+    if (!stored.includes(serial)) {
+      stored.push(serial);
+      localStorage.setItem(key, JSON.stringify(stored));
+    }
+  } catch (err) {
+    console.error("[localStorage] Failed to add ticket:", err);
+  }
+}
 
 interface TicketData {
   id: string;
@@ -238,8 +260,6 @@ export default function PlayerPage() {
   const [addTicketOpen, setAddTicketOpen] = useState(false);
   const [newTicketSerial, setNewTicketSerial] = useState("");
   const [addingTicket, setAddingTicket] = useState(false);
-  
-  const MAX_FREE_TICKETS = 4;
 
   // Ticket detail modal state (for win screen)
   const [ticketDetailOpen, setTicketDetailOpen] = useState(false);
@@ -250,7 +270,7 @@ export default function PlayerPage() {
   const [reviewFilter, setReviewFilter] = useState<"all" | "correct" | "incorrect">("all");
   const [allDrawnQuestions, setAllDrawnQuestions] = useState<Array<{ number: number; text: string; correct_answer: boolean }>>([]);
 
-  // Load tickets from URL or DB (Unified Logic)
+  // Load tickets from URL or localStorage
   useEffect(() => {
     const loadTickets = async () => {
       console.log("[PLAYER] 🎬 Starting ticket load...");
@@ -258,63 +278,73 @@ export default function PlayerPage() {
       try {
         const ticketSerial = router.query.ticket as string;
         const eventIdParam = router.query.event as string;
-        
-        let eventId: string | null = null;
-        let initialTicket: TicketData | null = null;
 
-        // 1. Determine Event ID
-        if (eventIdParam) {
-          eventId = eventIdParam;
-        } else if (ticketSerial) {
-          // If we have a serial, fetch it to find the event
+        let ticketsToLoad: string[] = [];
+        let eventId: string | null = null;
+
+        // Priority 1: URL has ticket serial (newly created)
+        if (ticketSerial) {
+          console.log("[PLAYER] 📋 Loading ticket from URL:", ticketSerial);
+          ticketsToLoad = [ticketSerial];
           const ticket = await ticketService.getTicketBySerial(ticketSerial);
           if (ticket) {
-            eventId = ticket.event_id;
-            // Fix: Ensure ticket matches TicketData interface (ticket_questions required)
-            initialTicket = {
-              ...ticket,
-              ticket_questions: ticket.ticket_questions || []
-            };
+             eventId = ticket.event_id;
+             console.log("[PLAYER] 🎫 Ticket found, event_id:", eventId);
+             const storedTickets = getStoredFreeTickets(eventId);
+             ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
+             console.log("[PLAYER] 📚 Combined with stored tickets:", ticketsToLoad);
           }
         }
+        // Priority 2: URL has eventId (open my tickets)
+        else if (eventIdParam) {
+          console.log("[PLAYER] 🎯 Loading tickets for event:", eventIdParam);
+          eventId = eventIdParam;
+          ticketsToLoad = getStoredFreeTickets(eventId);
+          console.log("[PLAYER] 📚 Found stored tickets:", ticketsToLoad);
+        }
 
-        if (!eventId) {
-          console.log("[PLAYER] ❌ No event context found");
+        // If no tickets found, show empty state
+        if (ticketsToLoad.length === 0) {
+          console.log("[PLAYER] ❌ No tickets to load");
           setLoading(false);
           return;
         }
 
-        console.log("[PLAYER] 🎯 Loading tickets for event:", eventId);
+        // Fetch all tickets
+        console.log("[PLAYER] 🔄 Fetching ticket details...");
+        const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
+        const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
+        setTickets(loadedTickets);
 
-        // 2. Fetch ALL tickets for this player + event from DB (Unified Query)
-        const sessionId = await ticketService.getOrCreateSessionId(eventId);
-        const dbTickets = await ticketService.getTicketsForSessionAndEvent(sessionId, eventId);
-        
-        console.log(`[PLAYER] 📚 Fetched ${dbTickets.length} tickets from DB`);
-
-        // Convert DB tickets to TicketData format (ensure ticket_questions is present)
-        const ticketsToShow: TicketData[] = dbTickets.map(t => ({
-          ...t,
-          ticket_questions: t.ticket_questions || []
-        }));
-
-        setTickets(ticketsToShow);
+        console.log("[PLAYER] ✅ Loaded tickets:", loadedTickets.map(t => ({
+          id: t.id,
+          serial: t.serial_number,
+          event_id: t.event_id
+        })));
 
         // Set focused ticket
-        if (ticketSerial && ticketsToShow.some(t => t.serial_number === ticketSerial)) {
-          const focused = ticketsToShow.find(t => t.serial_number === ticketSerial);
-          setFocusedTicketId(focused?.id || null);
-        } else if (ticketsToShow.length > 0) {
-          setFocusedTicketId(ticketsToShow[0].id);
+        if (ticketSerial) {
+          const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
+          setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
+        } else {
+          setFocusedTicketId(loadedTickets[0]?.id || null);
         }
 
-        // Load event data
-        if (eventId) {
-          await refetchEventData(eventId, ticketsToShow);
+        // Load event (active or last finished)
+        if (eventId || loadedTickets[0]?.event_id) {
+          const currentEventId = eventId || loadedTickets[0].event_id;
+          console.log("[PLAYER] 🎪 Loading event data for:", currentEventId);
+          await refetchEventData(currentEventId, loadedTickets);
           
-          const event = await eventService.getEventById(eventId);
+          // Only subscribe to realtime if event is active
+          const event = await eventService.getEventById(currentEventId);
+          console.log("[PLAYER] 🎪 Event status:", event.status);
+          
           if (event && event.status === "active") {
-            setupRealtimeSubscription(eventId);
+            console.log("[PLAYER] 🔔 Setting up realtime subscription");
+            setupRealtimeSubscription(currentEventId);
+          } else {
+            console.log("[PLAYER] 📊 Event is finished, entering RESULTS mode");
           }
         }
       } catch (error) {
@@ -326,6 +356,7 @@ export default function PlayerPage() {
         });
       } finally {
         setLoading(false);
+        console.log("[PLAYER] ✅ Ticket load complete");
       }
     };
 
@@ -356,8 +387,7 @@ export default function PlayerPage() {
       
       // Handle winner
       if (event.winner_ticket_id) {
-        // Use getTicketBySerial or eventService.getTicket
-        const winnerTicket = await eventService.getTicket(event.winner_ticket_id);
+        const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
         setWinnerSerial(winnerTicket?.serial_number || null);
         console.log("[PLAYER] 🏆 Winner ticket:", winnerTicket?.serial_number);
       } else {
@@ -399,7 +429,7 @@ export default function PlayerPage() {
       // Load ALL drawn questions correct answers
       try {
         console.log("[PLAYER] 📚 Loading drawn questions map...");
-        const answersMap = await eventService.getDrawnQuestions(eventId);
+        const answersMap = await eventService.getDrawnQuestions(event.id);
         setCorrectAnswersMap(answersMap);
         console.log("[PLAYER] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
         
@@ -448,48 +478,6 @@ export default function PlayerPage() {
     }
   };
 
-  // Load tickets for active event
-  const loadTickets = async () => {
-    if (!activeEvent || !activeEvent.id) return;
-
-    try {
-      setLoading(true); // Fixed: setIsLoadingTickets -> setLoading
-      const sessionId = await ticketService.getOrCreateSessionId(activeEvent.id);
-      
-      // Use the session-based method
-      const dbTickets = await ticketService.getTicketsForSessionAndEvent(sessionId, activeEvent.id);
-      
-      const ticketsData: TicketData[] = dbTickets.map(t => ({
-        ...t,
-        ticket_questions: t.ticket_questions || []
-      }));
-      
-      setTickets(ticketsData); // Fixed: setPlayerTickets -> setTickets
-      
-      // If we have a requested ticket in URL, select it
-      const queryTicketSerial = router.query.ticket as string;
-      if (queryTicketSerial) {
-        const found = ticketsData.find(t => t.serial_number === queryTicketSerial);
-        if (found) setFocusedTicketId(found.id); // Fixed: setCurrentTicket -> setFocusedTicketId
-        else if (ticketsData.length > 0 && !focusedTicketId) setFocusedTicketId(ticketsData[0].id);
-      } else {
-        // Default to first ticket if none selected
-        if (ticketsData.length > 0 && !focusedTicketId) {
-          setFocusedTicketId(ticketsData[0].id);
-        }
-      }
-    } catch (error) {
-      console.error("Error loading tickets:", error);
-      toast({
-        title: "Greška",
-        description: "Neuspješno učitavanje tiketa.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false); // Fixed: setIsLoadingTickets -> setLoading
-    }
-  };
-
   // Setup realtime subscription (only for active events)
   const setupRealtimeSubscription = (eventId: string) => {
     let reconnectAttempts = 0;
@@ -521,7 +509,7 @@ export default function PlayerPage() {
             
             // Update winner
             if (updatedEvent.winner_ticket_id) {
-              eventService.getTicket(updatedEvent.winner_ticket_id).then(t => {
+              ticketService.getTicket(updatedEvent.winner_ticket_id).then(t => {
                 setWinnerSerial(t?.serial_number || null);
                 console.log("[Player] 🏆 Winner updated:", t?.serial_number);
               });
@@ -700,47 +688,80 @@ export default function PlayerPage() {
     }
   };
 
-  // Add new ticket
+  // Handle add ticket
   const handleAddTicket = async () => {
-    if (!activeEvent?.id) return;
-    
-    // Check limit first using local state (tickets = playerTickets)
-    if (tickets.length >= 4) {
-      toast({
-        title: "Limit dosegnut",
-        description: "Maksimalno 4 besplatna tiketa po igraču.",
-        variant: "destructive"
-      });
-      return;
-    }
+    if (!newTicketSerial.trim() || !activeEvent) return;
 
     setAddingTicket(true);
     try {
-      const ticket = await ticketService.createFreeTicket(activeEvent.id);
+      console.log("[Player] 🎫 Adding ticket:", newTicketSerial.trim());
+      
+      // Fetch ticket by serial
+      const ticket = await ticketService.getTicketBySerial(newTicketSerial.trim());
+      
+      if (!ticket) {
+        toast({
+          title: "Tiket nije pronađen",
+          description: "Provjerite serijski broj i pokušajte ponovo.",
+          variant: "destructive"
+        });
+        setAddingTicket(false);
+        return;
+      }
+
+      // Check if ticket belongs to the same event
+      if (ticket.event_id !== activeEvent.id) {
+        toast({
+          title: "Pogrešan event",
+          description: "Ovaj tiket pripada drugom eventu.",
+          variant: "destructive"
+        });
+        setAddingTicket(false);
+        return;
+      }
+
+      // Check if ticket is already added
+      if (tickets.some(t => t.serial_number === ticket.serial_number)) {
+        toast({
+          title: "Tiket već dodan",
+          description: "Ovaj tiket je već u vašoj listi.",
+          variant: "destructive"
+        });
+        setAddingTicket(false);
+        return;
+      }
+
+      // Add ticket to localStorage
+      addStoredFreeTicket(activeEvent.id, ticket.serial_number);
+
+      // Add ticket to state
+      const updatedTickets = [...tickets, ticket];
+      setTickets(updatedTickets);
+
+      // Load answers for new ticket
+      const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
+      setAnswers(prev => [...prev, ...ticketAnswers]);
+
+      // Set as focused ticket
+      setFocusedTicketId(ticket.id);
+
+      console.log("[Player] ✅ Ticket added:", ticket.serial_number);
       
       toast({
-        title: "Tiket dodan",
-        description: `Uspješno dodan tiket ${ticket.serial_number}`,
+        title: "✅ Tiket dodan",
+        description: `Tiket ${ticket.serial_number} uspješno dodan!`
       });
-      
-      await loadTickets(); // Reload list
-      setFocusedTicketId(ticket.id); // Fixed: setCurrentTicket -> setFocusedTicketId
-      
-    } catch (error: any) {
-      console.error("Error adding ticket:", error);
-      if (error.message?.includes("FREE_LIMIT_REACHED")) {
-        toast({
-          title: "Limit dosegnut",
-          description: "Imaš maksimalno 4 besplatna tiketa.",
-          variant: "destructive"
-        });
-      } else {
-        toast({
-          title: "Greška",
-          description: "Neuspješno dodavanje tiketa.",
-          variant: "destructive"
-        });
-      }
+
+      // Close modal and reset input
+      setAddTicketOpen(false);
+      setNewTicketSerial("");
+    } catch (error) {
+      console.error("[Player] ❌ Failed to add ticket:", error);
+      toast({
+        title: "Greška",
+        description: "Greška pri dodavanju tiketa.",
+        variant: "destructive"
+      });
     } finally {
       setAddingTicket(false);
     }
@@ -1274,96 +1295,73 @@ export default function PlayerPage() {
             })}
 
             {/* Add ticket card (only in active mode) */}
-            {activeEvent && eventMode === "active" && (
-              tickets.length < MAX_FREE_TICKETS ? (
-                <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
-                  <DialogTrigger asChild>
-                    <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
-                      <CardContent className="flex flex-col items-center justify-center h-full py-8">
-                        <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
-                        <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
-                        <p className="text-xs text-muted-foreground text-center mt-1">
-                          ({tickets.length}/{MAX_FREE_TICKETS})
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                      <DialogTitle>Dodaj novi tiket</DialogTitle>
-                      <DialogDescription>
-                        Unesite serijski broj postojećeg tiketa.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="serial">Serijski broj tiketa</Label>
-                        <Input
-                          id="serial"
-                          placeholder="Npr. T-A7F3K9M2"
-                          value={newTicketSerial}
-                          onChange={(e) => setNewTicketSerial(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !addingTicket) {
-                              handleAddTicket();
-                            }
-                          }}
-                          disabled={addingTicket}
-                        />
-                      </div>
-                      <div className="text-xs text-center text-muted-foreground">
-                        Za kreiranje novog tiketa, idite na početnu stranicu.
-                        <Button 
-                          variant="link" 
-                          className="h-auto p-0 ml-1 text-purple-600"
-                          onClick={() => router.push("/play")}
-                        >
-                          Klikni ovdje
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setAddTicketOpen(false);
-                          setNewTicketSerial("");
+            {canAddTicket && (
+              <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
+                <DialogTrigger asChild>
+                  <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                      <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                      <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                      <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
+                    </CardContent>
+                  </Card>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Dodaj novi tiket</DialogTitle>
+                    <DialogDescription>
+                      Unesite serijski broj tiketa za dodavanje u igru.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="serial">Serijski broj tiketa</Label>
+                      <Input
+                        id="serial"
+                        placeholder="Npr. T-A7F3K9M2"
+                        value={newTicketSerial}
+                        onChange={(e) => setNewTicketSerial(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !addingTicket) {
+                            handleAddTicket();
+                          }
                         }}
                         disabled={addingTicket}
-                        className="flex-1"
-                      >
-                        Odustani
-                      </Button>
-                      <Button
-                        onClick={handleAddTicket}
-                        disabled={addingTicket || !newTicketSerial.trim()}
-                        className="flex-1"
-                      >
-                        {addingTicket ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Dodajem...
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Dodaj
-                          </>
-                        )}
-                      </Button>
+                      />
                     </div>
-                  </DialogContent>
-                </Dialog>
-              ) : (
-                <Card className="bg-gray-100 border-2 border-dashed opacity-70">
-                   <CardContent className="flex flex-col items-center justify-center h-full py-8 text-center">
-                     <p className="font-bold text-gray-500">Maksimalan broj tiketa</p>
-                     <p className="text-xs text-gray-400 mt-1">
-                       Dosegnut limit od {MAX_FREE_TICKETS} besplatna tiketa (promo faza)
-                     </p>
-                   </CardContent>
-                </Card>
-              )
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setAddTicketOpen(false);
+                        setNewTicketSerial("");
+                      }}
+                      disabled={addingTicket}
+                      className="flex-1"
+                    >
+                      Odustani
+                    </Button>
+                    <Button
+                      onClick={handleAddTicket}
+                      disabled={addingTicket || !newTicketSerial.trim()}
+                      className="flex-1"
+                    >
+                      {addingTicket ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Dodajem...
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="mr-2 h-4 w-4" />
+                          Dodaj
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
             )}
           </div>
 
@@ -1407,7 +1405,7 @@ export default function PlayerPage() {
                         >
                           {isCorrect ? "✅" : "❌"}
                         </div>
-                        <p className="text-lg font-bold">
+                        <p className="text-xl font-bold">
                           {isCorrect ? "Točan odgovor!" : "Netočan odgovor"}
                         </p>
                         <p className="text-muted-foreground">
@@ -1426,7 +1424,9 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-lg text-muted-foreground">Vrijeme za odgovor je isteklo</p>
+                        <p className="text-lg font-semibold text-muted-foreground">
+                          Vrijeme za odgovor je isteklo
+                        </p>
                       </div>
                     );
                   }
@@ -1462,7 +1462,7 @@ export default function PlayerPage() {
           {eventMode === "active" && !currentQuestion && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
-                <Loader2 className="h-12 w-12 animate-spin mx-auto text-purple-600" />
+                <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-purple-600" />
                 <p className="text-lg text-muted-foreground">Čekamo sljedeće pitanje...</p>
               </CardContent>
             </Card>
