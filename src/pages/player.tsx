@@ -992,19 +992,20 @@ export default function PlayerPage() {
           </Card>
         </div>
 
-        {/* Ticket Detail Modal */}
+        {/* Ticket Detail Modal - COMPREHENSIVE READ-ONLY VIEW */}
         <Dialog open={ticketDetailOpen} onOpenChange={setTicketDetailOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Pregled tiketa</DialogTitle>
+              <DialogTitle className="text-xl">📋 Detaljni Pregled Tiketa</DialogTitle>
               <DialogDescription>
-                {selectedTicketForDetail?.serial_number}
-                {selectedTicketForDetail?.serial_number === winnerSerial && " 🏆 DOBITNIK"}
+                Tiket: <span className="font-bold">{selectedTicketForDetail?.serial_number}</span>
+                {selectedTicketForDetail?.serial_number === winnerSerial && " 🏆 POBJEDNIČKI TIKET"}
               </DialogDescription>
             </DialogHeader>
+            
             {selectedTicketForDetail && (
-              <div className="space-y-4">
-                {/* Stats */}
+              <div className="space-y-6">
+                {/* SUMMARY STATS */}
                 {(() => {
                   const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
                   const ticketStats = computeTicketStats(
@@ -1015,75 +1016,226 @@ export default function PlayerPage() {
                   );
 
                   return (
-                    <div className="p-4 bg-muted rounded-lg">
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div>
-                          <p className="text-muted-foreground">Izvučeno</p>
-                          <p className="font-bold">{ticketStats.drawnOnTicketCount}/15</p>
+                    <div className="p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
+                      <p className="text-sm font-semibold text-purple-900 mb-3">Sažetak Statistike</p>
+                      <div className="grid grid-cols-3 gap-3 text-sm">
+                        <div className="text-center">
+                          <p className="text-muted-foreground">Ukupno pitanja</p>
+                          <p className="text-2xl font-bold text-purple-700">{drawnNumbers.length}</p>
                         </div>
-                        <div>
+                        <div className="text-center">
+                          <p className="text-muted-foreground">Izvučeno na tiketu</p>
+                          <p className="text-2xl font-bold text-purple-700">{ticketStats.drawnOnTicketCount}/15</p>
+                        </div>
+                        <div className="text-center">
                           <p className="text-muted-foreground">Točnost</p>
-                          <p className="font-bold">{ticketStats.accuracyPct}%</p>
+                          <p className="text-2xl font-bold text-purple-700">{ticketStats.accuracyPct}%</p>
                         </div>
-                        <div>
-                          <p className="text-muted-foreground">Točno</p>
-                          <p className="font-bold text-green-600">{ticketStats.correctOnTicket}</p>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3 text-sm mt-3 pt-3 border-t border-purple-200">
+                        <div className="text-center">
+                          <p className="text-green-600 font-bold text-xl">{ticketStats.correctOnTicket}</p>
+                          <p className="text-xs text-muted-foreground">Točno</p>
                         </div>
-                        <div>
-                          <p className="text-muted-foreground">Netočno</p>
-                          <p className="font-bold text-red-600">{ticketStats.incorrectOnTicket}</p>
+                        <div className="text-center">
+                          <p className="text-red-600 font-bold text-xl">{ticketStats.incorrectOnTicket}</p>
+                          <p className="text-xs text-muted-foreground">Netočno</p>
                         </div>
-                        <div>
-                          <p className="text-muted-foreground">Propušteno</p>
-                          <p className="font-bold">{ticketStats.missedOnTicket}</p>
+                        <div className="text-center">
+                          <p className="text-gray-600 font-bold text-xl">{ticketStats.missedOnTicket}</p>
+                          <p className="text-xs text-muted-foreground">Propušteno</p>
                         </div>
                       </div>
                     </div>
                   );
                 })()}
 
-                {/* Grid */}
-                <div className="grid grid-cols-5 gap-2">
-                  {selectedTicketForDetail.ticket_questions
-                    .sort((a, b) => a.question_number - b.question_number)
-                    .map((tq) => {
-                      const qNum = Number(tq.question_number);
-                      const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                {/* TICKET GRID VISUAL */}
+                <div>
+                  <p className="text-sm font-semibold mb-2">Vizualni Prikaz Tiketa (15 brojeva)</p>
+                  <div className="grid grid-cols-5 gap-2">
+                    {selectedTicketForDetail.ticket_questions
+                      .sort((a, b) => a.question_number - b.question_number)
+                      .map((tq) => {
+                        const qNum = Number(tq.question_number);
+                        const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                        
+                        let bgColor = "bg-gray-200 dark:bg-gray-700";
+                        let textColor = "text-gray-900 dark:text-gray-100";
+                        
+                        switch (cellState) {
+                          case "correct":
+                            bgColor = "bg-green-500";
+                            textColor = "text-white";
+                            break;
+                          case "wrong":
+                            bgColor = "bg-red-500";
+                            textColor = "text-white";
+                            break;
+                          case "missed":
+                            bgColor = "bg-gray-400 dark:bg-gray-600";
+                            textColor = "text-white";
+                            break;
+                          case "not-drawn":
+                            // Keep default
+                            break;
+                        }
+                        
+                        return (
+                          <div
+                            key={qNum}
+                            className={cn(
+                              "aspect-square flex items-center justify-center rounded text-sm font-bold",
+                              bgColor,
+                              textColor
+                            )}
+                          >
+                            {qNum}
+                          </div>
+                        );
+                      })}
+                  </div>
+                  <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <div className="w-4 h-4 bg-green-500 rounded"></div>
+                      <span>Točno</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-4 h-4 bg-red-500 rounded"></div>
+                      <span>Netočno</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-4 h-4 bg-gray-400 rounded"></div>
+                      <span>Propušteno</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <div className="w-4 h-4 bg-gray-200 border border-gray-300 rounded"></div>
+                      <span>Nije izvučeno</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ALL DRAWN QUESTIONS LIST - FULL TRANSPARENCY */}
+                <div className="border-t pt-4">
+                  <p className="text-sm font-semibold mb-3">
+                    📋 Sva Pitanja iz Eventa ({allDrawnQuestions.length} izvučeno, redoslijed izvlačenja)
+                  </p>
+                  
+                  {allDrawnQuestions.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      Nema podataka o izvučenim pitanjima.
+                    </p>
+                  )}
+                  
+                  <div className="space-y-3">
+                    {allDrawnQuestions.map((q, index) => {
+                      const qNum = q.number;
+                      const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
+                      const isOnThisTicket = ticketNumbers.includes(qNum);
                       
-                      let bgColor = "bg-gray-200 dark:bg-gray-700";
-                      let textColor = "text-gray-900 dark:text-gray-100";
+                      // Get answer for THIS ticket
+                      const ans = answers.find(
+                        a => a.ticket_id === selectedTicketForDetail.serial_number && Number(a.question_number) === qNum
+                      );
                       
-                      switch (cellState) {
-                        case "correct":
-                          bgColor = "bg-green-500";
-                          textColor = "text-white";
-                          break;
-                        case "wrong":
-                          bgColor = "bg-red-500";
-                          textColor = "text-white";
-                          break;
-                        case "missed":
-                          bgColor = "bg-gray-400 dark:bg-gray-600";
-                          textColor = "text-white";
-                          break;
-                        case "not-drawn":
-                          // Keep default
-                          break;
+                      const isMissed = !ans;
+                      const isCorrect = ans ? normalizeAnswer(ans.answer) === normalizeAnswer(q.correct_answer) : false;
+                      
+                      // Determine status
+                      let statusBadge;
+                      let borderColor = "border-gray-300";
+                      let bgColor = "bg-white";
+                      
+                      if (!isOnThisTicket) {
+                        statusBadge = <Badge variant="outline" className="bg-gray-100">Nije na tiketu</Badge>;
+                        borderColor = "border-gray-200";
+                        bgColor = "bg-gray-50/50";
+                      } else if (isMissed) {
+                        statusBadge = <Badge variant="secondary" className="bg-gray-500 text-white">⏭️ PROPUŠTENO</Badge>;
+                        borderColor = "border-gray-400";
+                        bgColor = "bg-gray-50";
+                      } else if (isCorrect) {
+                        statusBadge = <Badge variant="default" className="bg-green-600">✅ TOČNO</Badge>;
+                        borderColor = "border-green-500";
+                        bgColor = "bg-green-50/30";
+                      } else {
+                        statusBadge = <Badge variant="destructive">❌ NETOČNO</Badge>;
+                        borderColor = "border-red-500";
+                        bgColor = "bg-red-50/30";
                       }
                       
                       return (
                         <div
                           key={qNum}
                           className={cn(
-                            "aspect-square flex items-center justify-center rounded text-xs font-bold",
-                            bgColor,
-                            textColor
+                            "border-l-4 p-4 rounded-lg transition-all",
+                            borderColor,
+                            bgColor
                           )}
                         >
-                          {qNum}
+                          {/* Header */}
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-sm font-bold">
+                                #{index + 1} → Q{qNum}
+                              </Badge>
+                              {!isOnThisTicket && (
+                                <span className="text-xs text-muted-foreground italic">(nije na ovom tiketu)</span>
+                              )}
+                            </div>
+                            {statusBadge}
+                          </div>
+                          
+                          {/* Question text */}
+                          <p className="text-base font-medium mb-3">{q.text}</p>
+                          
+                          {/* Answers comparison - ONLY if on this ticket */}
+                          {isOnThisTicket && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className={cn(
+                                "p-3 rounded-md",
+                                isMissed ? "bg-gray-100" : isCorrect ? "bg-green-100" : "bg-red-100"
+                              )}>
+                                <p className="text-xs text-muted-foreground mb-1">Tvoj odgovor:</p>
+                                <p className={cn(
+                                  "text-xl font-bold",
+                                  isMissed ? "text-gray-600" : isCorrect ? "text-green-700" : "text-red-700"
+                                )}>
+                                  {isMissed ? "— (nije odgovoreno)" : ans?.answer ? "DA" : "NE"}
+                                </p>
+                              </div>
+                              
+                              <div className="bg-green-100 p-3 rounded-md">
+                                <p className="text-xs text-muted-foreground mb-1">Točan odgovor:</p>
+                                <p className="text-xl font-bold text-green-700">
+                                  {q.correct_answer ? "DA" : "NE"}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Show correct answer even if not on ticket (transparency) */}
+                          {!isOnThisTicket && (
+                            <div className="mt-2 p-2 bg-gray-100 rounded text-sm">
+                              <span className="text-muted-foreground">Točan odgovor: </span>
+                              <span className="font-bold">{q.correct_answer ? "DA" : "NE"}</span>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* BACK BUTTON */}
+                <div className="border-t pt-4">
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => setTicketDetailOpen(false)}
+                  >
+                    ← Natrag na sve tikete
+                  </Button>
                 </div>
               </div>
             )}
