@@ -8,10 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Loader2, Clock, Trophy, Ticket, Plus } from "lucide-react";
+import { Loader2, Clock, Trophy, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -24,20 +21,6 @@ function getStoredFreeTickets(eventId: string): string[] {
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
-  }
-}
-
-function addStoredFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = getStoredFreeTickets(eventId);
-    if (!stored.includes(serial)) {
-      stored.push(serial);
-      localStorage.setItem(key, JSON.stringify(stored));
-    }
-  } catch (err) {
-    console.error("[localStorage] Failed to add ticket:", err);
   }
 }
 
@@ -258,11 +241,6 @@ export default function PlayerPage() {
   
   // Stores correct answer for ALL drawn questions
   const [correctAnswersMap, setCorrectAnswersMap] = useState<Record<number, boolean>>({});
-
-  // Add ticket modal state
-  const [addTicketOpen, setAddTicketOpen] = useState(false);
-  const [newTicketSerial, setNewTicketSerial] = useState("");
-  const [addingTicket, setAddingTicket] = useState(false);
 
   // Load tickets from URL or localStorage
   useEffect(() => {
@@ -587,81 +565,6 @@ export default function PlayerPage() {
     }
   };
 
-  // Handle add ticket
-  const handleAddTicket = async () => {
-    if (!newTicketSerial.trim() || !activeEvent) return;
-
-    setAddingTicket(true);
-    try {
-      // Fetch ticket by serial
-      const ticket = await ticketService.getTicketBySerial(newTicketSerial.trim());
-      
-      if (!ticket) {
-        toast({
-          title: "Tiket nije pronađen",
-          description: "Provjerite serijski broj i pokušajte ponovo.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Check if ticket belongs to the same event
-      if (ticket.event_id !== activeEvent.id) {
-        toast({
-          title: "Pogrešan event",
-          description: "Ovaj tiket pripada drugom eventu.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Check if ticket is already added
-      if (tickets.some(t => t.serial_number === ticket.serial_number)) {
-        toast({
-          title: "Tiket već dodan",
-          description: "Ovaj tiket je već u vašoj listi.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Add ticket to localStorage
-      addStoredFreeTicket(activeEvent.id, ticket.serial_number);
-
-      // Add ticket to state
-      const updatedTickets = [...tickets, ticket];
-      setTickets(updatedTickets);
-
-      // Load answers for new ticket
-      const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
-      setAnswers(prev => [...prev, ...ticketAnswers]);
-
-      // Set as focused ticket
-      setFocusedTicketId(ticket.id);
-
-      toast({
-        title: "✅ Tiket dodan",
-        description: `Tiket ${ticket.serial_number} uspješno dodan!`
-      });
-
-      // Close modal and reset input
-      setAddTicketOpen(false);
-      setNewTicketSerial("");
-    } catch (error) {
-      console.error("[Player] Failed to add ticket:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri dodavanju tiketa.",
-        variant: "destructive"
-      });
-    } finally {
-      setAddingTicket(false);
-    }
-  };
-
   // CRITICAL: Normalize all numbers and build global answersMap
   const drawnNumbers = (activeEvent?.drawn_numbers || []).map(Number);
   const globalAnswersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
@@ -939,72 +842,13 @@ export default function PlayerPage() {
 
             {/* Add ticket card */}
             {canAddTicket && (
-              <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
-                <DialogTrigger asChild>
-                  <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
-                    <CardContent className="flex flex-col items-center justify-center h-full py-8">
-                      <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
-                      <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
-                      <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
-                    </CardContent>
-                  </Card>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Dodaj novi tiket</DialogTitle>
-                    <DialogDescription>
-                      Unesite serijski broj tiketa za dodavanje u igru.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="serial">Serijski broj tiketa</Label>
-                      <Input
-                        id="serial"
-                        placeholder="Npr. T-A7F3K9M2"
-                        value={newTicketSerial}
-                        onChange={(e) => setNewTicketSerial(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !addingTicket) {
-                            handleAddTicket();
-                          }
-                        }}
-                        disabled={addingTicket}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setAddTicketOpen(false);
-                        setNewTicketSerial("");
-                      }}
-                      disabled={addingTicket}
-                      className="flex-1"
-                    >
-                      Odustani
-                    </Button>
-                    <Button
-                      onClick={handleAddTicket}
-                      disabled={addingTicket || !newTicketSerial.trim()}
-                      className="flex-1"
-                    >
-                      {addingTicket ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Dodajem...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Dodaj
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed" onClick={() => router.push("/play")}>
+                <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                  <Ticket className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                  <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                  <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
+                </CardContent>
+              </Card>
             )}
           </div>
 
