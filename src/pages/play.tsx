@@ -8,33 +8,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, RefreshCw, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-// Get stored free tickets for a specific event
-function getStoredFreeTickets(eventId: string): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-}
-
-// Store free ticket for a specific event
-function storeFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const tickets = getStoredFreeTickets(eventId);
-    if (!tickets.includes(serial)) {
-      tickets.push(serial);
-      localStorage.setItem(key, JSON.stringify(tickets));
-    }
-  } catch (err) {
-    console.error("[Play] Failed to store free ticket:", err);
-  }
-}
-
 export default function PlayPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -54,9 +27,14 @@ export default function PlayPage() {
       setActiveEvent(event);
 
       if (event) {
-        const storedTickets = getStoredFreeTickets(event.id);
-        setFreeTicketCount(storedTickets.length);
-        setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
+        // UNIFIED: Get count from DATABASE
+        const playerId = ticketService.getPlayerId();
+        const count = await ticketService.getFreeTicketsCountForPlayer(playerId, event.id);
+        
+        console.log(`[Play] 📊 Free tickets: ${count}/${MAX_FREE_TICKETS}`);
+        
+        setFreeTicketCount(count);
+        setLimitReached(count >= MAX_FREE_TICKETS);
       }
     } catch (error) {
       console.error("[Play] Failed to load active event:", error);
@@ -81,11 +59,10 @@ export default function PlayPage() {
 
     setCreating(true);
     try {
-      // Create ticket in database
+      console.log("[Play] 🎫 Creating free ticket...");
+      
+      // UNIFIED: Backend enforces limit
       const ticket = await ticketService.createFreeTicket(activeEvent.id);
-
-      // Store in localStorage for this event
-      storeFreeTicket(activeEvent.id, ticket.serial_number);
 
       toast({
         title: "✅ Tiket kreiran!",
@@ -119,12 +96,15 @@ export default function PlayPage() {
   };
 
   // Handle "Open my tickets" button
-  const handleOpenMyTickets = () => {
+  const handleOpenMyTickets = async () => {
     if (!activeEvent) return;
-    const storedTickets = getStoredFreeTickets(activeEvent.id);
-    if (storedTickets.length > 0) {
-      // Redirect to player with stored tickets
-      router.push(`/player?event=${activeEvent.id}`);
+    
+    const playerId = ticketService.getPlayerId();
+    const tickets = await ticketService.getTicketsForPlayerAndEvent(playerId, activeEvent.id);
+    
+    if (tickets.length > 0) {
+      // Redirect to player with first ticket
+      router.push(`/player?ticket=${tickets[0].serial_number}`);
     }
   };
 

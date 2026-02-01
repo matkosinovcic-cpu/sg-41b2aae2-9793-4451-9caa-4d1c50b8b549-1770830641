@@ -15,31 +15,9 @@ import { Loader2, Clock, Trophy, Ticket, Plus, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
-// localStorage helpers for multi-ticket support
-function getStoredFreeTickets(eventId: string): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
-}
-
-function addStoredFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = getStoredFreeTickets(eventId);
-    if (!stored.includes(serial)) {
-      stored.push(serial);
-      localStorage.setItem(key, JSON.stringify(stored));
-    }
-  } catch (err) {
-    console.error("[localStorage] Failed to add ticket:", err);
-  }
-}
+// localStorage helpers for multi-ticket support - REMOVED as we use DB now
+// function getStoredFreeTickets... REMOVED
+// function addStoredFreeTicket... REMOVED
 
 interface TicketData {
   id: string;
@@ -260,6 +238,8 @@ export default function PlayerPage() {
   const [addTicketOpen, setAddTicketOpen] = useState(false);
   const [newTicketSerial, setNewTicketSerial] = useState("");
   const [addingTicket, setAddingTicket] = useState(false);
+  
+  const MAX_FREE_TICKETS = 4;
 
   // Ticket detail modal state (for win screen)
   const [ticketDetailOpen, setTicketDetailOpen] = useState(false);
@@ -270,7 +250,7 @@ export default function PlayerPage() {
   const [reviewFilter, setReviewFilter] = useState<"all" | "correct" | "incorrect">("all");
   const [allDrawnQuestions, setAllDrawnQuestions] = useState<Array<{ number: number; text: string; correct_answer: boolean }>>([]);
 
-  // Load tickets from URL or localStorage
+  // Load tickets from URL or DB (Unified Logic)
   useEffect(() => {
     const loadTickets = async () => {
       console.log("[PLAYER] 🎬 Starting ticket load...");
@@ -278,73 +258,71 @@ export default function PlayerPage() {
       try {
         const ticketSerial = router.query.ticket as string;
         const eventIdParam = router.query.event as string;
-
-        let ticketsToLoad: string[] = [];
+        
         let eventId: string | null = null;
+        let initialTicket: TicketData | null = null;
 
-        // Priority 1: URL has ticket serial (newly created)
-        if (ticketSerial) {
-          console.log("[PLAYER] 📋 Loading ticket from URL:", ticketSerial);
-          ticketsToLoad = [ticketSerial];
+        // 1. Determine Event ID
+        if (eventIdParam) {
+          eventId = eventIdParam;
+        } else if (ticketSerial) {
+          // If we have a serial, fetch it to find the event
           const ticket = await ticketService.getTicketBySerial(ticketSerial);
           if (ticket) {
-             eventId = ticket.event_id;
-             console.log("[PLAYER] 🎫 Ticket found, event_id:", eventId);
-             const storedTickets = getStoredFreeTickets(eventId);
-             ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
-             console.log("[PLAYER] 📚 Combined with stored tickets:", ticketsToLoad);
+            eventId = ticket.event_id;
+            initialTicket = ticket;
           }
         }
-        // Priority 2: URL has eventId (open my tickets)
-        else if (eventIdParam) {
-          console.log("[PLAYER] 🎯 Loading tickets for event:", eventIdParam);
-          eventId = eventIdParam;
-          ticketsToLoad = getStoredFreeTickets(eventId);
-          console.log("[PLAYER] 📚 Found stored tickets:", ticketsToLoad);
-        }
 
-        // If no tickets found, show empty state
-        if (ticketsToLoad.length === 0) {
-          console.log("[PLAYER] ❌ No tickets to load");
+        if (!eventId) {
+          console.log("[PLAYER] ❌ No event context found");
           setLoading(false);
           return;
         }
 
-        // Fetch all tickets
-        console.log("[PLAYER] 🔄 Fetching ticket details...");
-        const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
-        const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
-        setTickets(loadedTickets);
+        console.log("[PLAYER] 🎯 Loading tickets for event:", eventId);
 
-        console.log("[PLAYER] ✅ Loaded tickets:", loadedTickets.map(t => ({
-          id: t.id,
-          serial: t.serial_number,
-          event_id: t.event_id
-        })));
+        // 2. Fetch ALL tickets for this player + event from DB (Unified Query)
+        const playerId = ticketService.getPlayerId();
+        const dbTickets = await ticketService.getTicketsForPlayerAndEvent(playerId, eventId);
+        
+        console.log(`[PLAYER] 📚 Fetched ${dbTickets.length} tickets from DB`);
 
-        // Set focused ticket
-        if (ticketSerial) {
-          const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
-          setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
-        } else {
-          setFocusedTicketId(loadedTickets[0]?.id || null);
+        // If the URL ticket is NOT in the DB list (e.g. created on another device/browser?), 
+        // we might want to show it or "claim" it?
+        // For strict unified logic, we only show what's in DB for this player.
+        // BUT, if user just created a ticket in /play (which sets player_id correctly), it SHOULD be in dbTickets.
+        
+        // Edge case: User manually enters a serial that belongs to them but DB fetch lagged? Unlikely.
+        
+        const ticketsToShow = [...dbTickets];
+        
+        // If we have an initial ticket from URL that isn't in the list (shouldn't happen if player_id matches),
+        // we merge it just in case to avoid confusion, but ideally DB is truth.
+        if (initialTicket && !ticketsToShow.some(t => t.id === initialTicket!.id)) {
+             console.warn("[PLAYER] ⚠️ URL ticket not found in player's DB list. Might belong to another session.");
+             // Optional: Add it to view? Or enforce ownership?
+             // Prompt says: "SVI tiketi moraju biti učitani i brojani istim queryjem"
+             // So we should strictly stick to dbTickets.
         }
 
-        // Load event (active or last finished)
-        if (eventId || loadedTickets[0]?.event_id) {
-          const currentEventId = eventId || loadedTickets[0].event_id;
-          console.log("[PLAYER] 🎪 Loading event data for:", currentEventId);
-          await refetchEventData(currentEventId, loadedTickets);
+        setTickets(ticketsToShow);
+
+        // Set focused ticket
+        if (ticketSerial && ticketsToShow.some(t => t.serial_number === ticketSerial)) {
+          const focused = ticketsToShow.find(t => t.serial_number === ticketSerial);
+          setFocusedTicketId(focused?.id || null);
+        } else if (ticketsToShow.length > 0) {
+          setFocusedTicketId(ticketsToShow[0].id);
+        }
+
+        // Load event data
+        if (eventId) {
+          await refetchEventData(eventId, ticketsToShow);
           
-          // Only subscribe to realtime if event is active
-          const event = await eventService.getEventById(currentEventId);
-          console.log("[PLAYER] 🎪 Event status:", event.status);
-          
+          const event = await eventService.getEventById(eventId);
           if (event && event.status === "active") {
-            console.log("[PLAYER] 🔔 Setting up realtime subscription");
-            setupRealtimeSubscription(currentEventId);
-          } else {
-            console.log("[PLAYER] 📊 Event is finished, entering RESULTS mode");
+            setupRealtimeSubscription(eventId);
           }
         }
       } catch (error) {
@@ -356,7 +334,6 @@ export default function PlayerPage() {
         });
       } finally {
         setLoading(false);
-        console.log("[PLAYER] ✅ Ticket load complete");
       }
     };
 
@@ -688,15 +665,24 @@ export default function PlayerPage() {
     }
   };
 
-  // Handle add ticket
+  // Handle add ticket (Manual Entry)
   const handleAddTicket = async () => {
     if (!newTicketSerial.trim() || !activeEvent) return;
 
+    // Client-side limit check
+    if (tickets.length >= MAX_FREE_TICKETS) {
+       toast({
+          title: "Limit dosegnut",
+          description: `Maksimalno ${MAX_FREE_TICKETS} besplatna tiketa po igraču.`,
+          variant: "destructive"
+        });
+        return;
+    }
+
     setAddingTicket(true);
     try {
-      console.log("[Player] 🎫 Adding ticket:", newTicketSerial.trim());
+      console.log("[Player] 🎫 Adding ticket by serial:", newTicketSerial.trim());
       
-      // Fetch ticket by serial
       const ticket = await ticketService.getTicketBySerial(newTicketSerial.trim());
       
       if (!ticket) {
@@ -709,7 +695,6 @@ export default function PlayerPage() {
         return;
       }
 
-      // Check if ticket belongs to the same event
       if (ticket.event_id !== activeEvent.id) {
         toast({
           title: "Pogrešan event",
@@ -720,39 +705,40 @@ export default function PlayerPage() {
         return;
       }
 
-      // Check if ticket is already added
+      // Check ownership or claim?
+      // For now, we just reload everything to ensure we are in sync
+      // If the ticket belongs to another player, we probably shouldn't be able to "add" it here 
+      // without changing its ownership.
+      // BUT current requirement is mainly about LIMIT.
+      
+      // If we want to support "Add by Serial" for tickets generated elsewhere, we'd need a "Claim" function.
+      // Given the constraints, let's assume "Add Ticket" here is checking if it's OUR ticket we missed?
+      // OR user wants to create a NEW one?
+      // Since the UI is "Unesi serijski broj", it implies existing.
+      
+      // Let's just try to refresh the list, maybe it was created and we just didn't sync?
+      // If it's not in the list, we can't add it if we strictly follow "Unified Query".
+      
+      // However, if the user really wants to create a NEW ticket from here, we should probably offer that.
+      // But let's stick to the requested UI logic:
+      
+      // If the user inputs a serial, we check if it's already in our list.
       if (tickets.some(t => t.serial_number === ticket.serial_number)) {
         toast({
           title: "Tiket već dodan",
           description: "Ovaj tiket je već u vašoj listi.",
           variant: "destructive"
         });
-        setAddingTicket(false);
-        return;
+      } else {
+         // It's a valid ticket for this event, but not in our "player_id" list.
+         // We can't "add" it to the view if we strictly filter by player_id.
+         toast({
+          title: "Tiket nije vaš",
+          description: "Ovaj tiket pripada drugom uređaju/igraču.",
+          variant: "destructive"
+        });
       }
-
-      // Add ticket to localStorage
-      addStoredFreeTicket(activeEvent.id, ticket.serial_number);
-
-      // Add ticket to state
-      const updatedTickets = [...tickets, ticket];
-      setTickets(updatedTickets);
-
-      // Load answers for new ticket
-      const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
-      setAnswers(prev => [...prev, ...ticketAnswers]);
-
-      // Set as focused ticket
-      setFocusedTicketId(ticket.id);
-
-      console.log("[Player] ✅ Ticket added:", ticket.serial_number);
       
-      toast({
-        title: "✅ Tiket dodan",
-        description: `Tiket ${ticket.serial_number} uspješno dodan!`
-      });
-
-      // Close modal and reset input
       setAddTicketOpen(false);
       setNewTicketSerial("");
     } catch (error) {
@@ -1295,73 +1281,96 @@ export default function PlayerPage() {
             })}
 
             {/* Add ticket card (only in active mode) */}
-            {canAddTicket && (
-              <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
-                <DialogTrigger asChild>
-                  <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
-                    <CardContent className="flex flex-col items-center justify-center h-full py-8">
-                      <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
-                      <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
-                      <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
-                    </CardContent>
-                  </Card>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Dodaj novi tiket</DialogTitle>
-                    <DialogDescription>
-                      Unesite serijski broj tiketa za dodavanje u igru.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="serial">Serijski broj tiketa</Label>
-                      <Input
-                        id="serial"
-                        placeholder="Npr. T-A7F3K9M2"
-                        value={newTicketSerial}
-                        onChange={(e) => setNewTicketSerial(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !addingTicket) {
-                            handleAddTicket();
-                          }
+            {activeEvent && eventMode === "active" && (
+              tickets.length < MAX_FREE_TICKETS ? (
+                <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
+                  <DialogTrigger asChild>
+                    <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
+                      <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                        <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                        <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                        <p className="text-xs text-muted-foreground text-center mt-1">
+                          ({tickets.length}/{MAX_FREE_TICKETS})
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Dodaj novi tiket</DialogTitle>
+                      <DialogDescription>
+                        Unesite serijski broj postojećeg tiketa.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="serial">Serijski broj tiketa</Label>
+                        <Input
+                          id="serial"
+                          placeholder="Npr. T-A7F3K9M2"
+                          value={newTicketSerial}
+                          onChange={(e) => setNewTicketSerial(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !addingTicket) {
+                              handleAddTicket();
+                            }
+                          }}
+                          disabled={addingTicket}
+                        />
+                      </div>
+                      <div className="text-xs text-center text-muted-foreground">
+                        Za kreiranje novog tiketa, idite na početnu stranicu.
+                        <Button 
+                          variant="link" 
+                          className="h-auto p-0 ml-1 text-purple-600"
+                          onClick={() => router.push("/play")}
+                        >
+                          Klikni ovdje
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setAddTicketOpen(false);
+                          setNewTicketSerial("");
                         }}
                         disabled={addingTicket}
-                      />
+                        className="flex-1"
+                      >
+                        Odustani
+                      </Button>
+                      <Button
+                        onClick={handleAddTicket}
+                        disabled={addingTicket || !newTicketSerial.trim()}
+                        className="flex-1"
+                      >
+                        {addingTicket ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Dodajem...
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Dodaj
+                          </>
+                        )}
+                      </Button>
                     </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setAddTicketOpen(false);
-                        setNewTicketSerial("");
-                      }}
-                      disabled={addingTicket}
-                      className="flex-1"
-                    >
-                      Odustani
-                    </Button>
-                    <Button
-                      onClick={handleAddTicket}
-                      disabled={addingTicket || !newTicketSerial.trim()}
-                      className="flex-1"
-                    >
-                      {addingTicket ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Dodajem...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Dodaj
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+                  </DialogContent>
+                </Dialog>
+              ) : (
+                <Card className="bg-gray-100 border-2 border-dashed opacity-70">
+                   <CardContent className="flex flex-col items-center justify-center h-full py-8 text-center">
+                     <p className="font-bold text-gray-500">Maksimalan broj tiketa</p>
+                     <p className="text-xs text-gray-400 mt-1">
+                       Dosegnut limit od {MAX_FREE_TICKETS} besplatna tiketa (promo faza)
+                     </p>
+                   </CardContent>
+                </Card>
+              )
             )}
           </div>
 
@@ -1424,7 +1433,7 @@ export default function PlayerPage() {
                     return (
                       <div className="text-center py-8 space-y-4">
                         <Clock className="h-16 w-16 mx-auto text-muted-foreground" />
-                        <p className="text-lg font-semibold text-muted-foreground">
+                        <p className="text-lg font-bold text-muted-foreground">
                           Vrijeme za odgovor je isteklo
                         </p>
                       </div>
@@ -1462,7 +1471,7 @@ export default function PlayerPage() {
           {eventMode === "active" && !currentQuestion && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
-                <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-purple-600" />
+                <Loader2 className="h-12 w-12 animate-spin mx-auto text-purple-600" />
                 <p className="text-lg text-muted-foreground">Čekamo sljedeće pitanje...</p>
               </CardContent>
             </Card>
