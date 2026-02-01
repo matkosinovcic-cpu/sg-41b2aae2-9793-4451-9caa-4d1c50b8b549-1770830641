@@ -670,6 +670,10 @@ export default function PlayerPage() {
 
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
 
+  // CRITICAL FIX: Remove global answers map - each ticket needs its own
+  // OLD (WRONG): One global map causes only first ticket to show correct data
+  // NEW (CORRECT): Build per-ticket map inside the map() loop below
+
   if (loading) {
     return (
       <>
@@ -1022,43 +1026,50 @@ export default function PlayerPage() {
             {tickets.map((ticket, ticketIndex) => {
               const isFocused = ticket.id === focusedTicketId;
               
-              // ✅ CALCULATE STATS FOR THIS TICKET (not focused ticket)
+              // ✅ CRITICAL FIX: Build answers map FOR THIS TICKET ONLY
               const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
               const drawnNumbers = activeEvent?.drawn_numbers || [];
               
-              // ✅ Td = Number of drawn questions that are on this ticket
+              // ✅ Build per-ticket answers map
+              const ticketAnswersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
+              
+              // Get answers ONLY for this ticket
+              const thisTicketAnswers = answers.filter(a => 
+                a.ticket_id === ticket.serial_number
+              );
+              
+              thisTicketAnswers.forEach(ans => {
+                const qNum = Number(ans.question_number);
+                if (!ticketNumbers.includes(qNum)) return; // Skip questions not on this ticket
+                if (!drawnNumbers.includes(qNum)) return; // Skip not drawn questions
+                
+                const correctAns = correctAnswersMap[qNum];
+                const isCorrect = correctAns !== undefined && 
+                                  normalizeAnswer(ans.answer) === normalizeAnswer(correctAns);
+                
+                ticketAnswersMap.set(qNum, { answer: ans.answer, isCorrect });
+              });
+              
+              // ✅ CALCULATE STATS FOR THIS TICKET using its own answers map
               const drawnOnTicket = ticketNumbers.filter(n => drawnNumbers.includes(n));
               const drawnCountOnTicket = drawnOnTicket.length; // Td
               
-              // ✅ Answers ON THIS TICKET (only for questions that are ON this ticket)
-              const thisTicketAnswers = answers.filter(a => 
-                a.ticket_id === ticket.serial_number && 
-                ticketNumbers.includes(Number(a.question_number))
-              );
-              const answeredOnTicket = thisTicketAnswers.length;
-              
-              // ✅ Ct = Number of correct answers on this ticket
+              // Count using this ticket's answers map
               let correctOnTicket = 0;
-              thisTicketAnswers.forEach(a => {
-                const qNum = Number(a.question_number);
-                if (correctAnswersMap[qNum] !== undefined) {
-                  const playerAns = normalizeAnswer(a.answer);
-                  const correctAns = normalizeAnswer(correctAnswersMap[qNum]);
-                  if (playerAns === correctAns) {
+              let answeredOnTicket = 0;
+              
+              drawnOnTicket.forEach(qNum => {
+                const ans = ticketAnswersMap.get(qNum);
+                if (ans) {
+                  answeredOnTicket++;
+                  if (ans.isCorrect) {
                     correctOnTicket++;
                   }
                 }
               });
               
-              // ✅ Wt = Number of wrong answers on this ticket
-              const incorrectOnTicket = answeredOnTicket - correctOnTicket;
-              
-              // ✅ FIXED: SAME FORMULA FOR ALL MODES
-              // Mt = MISSED = DRAWN ON TICKET - ANSWERED ON TICKET
+              const wrongOnTicket = answeredOnTicket - correctOnTicket;
               const missedOnTicket = Math.max(0, drawnCountOnTicket - answeredOnTicket);
-              
-              // ✅ FIXED: SAME FORMULA FOR ALL MODES
-              // Pt = ACCURACY = (CORRECT / DRAWN ON TICKET) * 100
               const thisTicketAccuracy = drawnCountOnTicket > 0 
                 ? Math.round((correctOnTicket / drawnCountOnTicket) * 100)
                 : 0;
@@ -1066,7 +1077,7 @@ export default function PlayerPage() {
               // Current question status for this ticket
               const isOnThisTicket = currentDrawnNumber !== null && ticketNumbers.includes(currentDrawnNumber);
               const hasAnsweredCurrent = currentDrawnNumber !== null && 
-                answers.some(a => a.ticket_id === ticket.serial_number && Number(a.question_number) === currentDrawnNumber);
+                ticketAnswersMap.has(currentDrawnNumber);
 
               return (
                 <Card 
@@ -1080,11 +1091,11 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* ✅ PER-TICKET STATS - CONSISTENT FOR ALL TICKETS */}
+                    {/* ✅ PER-TICKET STATS - NOW CORRECT FOR ALL TICKETS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
                         <span>Izvučeno: {drawnCountOnTicket}/15</span>
-                        <span>Točno: {correctOnTicket} • Netočno: {incorrectOnTicket}</span>
+                        <span>Točno: {correctOnTicket} • Netočno: {wrongOnTicket}</span>
                         <span>Propušteno: {missedOnTicket}</span>
                         <span>Točnost: {thisTicketAccuracy}%</span>
                       </div>
@@ -1115,7 +1126,7 @@ export default function PlayerPage() {
                   </CardHeader>
                   
                   <CardContent className="p-3 sm:p-4 pt-0">
-                    {/* Ticket grid (5x3) - SAME getCellState FOR ALL */}
+                    {/* Ticket grid (5x3) - USE THIS TICKET'S ANSWERS MAP */}
                     <div className="grid grid-cols-5 gap-2">
                       {ticket.ticket_questions
                         .sort((a, b) => a.question_number - b.question_number)
@@ -1123,8 +1134,8 @@ export default function PlayerPage() {
                           const qNum = Number(tq.question_number);
                           const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
                           
-                          // CRITICAL: Use SAME function for cell state
-                          const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                          // ✅ Use THIS ticket's answers map for cell state
+                          const cellState = getCellState(qNum, drawnNumbers, ticketAnswersMap);
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
                           let textColor = "text-gray-900 dark:text-gray-100";
