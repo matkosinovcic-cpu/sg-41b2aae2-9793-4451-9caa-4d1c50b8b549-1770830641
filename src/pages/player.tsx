@@ -407,19 +407,19 @@ export default function PlayerPage() {
   // Calculate stats for focused ticket
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
   
-  // GLOBAL STATISTICS (for header scoreboard - all player answers across all tickets)
+  // ✅ GLOBALNA STATISTIKA (preko svih tiketa igrača)
   const globalStats = useMemo(() => {
     const drawnNumbers = activeEvent?.drawn_numbers || [];
-    const drawnCount = drawnNumbers.length; // X = globalDrawn
+    const drawnCount = drawnNumbers.length; // X
     
     if (drawnCount === 0) {
       return { 
-        drawnCount: 0, 
-        answeredCount: 0, 
+        drawnCount: 0,
+        answeredCount: 0,
         correctCount: 0,
         wrongCount: 0,
         missedCount: 0,
-        accuracy: 0 
+        accuracy: 0
       };
     }
     
@@ -434,9 +434,9 @@ export default function PlayerPage() {
         .map(a => Number(a.question_number))
         .filter(qNum => drawnNumbers.includes(qNum))
     );
-    const answeredCount = answeredQuestionNumbers.size; // globalAnswered
+    const answeredCount = answeredQuestionNumbers.size;
     
-    // C = broj točnih odgovora (POTPUNA STATISTIKA)
+    // C = broj točnih odgovora
     let correctCount = 0;
     answeredQuestionNumbers.forEach(qNum => {
       const answer = playerAnswers.find(a => Number(a.question_number) === qNum);
@@ -452,29 +452,25 @@ export default function PlayerPage() {
     });
     
     // W = netočni odgovori
-    const wrongCount = answeredCount - correctCount; // globalIncorrect
+    const wrongCount = answeredCount - correctCount;
     
     // M = propušteni odgovori
-    const missedCount = Math.max(0, drawnCount - answeredCount); // globalMissed
+    const missedCount = Math.max(0, drawnCount - answeredCount);
     
-    // ✅ ISPRAVLJENA FORMULA: globalAccuracy = (globalCorrect / globalDrawn) * 100
-    // Propušteno automatski smanjuje točnost jer je u nazivniku
+    // Točnost = (correctCount / drawnCount) * 100
     const accuracy = drawnCount > 0 
       ? Math.round((correctCount / drawnCount) * 100)
       : 0;
     
     return { 
-      drawnCount,           // globalDrawn (X)
-      answeredCount,        // globalAnswered (A)
-      correctCount,         // globalCorrect (Cg)
-      wrongCount,           // globalIncorrect (Wg)
-      missedCount,          // globalMissed (M)
-      accuracy              // ✅ (Cg / X) * 100
+      drawnCount,
+      answeredCount,
+      correctCount,
+      wrongCount,
+      missedCount,
+      accuracy
     };
   }, [activeEvent, answers, tickets, correctAnswersMap]);
-  
-  // PER-TICKET STATISTICS
-  // Removed global ticketStats useMemo as we calculate per-ticket inside map
 
   const canAddTicket = activeEvent && tickets.length < 4;
 
@@ -548,7 +544,7 @@ export default function PlayerPage() {
       <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4">
         <div className="max-w-6xl mx-auto space-y-3">
           
-          {/* Header with stats */}
+          {/* Header with GLOBAL stats (6 metrics) */}
           {focusedTicket && (
             <Card className="bg-white/95 backdrop-blur">
               <CardHeader className="pb-3">
@@ -566,8 +562,8 @@ export default function PlayerPage() {
                   </Badge>
                 </div>
 
-                {/* Global player stats grid - 4 COLUMNS */}
-                <div className="grid grid-cols-4 gap-2 text-center pt-2">
+                {/* ✅ GLOBALNA STATISTIKA - 6 METRIKA (2 reda po 3) */}
+                <div className="grid grid-cols-3 gap-2 text-center pt-2">
                   <div>
                     <p className="text-xs text-muted-foreground">Izvučeno</p>
                     <p className="text-lg font-bold">{globalStats.drawnCount}/90</p>
@@ -578,10 +574,21 @@ export default function PlayerPage() {
                     <p className="text-lg font-bold">{globalStats.answeredCount}/{globalStats.drawnCount}</p>
                   </div>
                   
-                  {/* ✅ NEW - Propušteno */}
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
                     <p className="text-lg font-bold">{globalStats.missedCount}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Točno</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
+                  </div>
+                  
+                  <div>
+                    <p className="text-xs text-muted-foreground">Netočno</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.wrongCount}</p>
                   </div>
                   
                   <div>
@@ -598,23 +605,22 @@ export default function PlayerPage() {
             {tickets.map((ticket, ticketIndex) => {
               const isFocused = ticket.id === focusedTicketId;
               
-              // ✅ CALCULATE STATS FOR THIS TICKET (not focused ticket)
+              // ✅ STATISTIKA ZA OVAJ TIKET (ne focused ticket!)
               const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
               const drawnNumbers = activeEvent?.drawn_numbers || [];
-              const isFinished = activeEvent?.status === "finished";
               
-              // Td = broj izvučenih pitanja koja se nalaze na tom tiketu
+              // Td = broj izvučenih pitanja koja se nalaze na ovom tiketu
               const drawnOnTicket = ticketNumbers.filter(n => drawnNumbers.includes(n));
-              const drawnCountOnTicket = drawnOnTicket.length; // Td
+              const drawnCountOnTicket = drawnOnTicket.length;
               
-              // Odgovori NA OVOM tiketu (samo za pitanja koja su NA tom tiketu)
+              // Odgovori NA OVOM tiketu
               const thisTicketAnswers = answers.filter(a => 
                 a.ticket_id === ticket.serial_number && 
                 ticketNumbers.includes(Number(a.question_number))
               );
               const answeredOnTicket = thisTicketAnswers.length;
               
-              // Ct = broj točnih odgovora na tom tiketu (using correctAnswersMap)
+              // Ct = broj točnih odgovora na ovom tiketu
               let correctOnTicket = 0;
               thisTicketAnswers.forEach(a => {
                 const qNum = Number(a.question_number);
@@ -627,33 +633,16 @@ export default function PlayerPage() {
                 }
               });
               
-              // Wt = broj netočnih odgovora na tom tiketu
+              // Wt = broj netočnih odgovora na ovom tiketu
               const wrongOnTicket = answeredOnTicket - correctOnTicket;
               
-              // Mt = propušteni odgovori na tom tiketu (LIVE vs RESULTS)
-              const missedOnTicket = isFinished 
-                ? Math.max(0, 15 - correctOnTicket - wrongOnTicket)  // RESULTS: 15 - (Ct + Wt)
-                : Math.max(0, drawnCountOnTicket - answeredOnTicket); // LIVE: Td - answered
+              // Mt = propušteni odgovori na ovom tiketu
+              const missedOnTicket = Math.max(0, drawnCountOnTicket - answeredOnTicket);
               
-              // Pt = točnost na tom tiketu (LIVE vs RESULTS)
-              const thisTicketAccuracy = isFinished
-                ? Math.round((correctOnTicket / 15) * 100)  // RESULTS: (Ct / 15) * 100
-                : (drawnCountOnTicket > 0 
-                    ? Math.round((correctOnTicket / drawnCountOnTicket) * 100)  // LIVE: (Ct / Td) * 100
-                    : 0);
-              
-              // Debug log (development only, no UI)
-              if (process.env.NODE_ENV === 'development') {
-                console.log(`[Ticket ${ticketIndex + 1} Stats]`, {
-                  serial: ticket.serial_number,
-                  mode: isFinished ? 'RESULTS' : 'LIVE',
-                  drawnOnTicket: drawnCountOnTicket,
-                  correct: correctOnTicket,
-                  wrong: wrongOnTicket,
-                  missed: missedOnTicket,
-                  accuracy: thisTicketAccuracy
-                });
-              }
+              // Pt = točnost na ovom tiketu
+              const thisTicketAccuracy = drawnCountOnTicket > 0 
+                ? Math.round((correctOnTicket / drawnCountOnTicket) * 100)
+                : 0;
               
               // Get current question status for this ticket
               const isOnAnyTicket = currentDrawnNumber !== null && ticketNumbers.includes(currentDrawnNumber);
@@ -672,7 +661,7 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* ✅ PER-TICKET STATS - SHOWN FOR ALL TICKETS */}
+                    {/* ✅ PER-TICKET STATS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
                         <span>Izvučeno: {drawnCountOnTicket}/15</span>
@@ -798,27 +787,6 @@ export default function PlayerPage() {
                   const existingAnswer = answers.find(
                     (a) => a.ticket_id === focusedTicket?.serial_number && a.question_number === currentDrawnNumber
                   );
-
-                  // Check if question is on ANY of player's tickets (for info display only)
-                  const isOnAnyTicket = tickets.some(ticket =>
-                    ticket.ticket_questions.some(tq => Number(tq.question_number) === Number(currentDrawnNumber))
-                  );
-
-                  // Debug log in development
-                  if (process.env.NODE_ENV === 'development' && tickets.length > 0) {
-                    console.log('[Player Ticket Debug]', {
-                      currentDrawnNumber,
-                      questionNumberType: typeof currentDrawnNumber,
-                      sampleTicket: {
-                        serial: tickets[0].serial_number,
-                        questionNumbers: tickets[0].ticket_questions.map(tq => ({
-                          value: tq.question_number,
-                          type: typeof tq.question_number
-                        }))
-                      },
-                      isOnAnyTicket
-                    });
-                  }
 
                   if (existingAnswer) {
                     const isCorrect =
