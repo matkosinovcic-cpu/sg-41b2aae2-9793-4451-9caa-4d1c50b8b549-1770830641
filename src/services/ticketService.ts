@@ -215,9 +215,9 @@ export const ticketService = {
         const questionNumbers = generateTicketNumbers();
 
         // Create ticket_questions entries
-        const ticketQuestions = questionNumbers.map((questionNumber) => ({
+        const ticketQuestions = questionNumbers.map((item) => ({
           ticket_id: ticket.id,
-          question_number: questionNumber,
+          question_number: item.question_number,
         }));
 
         const { error: questionsError } = await supabase
