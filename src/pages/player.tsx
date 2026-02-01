@@ -8,10 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Loader2, Clock, Trophy, Ticket, Plus, RefreshCw } from "lucide-react";
+import { Loader2, Clock, Trophy, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -24,20 +21,6 @@ function getStoredFreeTickets(eventId: string): string[] {
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
-  }
-}
-
-function addStoredFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = getStoredFreeTickets(eventId);
-    if (!stored.includes(serial)) {
-      stored.push(serial);
-      localStorage.setItem(key, JSON.stringify(stored));
-    }
-  } catch (err) {
-    console.error("[localStorage] Failed to add ticket:", err);
   }
 }
 
@@ -63,7 +46,7 @@ function normalizeAnswer(value: any): boolean | null {
   return null;
 }
 
-// CORE FUNCTION: Compute stats for ONE ticket (IDENTICAL for all tickets)
+// CORE FUNCTION: Compute stats for ONE ticket (MUST be identical for all 4 tickets)
 function computeTicketStats(
   ticketNumbers: number[],
   drawnNumbers: number[],
@@ -112,20 +95,21 @@ function computeTicketStats(
   }
 
   const missedOnTicket = drawnOnTicketCount - answeredOnTicket;
-  
-  // ❗ PROPUŠTENA PITANJA = NETOČNA U POSTOTKU
   const accuracyPct = drawnOnTicketCount > 0 
     ? Math.round((correctOnTicket / drawnOnTicketCount) * 100)
     : 0;
 
-  // DEBUG LOG
+  // DEBUG LOG (to identify key mismatch issues)
   console.log(`[STATS] ${ticketSerial}:`, {
     intersection: drawnOnTicketCount,
     answered: answeredOnTicket,
     correct: correctOnTicket,
     incorrect: incorrectOnTicket,
     missed: missedOnTicket,
-    accuracy: accuracyPct
+    accuracy: accuracyPct,
+    ticketNumbers: ticketNumbers.slice(0, 3) + "...",
+    drawnOnTicket: drawnOnTicket.slice(0, 3) + "...",
+    answersMapSize: answersMap.size
   });
 
   return {
@@ -138,7 +122,7 @@ function computeTicketStats(
   };
 }
 
-// CORE FUNCTION: Get cell state for grid coloring (IDENTICAL for all tickets)
+// CORE FUNCTION: Get cell state for grid coloring (MUST be identical for all 4 tickets)
 function getCellState(
   questionNumber: number,
   drawnNumbers: number[],
@@ -158,11 +142,11 @@ function getCellState(
   return "missed";
 }
 
-// GLOBAL STATS: Aggregate across ALL tickets
+// Compute GLOBAL stats (across ALL tickets)
 function computeGlobalStats(
-  tickets: TicketData[],
   drawnNumbers: number[],
-  answersMap: Map<number, { answer: boolean | null; isCorrect: boolean }>
+  allAnswers: Answer[],
+  correctAnswersMap: Record<number, boolean>
 ): {
   totalDrawn: number;
   answeredCount: number;
@@ -173,7 +157,7 @@ function computeGlobalStats(
 } {
   const totalDrawn = drawnNumbers.length;
 
-  if (totalDrawn === 0 || tickets.length === 0) {
+  if (totalDrawn === 0) {
     return {
       totalDrawn: 0,
       answeredCount: 0,
@@ -184,50 +168,54 @@ function computeGlobalStats(
     };
   }
 
-  // Aggregate stats across ALL tickets
-  let totalCorrect = 0;
-  let totalIncorrect = 0;
-  let totalMissed = 0;
-  let totalAnswered = 0;
-  let totalDrawnOnTickets = 0;
+  // Build global answers map (KEY = question_number, deduplicated by latest answer)
+  const answersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
+  
+  // Sort by created_at DESC to keep latest answer per question
+  const sortedAnswers = [...allAnswers].sort((a, b) => 
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 
-  for (const ticket of tickets) {
-    const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
-    const ticketStats = computeTicketStats(
-      ticketNumbers,
-      drawnNumbers,
-      answersMap,
-      ticket.serial_number
-    );
-
-    totalDrawnOnTickets += ticketStats.drawnOnTicketCount;
-    totalAnswered += ticketStats.answeredOnTicket;
-    totalCorrect += ticketStats.correctOnTicket;
-    totalIncorrect += ticketStats.incorrectOnTicket;
-    totalMissed += ticketStats.missedOnTicket;
+  for (const ans of sortedAnswers) {
+    const qNum = Number(ans.question_number);
+    if (!drawnNumbers.includes(qNum)) continue; // Only drawn questions
+    if (answersMap.has(qNum)) continue; // Already have latest answer
+    
+    const correctAns = correctAnswersMap[qNum];
+    const isCorrect = correctAns !== undefined && 
+                      normalizeAnswer(ans.answer) === normalizeAnswer(correctAns);
+    
+    answersMap.set(qNum, { answer: ans.answer, isCorrect });
   }
 
-  // ❗ PROPUŠTENA PITANJA = NETOČNA U POSTOTKU
-  const accuracyPct = totalDrawnOnTickets > 0 
-    ? Math.round((totalCorrect / totalDrawnOnTickets) * 100)
-    : 0;
+  // Count stats
+  let answeredCount = 0;
+  let correctCount = 0;
+  let incorrectCount = 0;
 
-  console.log("[GLOBAL STATS]:", {
-    totalDrawn,
-    totalDrawnOnTickets,
-    totalAnswered,
-    totalCorrect,
-    totalIncorrect,
-    totalMissed,
-    accuracyPct
-  });
+  for (const qNum of drawnNumbers) {
+    const ans = answersMap.get(qNum);
+    if (ans) {
+      answeredCount++;
+      if (ans.isCorrect) {
+        correctCount++;
+      } else {
+        incorrectCount++;
+      }
+    }
+  }
+
+  const missedCount = totalDrawn - answeredCount;
+  const accuracyPct = totalDrawn > 0 
+    ? Math.round((correctCount / totalDrawn) * 100)
+    : 0;
 
   return {
     totalDrawn,
-    answeredCount: totalAnswered,
-    correctCount: totalCorrect,
-    incorrectCount: totalIncorrect,
-    missedCount: totalMissed,
+    answeredCount,
+    correctCount,
+    incorrectCount,
+    missedCount,
     accuracyPct
   };
 }
@@ -237,13 +225,11 @@ export default function PlayerPage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [checkingNewEvent, setCheckingNewEvent] = useState(false);
 
   // Multi-ticket state
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
   const [activeEvent, setActiveEvent] = useState<Event | null>(null);
-  const [eventMode, setEventMode] = useState<"active" | "finished">("active");
   const [sessionId, setSessionId] = useState<string>("");
 
   // Game state
@@ -255,15 +241,6 @@ export default function PlayerPage() {
   
   // Stores correct answer for ALL drawn questions
   const [correctAnswersMap, setCorrectAnswersMap] = useState<Record<number, boolean>>({});
-
-  // Add ticket modal state
-  const [addTicketOpen, setAddTicketOpen] = useState(false);
-  const [newTicketSerial, setNewTicketSerial] = useState("");
-  const [addingTicket, setAddingTicket] = useState(false);
-
-  // Ticket detail modal state (for win screen)
-  const [ticketDetailOpen, setTicketDetailOpen] = useState(false);
-  const [selectedTicketForDetail, setSelectedTicketForDetail] = useState<TicketData | null>(null);
 
   // Load tickets from URL or localStorage
   useEffect(() => {
@@ -315,16 +292,13 @@ export default function PlayerPage() {
           setFocusedTicketId(loadedTickets[0]?.id || null);
         }
 
-        // Load event (active or last finished)
+        // Load event
         if (eventId || loadedTickets[0]?.event_id) {
           const currentEventId = eventId || loadedTickets[0].event_id;
           await refetchEventData(currentEventId, loadedTickets);
           
-          // Only subscribe to realtime if event is active
-          const event = await eventService.getEventById(currentEventId);
-          if (event && event.status === "active") {
-            setupRealtimeSubscription(currentEventId);
-          }
+          // Subscribe to real-time updates
+          setupRealtimeSubscription(currentEventId);
         }
       } catch (error) {
         console.error("[Player] Failed to load tickets:", error);
@@ -348,7 +322,6 @@ export default function PlayerPage() {
     try {
       const event = await eventService.getEventById(eventId);
       setActiveEvent({ ...event });
-      setEventMode(event.status === "finished" ? "finished" : "active");
       setCurrentDrawnNumber(event.current_drawn_number);
       
       // Handle winner
@@ -359,14 +332,12 @@ export default function PlayerPage() {
         setWinnerSerial(null);
       }
 
-      // Create/Get session (only for active events)
-      if (event.status === "active") {
-        const session = await answerService.getOrCreateSession(eventId);
-        setSessionId(session.id);
-      }
+      // Create/Get session
+      const session = await answerService.getOrCreateSession(eventId);
+      setSessionId(session.id);
 
-      // Load current question (only for active events)
-      if (event.status === "active" && event.current_drawn_number) {
+      // Load current question
+      if (event.current_drawn_number) {
         const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
         if (questionData && questionData.questions) {
           setCurrentQuestion({
@@ -379,9 +350,6 @@ export default function PlayerPage() {
           const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
           setTimeLeft(remaining);
         }
-      } else {
-        setCurrentQuestion(null);
-        setTimeLeft(0);
       }
 
       // Load ALL drawn questions correct answers
@@ -392,7 +360,7 @@ export default function PlayerPage() {
         console.error("Failed to load drawn questions map:", err);
       }
 
-      // Load answers for ALL tickets using SERIAL_NUMBER as key
+      // CRITICAL: Load answers for ALL tickets using SERIAL_NUMBER as key
       const allAnswers: Answer[] = [];
       for (const ticket of loadedTickets) {
         console.log(`[PLAYER] Loading answers for ticket: ${ticket.serial_number}`);
@@ -409,7 +377,7 @@ export default function PlayerPage() {
     }
   };
 
-  // Setup realtime subscription (only for active events)
+  // Setup realtime subscription
   const setupRealtimeSubscription = (eventId: string) => {
     let reconnectAttempts = 0;
     const maxReconnects = 10;
@@ -433,7 +401,6 @@ export default function PlayerPage() {
             const updatedEvent = payload.new as Event;
             
             setActiveEvent({ ...updatedEvent });
-            setEventMode(updatedEvent.status === "finished" ? "finished" : "active");
             setCurrentDrawnNumber(updatedEvent.current_drawn_number);
             
             // Update winner
@@ -445,8 +412,8 @@ export default function PlayerPage() {
               setWinnerSerial(null);
             }
 
-            // Load new question (only if still active)
-            if (updatedEvent.status === "active" && updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
+            // Load new question
+            if (updatedEvent.current_drawn_number && updatedEvent.question_open_until) {
               const questionData = await eventService.getQuestionForNumber(eventId, updatedEvent.current_drawn_number);
               if (questionData && questionData.questions) {
                 setCurrentQuestion({
@@ -491,7 +458,7 @@ export default function PlayerPage() {
     };
   };
 
-  // Fallback polling (only for active events)
+  // Fallback polling
   useEffect(() => {
     if (!activeEvent || activeEvent.status !== "active" || !tickets.length) return;
 
@@ -513,7 +480,7 @@ export default function PlayerPage() {
     return () => clearInterval(pollInterval);
   }, [activeEvent?.id, activeEvent?.status, currentDrawnNumber, tickets.length]);
 
-  // Resync on window focus (only for active events)
+  // Resync on window focus
   useEffect(() => {
     if (!activeEvent || !tickets.length) return;
 
@@ -536,18 +503,18 @@ export default function PlayerPage() {
     };
   }, [activeEvent?.id, tickets]);
 
-  // Countdown timer (only for active events)
+  // Countdown timer
   useEffect(() => {
-    if (timeLeft <= 0 || eventMode !== "active") return;
+    if (timeLeft <= 0) return;
     const timer = setInterval(() => {
       setTimeLeft(prev => Math.max(0, prev - 1));
     }, 1000);
     return () => clearInterval(timer);
-  }, [timeLeft, eventMode]);
+  }, [timeLeft]);
 
-  // Handle answer submission (only for active events)
+  // Handle answer submission
   const handleAnswer = async (answer: boolean) => {
-    if (eventMode !== "active" || !focusedTicketId || !currentDrawnNumber || !currentQuestion || timeLeft <= 0 || submitting) return;
+    if (!focusedTicketId || !currentDrawnNumber || !currentQuestion || timeLeft <= 0 || submitting) return;
 
     const focusedTicket = tickets.find(t => t.id === focusedTicketId);
     if (!focusedTicket) return;
@@ -598,123 +565,6 @@ export default function PlayerPage() {
     }
   };
 
-  // Handle add ticket
-  const handleAddTicket = async () => {
-    if (!newTicketSerial.trim() || !activeEvent) return;
-
-    setAddingTicket(true);
-    try {
-      // Fetch ticket by serial
-      const ticket = await ticketService.getTicketBySerial(newTicketSerial.trim());
-      
-      if (!ticket) {
-        toast({
-          title: "Tiket nije pronađen",
-          description: "Provjerite serijski broj i pokušajte ponovo.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Check if ticket belongs to the same event
-      if (ticket.event_id !== activeEvent.id) {
-        toast({
-          title: "Pogrešan event",
-          description: "Ovaj tiket pripada drugom eventu.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Check if ticket is already added
-      if (tickets.some(t => t.serial_number === ticket.serial_number)) {
-        toast({
-          title: "Tiket već dodan",
-          description: "Ovaj tiket je već u vašoj listi.",
-          variant: "destructive"
-        });
-        setAddingTicket(false);
-        return;
-      }
-
-      // Add ticket to localStorage
-      addStoredFreeTicket(activeEvent.id, ticket.serial_number);
-
-      // Add ticket to state
-      const updatedTickets = [...tickets, ticket];
-      setTickets(updatedTickets);
-
-      // Load answers for new ticket
-      const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
-      setAnswers(prev => [...prev, ...ticketAnswers]);
-
-      // Set as focused ticket
-      setFocusedTicketId(ticket.id);
-
-      toast({
-        title: "✅ Tiket dodan",
-        description: `Tiket ${ticket.serial_number} uspješno dodan!`
-      });
-
-      // Close modal and reset input
-      setAddTicketOpen(false);
-      setNewTicketSerial("");
-    } catch (error) {
-      console.error("[Player] Failed to add ticket:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri dodavanju tiketa.",
-        variant: "destructive"
-      });
-    } finally {
-      setAddingTicket(false);
-    }
-  };
-
-  // Check for new active event
-  const handleCheckNewEvent = async () => {
-    if (!activeEvent) return;
-    
-    setCheckingNewEvent(true);
-    try {
-      const { event: newEvent, mode } = await eventService.getActiveOrLastFinished();
-      
-      if (mode === "active" && newEvent.id !== activeEvent.id) {
-        // New active event found
-        toast({
-          title: "🎉 Novi event pokrenut!",
-          description: `Event "${newEvent.name}" je aktivan. Želite li preuzeti novi tiket?`
-        });
-        
-        // Redirect to /play to get new ticket
-        router.push("/play");
-      } else {
-        toast({
-          title: "Nema novog eventa",
-          description: "Trenutno nema aktivnog eventa. Pokušajte kasnije.",
-          variant: "default"
-        });
-      }
-    } catch (error) {
-      console.error("[Player] Failed to check for new event:", error);
-      toast({
-        title: "Greška",
-        description: "Greška pri provjeri novog eventa.",
-        variant: "destructive"
-      });
-    } finally {
-      setCheckingNewEvent(false);
-    }
-  };
-
-  // Handle ticket detail view
-  const handleViewTicketDetail = (ticket: TicketData) => {
-    setSelectedTicketForDetail(ticket);
-    setTicketDetailOpen(true);
-  };
-
   // CRITICAL: Normalize all numbers and build global answersMap
   const drawnNumbers = (activeEvent?.drawn_numbers || []).map(Number);
   const globalAnswersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
@@ -736,14 +586,13 @@ export default function PlayerPage() {
 
   console.log(`[PLAYER] Global answersMap size: ${globalAnswersMap.size}`, 
     `Drawn: ${drawnNumbers.length}`,
-    `Total answers: ${answers.length}`,
-    `Mode: ${eventMode}`);
+    `Total answers: ${answers.length}`);
 
-  // Compute GLOBAL stats (aggregate across ALL tickets)
-  const globalStats = computeGlobalStats(tickets, drawnNumbers, globalAnswersMap);
+  // Compute GLOBAL stats
+  const globalStats = computeGlobalStats(drawnNumbers, answers, correctAnswersMap);
 
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
-  const canAddTicket = activeEvent && eventMode === "active" && tickets.length < 4;
+  const canAddTicket = activeEvent && tickets.length < 4;
 
   if (loading) {
     return (
@@ -778,232 +627,43 @@ export default function PlayerPage() {
     );
   }
 
-  // Winner screen (only if user has winning ticket)
-  if (winnerSerial && tickets.some(t => t.serial_number === winnerSerial)) {
+  // Winner screen
+  if (winnerSerial) {
+    const isWinner = tickets.some(t => t.serial_number === winnerSerial);
     return (
       <>
-        <SEO title="POBJEDNIK! 🎉" />
+        <SEO title={isWinner ? "POBJEDNIK! 🎉" : "Event završen"} />
         <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
           <Card className="w-full max-w-2xl">
             <CardHeader className="text-center space-y-4">
               <Trophy className="h-24 w-24 mx-auto text-yellow-500" />
-              <CardTitle className="text-4xl font-bold">🎉 ČESTITAMO! 🎉</CardTitle>
-              <CardDescription className="text-xl">TI SI POBJEDNIK!</CardDescription>
+              <CardTitle className="text-4xl font-bold">
+                {isWinner ? "🎉 ČESTITAMO! 🎉" : "Event završen"}
+              </CardTitle>
+              <CardDescription className="text-xl">
+                {isWinner ? "TI SI POBJEDNIK!" : `Pobjednik: ${winnerSerial}`}
+              </CardDescription>
             </CardHeader>
-            <CardContent className="text-center space-y-6">
-              <p className="text-2xl font-bold">Pobjednički tiket: {winnerSerial}</p>
-              
-              {/* Show global stats summary */}
-              <div className="p-4 bg-muted rounded-lg">
-                <p className="text-sm text-muted-foreground mb-2">Tvoja statistika:</p>
-                <div className="grid grid-cols-3 gap-2 text-sm">
-                  <div>
-                    <p className="font-semibold">{globalStats.correctCount}</p>
-                    <p className="text-muted-foreground">Točno</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold">{globalStats.incorrectCount}</p>
-                    <p className="text-muted-foreground">Netočno</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold">{globalStats.accuracyPct}%</p>
-                    <p className="text-muted-foreground">Točnost</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* All user tickets section */}
-              <div className="mt-6 p-4 bg-muted rounded-lg text-left">
-                <p className="text-sm font-semibold mb-3">Svi tvoji tiketi ({tickets.length})</p>
-                <div className="flex flex-wrap gap-2">
-                  {tickets.map((ticket) => (
-                    <Badge
-                      key={ticket.id}
-                      variant={ticket.serial_number === winnerSerial ? "default" : "outline"}
-                      className={cn(
-                        "cursor-pointer hover:opacity-80 transition-opacity",
-                        ticket.serial_number === winnerSerial && "bg-yellow-500 text-black"
-                      )}
-                      onClick={() => handleViewTicketDetail(ticket)}
-                    >
-                      {ticket.serial_number === winnerSerial && "🏆 "}
-                      {ticket.serial_number}
-                    </Badge>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">Klikni na tiket za pregled detalja</p>
-              </div>
-
-              <div className="flex gap-2 mt-6">
-                <Button 
-                  onClick={() => {
-                    // Stay on page to show results
-                    window.scrollTo({ top: 0, behavior: "smooth" });
-                  }} 
-                  variant="outline" 
-                  size="lg"
-                  className="flex-1"
-                >
-                  Pregledaj tikete
-                </Button>
-                <Button 
-                  onClick={() => router.push("/play")} 
-                  size="lg"
-                  className="flex-1"
-                >
-                  Nova igra
-                </Button>
-              </div>
+            <CardContent className="text-center space-y-4">
+              {isWinner && (
+                <p className="text-2xl font-bold">Tvoj tiket: {winnerSerial}</p>
+              )}
+              <Button onClick={() => router.push("/play")} variant="outline" size="lg">
+                Nova igra
+              </Button>
             </CardContent>
           </Card>
         </div>
-
-        {/* Ticket Detail Modal */}
-        <Dialog open={ticketDetailOpen} onOpenChange={setTicketDetailOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Pregled tiketa</DialogTitle>
-              <DialogDescription>
-                {selectedTicketForDetail?.serial_number}
-                {selectedTicketForDetail?.serial_number === winnerSerial && " 🏆 DOBITNIK"}
-              </DialogDescription>
-            </DialogHeader>
-            {selectedTicketForDetail && (
-              <div className="space-y-4">
-                {/* Stats */}
-                {(() => {
-                  const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
-                  const ticketStats = computeTicketStats(
-                    ticketNumbers,
-                    drawnNumbers,
-                    globalAnswersMap,
-                    selectedTicketForDetail.serial_number
-                  );
-
-                  return (
-                    <div className="p-4 bg-muted rounded-lg">
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div>
-                          <p className="text-muted-foreground">Izvučeno</p>
-                          <p className="font-bold">{ticketStats.drawnOnTicketCount}/15</p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground">Točnost</p>
-                          <p className="font-bold">{ticketStats.accuracyPct}%</p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground">Točno</p>
-                          <p className="font-bold text-green-600">{ticketStats.correctOnTicket}</p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground">Netočno</p>
-                          <p className="font-bold text-red-600">{ticketStats.incorrectOnTicket}</p>
-                        </div>
-                        <div>
-                          <p className="text-muted-foreground">Propušteno</p>
-                          <p className="font-bold">{ticketStats.missedOnTicket}</p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {/* Grid */}
-                <div className="grid grid-cols-5 gap-2">
-                  {selectedTicketForDetail.ticket_questions
-                    .sort((a, b) => a.question_number - b.question_number)
-                    .map((tq) => {
-                      const qNum = Number(tq.question_number);
-                      const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
-                      
-                      let bgColor = "bg-gray-200 dark:bg-gray-700";
-                      let textColor = "text-gray-900 dark:text-gray-100";
-                      
-                      switch (cellState) {
-                        case "correct":
-                          bgColor = "bg-green-500";
-                          textColor = "text-white";
-                          break;
-                        case "wrong":
-                          bgColor = "bg-red-500";
-                          textColor = "text-white";
-                          break;
-                        case "missed":
-                          bgColor = "bg-gray-400 dark:bg-gray-600";
-                          textColor = "text-white";
-                          break;
-                        case "not-drawn":
-                          // Keep default
-                          break;
-                      }
-                      
-                      return (
-                        <div
-                          key={qNum}
-                          className={cn(
-                            "aspect-square flex items-center justify-center rounded text-xs font-bold",
-                            bgColor,
-                            textColor
-                          )}
-                        >
-                          {qNum}
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
       </>
     );
   }
 
   return (
     <>
-      <SEO title={eventMode === "finished" ? "Rezultati - Pitalica Skitalica" : "Igrač - Pitalica Skitalica"} />
+      <SEO title="Igrač - Pitalica Skitalica" />
       <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4">
         <div className="max-w-6xl mx-auto space-y-3">
           
-          {/* EVENT STATUS BANNER (FINISHED MODE) */}
-          {eventMode === "finished" && (
-            <Card className="bg-gradient-to-r from-blue-500 to-purple-600 text-white border-none">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Trophy className="h-6 w-6" />
-                    <div>
-                      <p className="font-bold text-lg">Event je završen</p>
-                      <p className="text-sm text-white/80">
-                        {winnerSerial 
-                          ? `Pobjednik: ${winnerSerial}` 
-                          : "Možeš pregledati rezultate"}
-                      </p>
-                    </div>
-                  </div>
-                  <Button 
-                    variant="secondary" 
-                    size="sm"
-                    onClick={handleCheckNewEvent}
-                    disabled={checkingNewEvent}
-                  >
-                    {checkingNewEvent ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Provjeravam...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Provjeri novi event
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
           {/* GLOBAL STATS HEADER */}
           {focusedTicket && (
             <Card className="bg-white/95 backdrop-blur">
@@ -1017,16 +677,9 @@ export default function PlayerPage() {
                       {activeEvent?.name || "Event"}
                     </CardDescription>
                   </div>
-                  <div className="flex gap-2">
-                    <Badge variant="outline" className="text-xs sm:text-sm">
-                      {tickets.length} / 4 tiketa
-                    </Badge>
-                    {eventMode === "finished" && (
-                      <Badge variant="secondary" className="text-xs sm:text-sm">
-                        Završeno
-                      </Badge>
-                    )}
-                  </div>
+                  <Badge variant="outline" className="text-xs sm:text-sm">
+                    {tickets.length} / 4 tiketa
+                  </Badge>
                 </div>
 
                 {/* GLOBAL STATS - 6 METRICS (2 rows x 3 cols) */}
@@ -1038,7 +691,7 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredCount}/{globalStats.totalDrawn}</p>
                   </div>
                   
                   <div>
@@ -1100,7 +753,7 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* PER-TICKET STATS - SAME FOR ALL TICKETS */}
+                    {/* PER-TICKET STATS - SAME FOR ALL 4 TICKETS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
                         <span>Izvučeno: {ticketStats.drawnOnTicketCount}/15</span>
@@ -1118,8 +771,8 @@ export default function PlayerPage() {
                       </div>
                     )}
                     
-                    {/* Current question status (only in active mode) */}
-                    {eventMode === "active" && isOnThisTicket && currentDrawnNumber !== null && (
+                    {/* Current question status */}
+                    {isOnThisTicket && currentDrawnNumber !== null && (
                       <div className="mt-2">
                         {hasAnsweredCurrent ? (
                           <Badge variant="secondary">
@@ -1141,7 +794,7 @@ export default function PlayerPage() {
                         .sort((a, b) => a.question_number - b.question_number)
                         .map((tq) => {
                           const qNum = Number(tq.question_number);
-                          const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                          const isCurrent = currentDrawnNumber === qNum;
                           
                           // CRITICAL: Use SAME function for cell state
                           const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
@@ -1187,83 +840,24 @@ export default function PlayerPage() {
               );
             })}
 
-            {/* Add ticket card (only in active mode) */}
+            {/* Add ticket card */}
             {canAddTicket && (
-              <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
-                <DialogTrigger asChild>
-                  <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed">
-                    <CardContent className="flex flex-col items-center justify-center h-full py-8">
-                      <Plus className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
-                      <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
-                      <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
-                    </CardContent>
-                  </Card>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Dodaj novi tiket</DialogTitle>
-                    <DialogDescription>
-                      Unesite serijski broj tiketa za dodavanje u igru.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="serial">Serijski broj tiketa</Label>
-                      <Input
-                        id="serial"
-                        placeholder="Npr. T-A7F3K9M2"
-                        value={newTicketSerial}
-                        onChange={(e) => setNewTicketSerial(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !addingTicket) {
-                            handleAddTicket();
-                          }
-                        }}
-                        disabled={addingTicket}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setAddTicketOpen(false);
-                        setNewTicketSerial("");
-                      }}
-                      disabled={addingTicket}
-                      className="flex-1"
-                    >
-                      Odustani
-                    </Button>
-                    <Button
-                      onClick={handleAddTicket}
-                      disabled={addingTicket || !newTicketSerial.trim()}
-                      className="flex-1"
-                    >
-                      {addingTicket ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Dodajem...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Dodaj
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <Card className="cursor-pointer bg-white/60 hover:bg-white/80 transition-all border-2 border-dashed" onClick={() => router.push("/play")}>
+                <CardContent className="flex flex-col items-center justify-center h-full py-8">
+                  <Ticket className="h-8 w-8 sm:h-12 sm:w-12 text-purple-600 mb-2" />
+                  <p className="text-xs sm:text-sm font-semibold text-center">Dodaj tiket</p>
+                  <p className="text-xs text-muted-foreground text-center mt-1">({tickets.length}/4)</p>
+                </CardContent>
+              </Card>
             )}
           </div>
 
-          {tickets.length >= 4 && eventMode === "active" && (
+          {tickets.length >= 4 && (
             <p className="text-center text-xs text-white/80">Limit 4 tiketa (promo faza)</p>
           )}
 
-          {/* Current question (only in active mode) */}
-          {eventMode === "active" && focusedTicket && currentQuestion && currentDrawnNumber && (
+          {/* Current question */}
+          {focusedTicket && currentQuestion && currentDrawnNumber && (
             <Card className="bg-white/95 backdrop-blur">
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -1351,29 +945,11 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* Waiting message (only in active mode) */}
-          {eventMode === "active" && !currentQuestion && (
+          {!currentQuestion && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
                 <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-purple-600" />
                 <p className="text-lg text-muted-foreground">Čekamo sljedeće pitanje...</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Results mode - no active question */}
-          {eventMode === "finished" && (
-            <Card className="bg-white/80 backdrop-blur">
-              <CardContent className="text-center py-12">
-                <Trophy className="h-16 w-16 mx-auto mb-4 text-yellow-500" />
-                <p className="text-xl font-bold mb-2">Rezultati za {activeEvent?.name}</p>
-                <p className="text-muted-foreground mb-6">
-                  Izvučeno {drawnNumbers.length} od 90 brojeva
-                </p>
-                <Button onClick={() => router.push("/play")} size="lg">
-                  <Ticket className="mr-2 h-5 w-5" />
-                  Preuzmi tiket za novi event
-                </Button>
               </CardContent>
             </Card>
           )}
