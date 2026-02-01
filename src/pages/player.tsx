@@ -693,6 +693,11 @@ export default function PlayerPage() {
       };
       setAnswers(prev => [...prev, newAnswer]);
 
+      // Refresh global stats from server to ensure accuracy
+      computeEventLevelGlobalStats(focusedTicket.event_id, tickets.map(t => t.serial_number))
+        .then(stats => setGlobalStats(stats))
+        .catch(err => console.error("[Player] Failed to update global stats:", err));
+
       const isCorrect = normalizeAnswer(answer) === normalizeAnswer(currentQuestion.correct_answer);
       console.log("[Player] ✅ Answer submitted:", isCorrect ? "CORRECT" : "INCORRECT");
       
@@ -867,9 +872,8 @@ export default function PlayerPage() {
     ticketsCount: tickets.length
   });
 
-  // Compute GLOBAL stats (aggregate across ALL tickets)
-  const globalStats = computeGlobalStats(tickets, drawnNumbers, globalAnswersMap);
-
+  // Global stats are now managed via state (computeEventLevelGlobalStats)
+  
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
   const canAddTicket = activeEvent && eventMode === "active" && tickets.length < 4;
 
