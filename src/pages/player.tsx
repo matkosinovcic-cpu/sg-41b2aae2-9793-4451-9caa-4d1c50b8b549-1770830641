@@ -266,6 +266,10 @@ export default function PlayerPage() {
   const [newTicketSerial, setNewTicketSerial] = useState("");
   const [addingTicket, setAddingTicket] = useState(false);
 
+  // Ticket detail modal state (for win screen)
+  const [ticketDetailOpen, setTicketDetailOpen] = useState(false);
+  const [selectedTicketForDetail, setSelectedTicketForDetail] = useState<TicketData | null>(null);
+
   // Load tickets from URL or localStorage
   useEffect(() => {
     const loadTickets = async () => {
@@ -710,6 +714,12 @@ export default function PlayerPage() {
     }
   };
 
+  // Handle ticket detail view
+  const handleViewTicketDetail = (ticket: TicketData) => {
+    setSelectedTicketForDetail(ticket);
+    setTicketDetailOpen(true);
+  };
+
   // CRITICAL: Normalize all numbers and build global answersMap
   const drawnNumbers = (activeEvent?.drawn_numbers || []).map(Number);
   const globalAnswersMap = new Map<number, { answer: boolean | null; isCorrect: boolean }>();
@@ -785,11 +795,11 @@ export default function PlayerPage() {
               <CardTitle className="text-4xl font-bold">🎉 ČESTITAMO! 🎉</CardTitle>
               <CardDescription className="text-xl">TI SI POBJEDNIK!</CardDescription>
             </CardHeader>
-            <CardContent className="text-center space-y-4">
-              <p className="text-2xl font-bold">Tvoj tiket: {winnerSerial}</p>
+            <CardContent className="text-center space-y-6">
+              <p className="text-2xl font-bold">Pobjednički tiket: {winnerSerial}</p>
               
               {/* Show stats summary */}
-              <div className="mt-6 p-4 bg-muted rounded-lg">
+              <div className="p-4 bg-muted rounded-lg">
                 <p className="text-sm text-muted-foreground mb-2">Tvoja statistika:</p>
                 <div className="grid grid-cols-3 gap-2 text-sm">
                   <div>
@@ -805,6 +815,28 @@ export default function PlayerPage() {
                     <p className="text-muted-foreground">Točnost</p>
                   </div>
                 </div>
+              </div>
+
+              {/* All user tickets section */}
+              <div className="mt-6 p-4 bg-muted rounded-lg text-left">
+                <p className="text-sm font-semibold mb-3">Svi tvoji tiketi ({tickets.length})</p>
+                <div className="flex flex-wrap gap-2">
+                  {tickets.map((ticket) => (
+                    <Badge
+                      key={ticket.id}
+                      variant={ticket.serial_number === winnerSerial ? "default" : "outline"}
+                      className={cn(
+                        "cursor-pointer hover:opacity-80 transition-opacity",
+                        ticket.serial_number === winnerSerial && "bg-yellow-500 text-black"
+                      )}
+                      onClick={() => handleViewTicketDetail(ticket)}
+                    >
+                      {ticket.serial_number === winnerSerial && "🏆 "}
+                      {ticket.serial_number}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">Klikni na tiket za pregled detalja</p>
               </div>
 
               <div className="flex gap-2 mt-6">
@@ -830,6 +862,104 @@ export default function PlayerPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Ticket Detail Modal */}
+        <Dialog open={ticketDetailOpen} onOpenChange={setTicketDetailOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Pregled tiketa</DialogTitle>
+              <DialogDescription>
+                {selectedTicketForDetail?.serial_number}
+                {selectedTicketForDetail?.serial_number === winnerSerial && " 🏆 DOBITNIK"}
+              </DialogDescription>
+            </DialogHeader>
+            {selectedTicketForDetail && (
+              <div className="space-y-4">
+                {/* Stats */}
+                {(() => {
+                  const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
+                  const ticketStats = computeTicketStats(
+                    ticketNumbers,
+                    drawnNumbers,
+                    globalAnswersMap,
+                    selectedTicketForDetail.serial_number
+                  );
+
+                  return (
+                    <div className="p-4 bg-muted rounded-lg">
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-muted-foreground">Izvučeno</p>
+                          <p className="font-bold">{ticketStats.drawnOnTicketCount}/15</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Točnost</p>
+                          <p className="font-bold">{ticketStats.accuracyPct}%</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Točno</p>
+                          <p className="font-bold text-green-600">{ticketStats.correctOnTicket}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Netočno</p>
+                          <p className="font-bold text-red-600">{ticketStats.incorrectOnTicket}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Propušteno</p>
+                          <p className="font-bold">{ticketStats.missedOnTicket}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Grid */}
+                <div className="grid grid-cols-5 gap-2">
+                  {selectedTicketForDetail.ticket_questions
+                    .sort((a, b) => a.question_number - b.question_number)
+                    .map((tq) => {
+                      const qNum = Number(tq.question_number);
+                      const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                      
+                      let bgColor = "bg-gray-200 dark:bg-gray-700";
+                      let textColor = "text-gray-900 dark:text-gray-100";
+                      
+                      switch (cellState) {
+                        case "correct":
+                          bgColor = "bg-green-500";
+                          textColor = "text-white";
+                          break;
+                        case "wrong":
+                          bgColor = "bg-red-500";
+                          textColor = "text-white";
+                          break;
+                        case "missed":
+                          bgColor = "bg-gray-400 dark:bg-gray-600";
+                          textColor = "text-white";
+                          break;
+                        case "not-drawn":
+                          // Keep default
+                          break;
+                      }
+                      
+                      return (
+                        <div
+                          key={qNum}
+                          className={cn(
+                            "aspect-square flex items-center justify-center rounded text-xs font-bold",
+                            bgColor,
+                            textColor
+                          )}
+                        >
+                          {qNum}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </>
     );
   }
