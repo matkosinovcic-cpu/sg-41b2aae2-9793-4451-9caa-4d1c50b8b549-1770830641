@@ -270,7 +270,11 @@ export default function PlayerPage() {
           const ticket = await ticketService.getTicketBySerial(ticketSerial);
           if (ticket) {
             eventId = ticket.event_id;
-            initialTicket = ticket;
+            // Fix: Ensure ticket matches TicketData interface (ticket_questions required)
+            initialTicket = {
+              ...ticket,
+              ticket_questions: ticket.ticket_questions || []
+            };
           }
         }
 
@@ -395,7 +399,7 @@ export default function PlayerPage() {
       // Load ALL drawn questions correct answers
       try {
         console.log("[PLAYER] 📚 Loading drawn questions map...");
-        const answersMap = await eventService.getDrawnQuestions(event.id);
+        const answersMap = await eventService.getDrawnQuestions(eventId);
         setCorrectAnswersMap(answersMap);
         console.log("[PLAYER] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
         
