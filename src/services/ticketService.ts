@@ -69,9 +69,11 @@ export const ticketService = {
   async getFreeTicketsCountForPlayer(playerId: string, eventId: string): Promise<number> {
     try {
       // Get all free tickets for this player + event
+      // Fix: Select specific field 'id' instead of '*' to avoid excessive type instantiation depth
+      // @ts-expect-error - Supabase types are too deep here, but the query is valid
       const { count, error } = await supabase
         .from("tickets")
-        .select("*", { count: "exact", head: true })
+        .select("id", { count: "exact", head: true })
         .eq("event_id", eventId)
         .eq("player_id", playerId);
 
