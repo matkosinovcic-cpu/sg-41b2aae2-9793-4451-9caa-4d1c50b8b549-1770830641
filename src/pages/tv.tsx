@@ -28,7 +28,6 @@ interface TTSSettings {
   rate: number;
   pitch: number;
   volume: number;
-  funMode: boolean; // NEW: Enable fun interjections
 }
 
 const DEFAULT_TTS_SETTINGS: TTSSettings = {
@@ -36,96 +35,7 @@ const DEFAULT_TTS_SETTINGS: TTSSettings = {
   voiceURI: "",
   rate: 1.0,
   pitch: 1.0,
-  volume: 1.0,
-  funMode: true // Enabled by default for fun!
-};
-
-// Fun interjections BEFORE the question
-const INTERJECTIONS_BEFORE = [
-  "Uff... ",
-  "E sad... ",
-  "Pa... ",
-  "Hmm... ",
-  "Ajmo... ",
-  "Dakle... ",
-  "Dobro... ",
-  "Znači... ",
-  "Evo... ",
-  "E vidiš... ",
-  "A sada... ",
-  "I sad... "
-];
-
-// Fun interjections AFTER the question
-const INTERJECTIONS_AFTER = [
-  " ...šta?",
-  " ...ha?",
-  " ...*kašlje*",
-  " ...*podrigne*",
-  " ...*zijev*",
-  " ...eee.",
-  " ...pa dobro.",
-  " ...ajde.",
-  " ...he he.",
-  " ...ups.",
-  " ...zaboravih.",
-  " ...pardon."
-];
-
-// Helper function to get random interjection
-const getRandomInterjection = (list: string[]): string => {
-  return list[Math.floor(Math.random() * list.length)];
-};
-
-// Helper function to convert number to Croatian text (main cardinal number)
-const numberToText = (num: number): string => {
-  const numbers: { [key: number]: string } = {
-    1: "jedan",
-    2: "dva",
-    3: "tri",
-    4: "četiri",
-    5: "pet",
-    6: "šest",
-    7: "sedam",
-    8: "osam",
-    9: "devet",
-    10: "deset",
-    11: "jedanaest",
-    12: "dvanaest",
-    13: "trinaest",
-    14: "četrnaest",
-    15: "petnaest",
-    16: "šesnaest",
-    17: "sedamnaest",
-    18: "osamnaest",
-    19: "devetnaest",
-    20: "dvadeset",
-    30: "trideset",
-    40: "četrdeset",
-    50: "pedeset",
-    60: "šezdeset",
-    70: "sedamdeset",
-    80: "osamdeset",
-    90: "devedeset"
-  };
-
-  if (num <= 20) {
-    return numbers[num] || num.toString();
-  }
-
-  if (num < 100) {
-    const tens = Math.floor(num / 10) * 10;
-    const ones = num % 10;
-    
-    if (ones === 0) {
-      return numbers[tens];
-    }
-    
-    return `${numbers[tens]} ${numbers[ones]}`;
-  }
-
-  // For numbers >= 100, just return the number (shouldn't happen in 1-90 range)
-  return num.toString();
+  volume: 1.0
 };
 
 export default function TVScreen() {
@@ -309,15 +219,7 @@ export default function TVScreen() {
     console.log("[TTS] 🧪 TEST BUTTON CLICKED");
     console.log("[TTS] 🧪 Current settings:", ttsSettings);
     console.log("[TTS] 🧪 Available voices:", availableVoices.length);
-    
-    // Test with fun interjection
-    let testText = "Pitanje broj jedan. Je li more hladno?";
-    if (ttsSettings.funMode && Math.random() < 0.7) {
-      const before = getRandomInterjection(INTERJECTIONS_BEFORE);
-      testText = before + testText;
-    }
-    
-    speak(testText);
+    speak("Pitanje broj 1. Je li more hladno?");
   };
 
   // TTS effect - speak when question changes
@@ -360,29 +262,7 @@ export default function TVScreen() {
     // Debounce 500ms
     console.log("[TTS] ⏱️ Setting debounce timeout (500ms)...");
     speakTimeoutRef.current = setTimeout(() => {
-      // Convert number to text for proper pronunciation
-      const numberAsText = numberToText(event.current_drawn_number!);
-      
-      // Build text to speak
-      let textToSpeak = `Pitanje broj ${numberAsText}. ${questionText}`;
-      
-      // Add fun interjections if enabled
-      if (ttsSettings.funMode) {
-        // 60% chance to add interjection BEFORE
-        if (Math.random() < 0.6) {
-          const before = getRandomInterjection(INTERJECTIONS_BEFORE);
-          textToSpeak = before + textToSpeak;
-          console.log("[TTS] 🎭 Added BEFORE interjection:", before.trim());
-        }
-        
-        // 40% chance to add interjection AFTER
-        if (Math.random() < 0.4) {
-          const after = getRandomInterjection(INTERJECTIONS_AFTER);
-          textToSpeak = textToSpeak + after;
-          console.log("[TTS] 🎭 Added AFTER interjection:", after.trim());
-        }
-      }
-      
+      const textToSpeak = `Pitanje broj ${event.current_drawn_number}. ${questionText}`;
       console.log("[TTS] 🎬 Debounce complete, speaking:", textToSpeak);
       speak(textToSpeak);
       setLastSpokenQuestionId(currentQuestion.id);
@@ -1001,24 +881,6 @@ export default function TVScreen() {
                     />
                   </div>
                   
-                  {/* Fun Mode Toggle */}
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="tts-fun-mode" className="text-base">Zabavni mod 🎭</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Dodaje uzdahe, kašalj, podrigivanja...
-                      </p>
-                    </div>
-                    <Switch 
-                      id="tts-fun-mode"
-                      checked={ttsSettings.funMode}
-                      onCheckedChange={(checked) => {
-                        console.log("[TTS] 🎭 Fun Mode switched to:", checked);
-                        setTtsSettings(prev => ({ ...prev, funMode: checked }));
-                      }}
-                    />
-                  </div>
-                  
                   {/* Voice Selection */}
                   <div className="space-y-2">
                     <Label htmlFor="tts-voice">Glas</Label>
@@ -1094,7 +956,6 @@ export default function TVScreen() {
                   {/* Debug Info */}
                   <div className="text-xs text-muted-foreground space-y-1">
                     <p>✅ Enabled: {ttsSettings.enabled ? "DA" : "NE"}</p>
-                    <p>🎭 Fun Mode: {ttsSettings.funMode ? "DA" : "NE"}</p>
                     <p>🎙️ Voices: {availableVoices.length} available</p>
                     <p>🎤 Current: {availableVoices.find(v => v.voiceURI === ttsSettings.voiceURI)?.name || "None"}</p>
                   </div>
