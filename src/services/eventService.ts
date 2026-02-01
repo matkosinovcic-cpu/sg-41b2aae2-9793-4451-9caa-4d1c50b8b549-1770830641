@@ -158,7 +158,10 @@ export const eventService = {
     const tickets = [];
     
     for (let i = 0; i < count; i++) {
-      const serialNumber = `T${Date.now()}-${i.toString().padStart(4, "0")}`;
+      // Generate truly unique serial number with timestamp + random component + index
+      const timestamp = Date.now();
+      const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, "0");
+      const serialNumber = `T${timestamp}-${randomPart}-${i.toString().padStart(4, "0")}`;
       
       const numbers = new Set<number>();
       while (numbers.size < 15) {
