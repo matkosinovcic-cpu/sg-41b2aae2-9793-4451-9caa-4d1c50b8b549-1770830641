@@ -473,6 +473,9 @@ export default function PlayerPage() {
           
           setAllDrawnQuestions(questionsData.sort((a, b) => a.number - b.number));
           console.log("[PLAYER] 📖 Loaded", questionsData.length, "questions for review");
+        } else {
+          // Clear allDrawnQuestions if event is active
+          setAllDrawnQuestions([]);
         }
       } catch (err) {
         console.error("[PLAYER] ❌ Failed to load drawn questions map:", err);

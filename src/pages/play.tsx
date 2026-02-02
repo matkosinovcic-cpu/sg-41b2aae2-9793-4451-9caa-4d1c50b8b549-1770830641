@@ -41,6 +41,7 @@ export default function PlayPage() {
   const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   const [freeTicketCount, setFreeTicketCount] = useState(0);
   const [limitReached, setLimitReached] = useState(false);
 
@@ -74,35 +75,59 @@ export default function PlayPage() {
     loadActiveEvent();
   }, []);
 
-  // Handle free ticket creation
+  // Handle free ticket creation with mobile-friendly delayed redirect
   const handleGetFreeTicket = async () => {
     if (!activeEvent) return;
     if (limitReached) return;
 
     setCreating(true);
+    
     try {
-      // Create ticket in database
+      console.log("[Play] 🎫 Creating free ticket for event:", activeEvent.id);
+      
+      // STEP 1: Create ticket in database and WAIT for response
       const ticket = await ticketService.createFreeTicket(activeEvent.id);
-
-      // Store in localStorage for this event
-      storeFreeTicket(activeEvent.id, ticket.serial_number);
-
-      toast({
-        title: "✅ Tiket kreiran!",
-        description: `Tvoj tiket: ${ticket.serial_number}`
+      
+      console.log("[Play] ✅ Ticket created successfully:", {
+        serial: ticket.serial_number,
+        ticket_id: ticket.id,
+        event_id: activeEvent.id
       });
 
-      // Redirect to player with newly created ticket
-      router.push(`/player?ticket=${ticket.serial_number}`);
+      // STEP 2: Store in localStorage for this event
+      storeFreeTicket(activeEvent.id, ticket.serial_number);
+
+      // STEP 3: Show success message
+      toast({
+        title: "✅ Tiket kreiran!",
+        description: `Tvoj tiket: ${ticket.serial_number}`,
+        duration: 2000
+      });
+
+      // STEP 4: Set redirecting state
+      setRedirecting(true);
+      setCreating(false);
+
+      // STEP 5: Delayed redirect (mobile-friendly)
+      // Using setTimeout ensures navigation happens OUTSIDE the async block
+      setTimeout(() => {
+        console.log("[Play] 🔄 Redirecting to player with ticket:", ticket.serial_number);
+        router.push(`/player?ticket=${ticket.serial_number}`);
+      }, 300); // 300ms delay for mobile browsers
+
     } catch (error) {
-      console.error("[Play] Failed to create free ticket:", error);
+      console.error("[Play] ❌ Failed to create free ticket:", error);
+      
+      setCreating(false);
+      setRedirecting(false);
       
       // Check if it's a limit error
       if (error instanceof Error && error.message.includes("FREE_LIMIT_REACHED")) {
         toast({
           title: "Dosegnut limit",
           description: `Imaš maksimalno ${MAX_FREE_TICKETS} besplatna tiketa u promo fazi.`,
-          variant: "destructive"
+          variant: "destructive",
+          duration: 4000
         });
         setLimitReached(true);
         // Reload to refresh state
@@ -111,20 +136,33 @@ export default function PlayPage() {
         toast({
           title: "Greška",
           description: "Greška pri izradi tiketa. Pokušaj ponovno.",
-          variant: "destructive"
+          variant: "destructive",
+          duration: 4000
         });
       }
-      setCreating(false);
     }
   };
 
-  // Handle "Open my tickets" button
+  // Handle "Open my tickets" button with delayed redirect
   const handleOpenMyTickets = () => {
     if (!activeEvent) return;
     const storedTickets = getStoredFreeTickets(activeEvent.id);
+    
     if (storedTickets.length > 0) {
-      // Redirect to player with stored tickets
-      router.push(`/player?event=${activeEvent.id}`);
+      console.log("[Play] 🔄 Opening player with stored tickets for event:", activeEvent.id);
+      
+      setRedirecting(true);
+      
+      // Delayed redirect for mobile compatibility
+      setTimeout(() => {
+        router.push(`/player?event=${activeEvent.id}`);
+      }, 200);
+    } else {
+      toast({
+        title: "Nemaš tikete",
+        description: "Nisi kreirao ni jedan tiket za ovaj event.",
+        variant: "destructive"
+      });
     }
   };
 
@@ -170,11 +208,21 @@ export default function PlayPage() {
                     </div>
                     <Button
                       onClick={handleOpenMyTickets}
+                      disabled={redirecting}
                       className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
                       size="lg"
                     >
-                      <Ticket className="mr-2 h-5 w-5" />
-                      Otvori moje tikete
+                      {redirecting ? (
+                        <>
+                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                          Otvaranje...
+                        </>
+                      ) : (
+                        <>
+                          <Ticket className="mr-2 h-5 w-5" />
+                          Otvori moje tikete
+                        </>
+                      )}
                     </Button>
                   </div>
                 ) : (
@@ -186,11 +234,16 @@ export default function PlayPage() {
                     )}
                     <Button
                       onClick={handleGetFreeTicket}
-                      disabled={creating}
+                      disabled={creating || redirecting}
                       className="w-full h-16 text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg"
                       size="lg"
                     >
-                      {creating ? (
+                      {redirecting ? (
+                        <>
+                          <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+                          Preusmjeravanje...
+                        </>
+                      ) : creating ? (
                         <>
                           <Loader2 className="mr-2 h-6 w-6 animate-spin" />
                           Izrađujem tiket...
@@ -205,11 +258,19 @@ export default function PlayPage() {
                     {freeTicketCount > 0 && (
                       <Button
                         onClick={handleOpenMyTickets}
+                        disabled={redirecting}
                         variant="outline"
                         className="w-full"
                         size="lg"
                       >
-                        Vidi sve moje tikete ({freeTicketCount})
+                        {redirecting ? (
+                          <>
+                            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                            Otvaranje...
+                          </>
+                        ) : (
+                          `Vidi sve moje tikete (${freeTicketCount})`
+                        )}
                       </Button>
                     )}
                   </div>
