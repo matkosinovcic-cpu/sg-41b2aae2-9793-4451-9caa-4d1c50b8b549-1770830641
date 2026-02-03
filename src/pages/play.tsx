@@ -82,7 +82,7 @@ export default function PlayPage() {
         throw error;
       }
 
-      const event = events && events.length > 0 ? events[0] : null;
+      const event = events && events.length > 0 ? (events[0] as unknown as Event) : null;
 
       if (!event) {
         console.log("[Play] ℹ️ No active event found");

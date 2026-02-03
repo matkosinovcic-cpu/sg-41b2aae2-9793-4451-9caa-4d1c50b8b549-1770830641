@@ -566,32 +566,28 @@ export default function PlayerPage() {
       // Load ALL drawn questions correct answers
       try {
         console.log("[Player] 📚 Loading drawn questions map...");
-        const answersMap = await eventService.getDrawnQuestions(event.id);
+        const answersMap = await eventService.getDrawnQuestions(eventId);
         setCorrectAnswersMap(answersMap);
         console.log("[Player] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
         
         // If event is finished, load full question data for review
-        if (event.status === "finished" && event.drawn_numbers && event.drawn_numbers.length > 0) {
+        if (event.status === "finished") {
           console.log("[Player] 📖 Loading full question data for review...");
-          const questionsData: Array<{ number: number; text: string; correct_answer: boolean }> = [];
-          
-          for (const qNum of event.drawn_numbers) {
-            try {
-              const questionData = await eventService.getQuestionForNumber(event.id, qNum);
-              if (questionData && questionData.questions) {
-                questionsData.push({
-                  number: qNum,
-                  text: questionData.questions.text,
-                  correct_answer: questionData.questions.correct_answer
-                });
-              }
-            } catch (err) {
-              console.warn(`[Player] ⚠️ Failed to load question ${qNum}:`, err);
+          try {
+            const detailedQuestions = await eventService.getDrawnQuestionsDetailed(eventId);
+            setAllDrawnQuestions(detailedQuestions);
+            console.log("[Player] 📖 Loaded", detailedQuestions.length, "questions for review");
+            
+            // If we got 0 questions but event has drawn_numbers, log warning
+            if (detailedQuestions.length === 0 && event.drawn_numbers && event.drawn_numbers.length > 0) {
+              console.warn("[Player] ⚠️ Event has drawn_numbers but no drawn questions in database!");
+              console.warn("[Player] drawn_numbers:", event.drawn_numbers);
             }
+          } catch (err) {
+            console.error("[Player] ❌ Failed to load detailed questions:", err);
+            // Don't fail the entire load, just log error
+            setAllDrawnQuestions([]);
           }
-          
-          setAllDrawnQuestions(questionsData.sort((a, b) => a.number - b.number));
-          console.log("[Player] 📖 Loaded", questionsData.length, "questions for review");
         } else {
           setAllDrawnQuestions([]);
         }
@@ -616,7 +612,7 @@ export default function PlayerPage() {
       // Compute EVENT-LEVEL global stats
       console.log("[Player] 📊 Computing event-level global stats...");
       const ticketSerials = loadedTickets.map(t => t.serial_number);
-      const eventGlobalStats = await computeEventLevelGlobalStats(event.id, ticketSerials);
+      const eventGlobalStats = await computeEventLevelGlobalStats(eventId, ticketSerials);
       setGlobalStats(eventGlobalStats);
       console.log("[Player] 📊 Event-level global stats set:", eventGlobalStats);
     } catch (error) {
@@ -1244,9 +1240,18 @@ export default function PlayerPage() {
                   </p>
                   
                   {allDrawnQuestions.length === 0 && (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      Nema podataka o izvučenim pitanjima.
-                    </p>
+                    <div className="text-center py-6 bg-gray-50 rounded-lg">
+                      <p className="text-sm text-muted-foreground">
+                        {activeEvent?.drawn_numbers && activeEvent.drawn_numbers.length > 0 
+                          ? "⚠️ Event ima izvučene brojeve, ali nema podataka o pitanjima u bazi."
+                          : "Nema izvučenih pitanja u ovom eventu."}
+                      </p>
+                      {activeEvent?.drawn_numbers && activeEvent.drawn_numbers.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Izvučeni brojevi: {activeEvent.drawn_numbers.join(", ")}
+                        </p>
+                      )}
+                    </div>
                   )}
                   
                   <div className="space-y-3">
@@ -1441,24 +1446,24 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.skippedCount}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center pt-1">
                   <div>
                     <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectCount}</p>
                   </div>
                   
                   <div>

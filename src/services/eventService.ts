@@ -623,5 +623,41 @@ export const eventService = {
     });
     
     return correctAnswersMap;
+  },
+
+  /**
+   * Get detailed list of all drawn questions for an event (for post-event review)
+   * Returns full question data including text, sorted by draw order
+   */
+  async getDrawnQuestionsDetailed(eventId: string): Promise<Array<{
+    number: number;
+    text: string;
+    correct_answer: boolean;
+    drawn_at: string;
+  }>> {
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("question_number, drawn_at, questions(text, correct_answer)")
+      .eq("event_id", eventId)
+      .eq("drawn", true)
+      .order("drawn_at", { ascending: true });
+    
+    if (error) {
+      console.error("[eventService] Failed to get drawn questions detailed:", error);
+      throw error;
+    }
+    
+    // Transform to detailed list
+    const detailedQuestions = (data || [])
+      .filter((item: any) => item.questions) // Filter out any null questions
+      .map((item: any) => ({
+        number: item.question_number,
+        text: item.questions.text,
+        correct_answer: item.questions.correct_answer,
+        drawn_at: item.drawn_at
+      }));
+    
+    console.log(`[eventService] ✅ Loaded ${detailedQuestions.length} drawn questions for event ${eventId}`);
+    return detailedQuestions;
   }
 };
