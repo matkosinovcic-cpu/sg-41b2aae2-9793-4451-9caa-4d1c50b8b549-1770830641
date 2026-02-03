@@ -42,6 +42,18 @@ function addStoredFreeTicket(eventId: string, serial: string): void {
   }
 }
 
+// SELF-HEAL: Clear old event context
+function clearOldEventContext(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem("ps_last_event_id");
+    localStorage.removeItem("ps_selected_event_id");
+    console.log("[Player] 🔄 Cleared old event context for self-heal");
+  } catch (err) {
+    console.error("[Player] Failed to clear old context:", err);
+  }
+}
+
 interface TicketData {
   id: string;
   serial_number: string;
@@ -288,107 +300,214 @@ export default function PlayerPage() {
     accuracyPct: 0
   });
 
-  // Load tickets from URL or localStorage
-  useEffect(() => {
-    const loadTickets = async () => {
-      console.log("[PLAYER] 🎬 Starting ticket load...");
-      setLoading(true);
-      try {
-        const ticketSerial = router.query.ticket as string;
-        const eventIdParam = router.query.event as string;
+  // SELF-HEAL: Retry state
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const [healingInProgress, setHealingInProgress] = useState(false);
+  const MAX_RETRY_ATTEMPTS = 2;
 
-        let ticketsToLoad: string[] = [];
-        let eventId: string | null = null;
+  // SELF-HEAL: Load tickets with automatic fallback to active event
+  const loadTicketsWithSelfHeal = async (isRetry = false) => {
+    console.log("[Player] 🎬 Starting ticket load with self-heal", isRetry ? `(retry ${retryAttempt + 1})` : "");
+    setLoading(true);
+    
+    try {
+      const ticketSerial = router.query.ticket as string;
+      const eventIdParam = router.query.event as string;
 
-        // Priority 1: URL has ticket serial (newly created)
-        if (ticketSerial) {
-          console.log("[PLAYER] 📋 Loading ticket from URL:", ticketSerial);
-          ticketsToLoad = [ticketSerial];
-          const ticket = await ticketService.getTicketBySerial(ticketSerial);
-          if (ticket) {
-             eventId = ticket.event_id;
-             console.log("[PLAYER] 🎫 Ticket found, event_id:", eventId);
-             const storedTickets = getStoredFreeTickets(eventId);
-             ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
-             console.log("[PLAYER] 📚 Combined with stored tickets:", ticketsToLoad);
-          }
+      let ticketsToLoad: string[] = [];
+      let eventId: string | null = null;
+
+      // STEP 1: Try to get tickets from URL params
+      if (ticketSerial) {
+        console.log("[Player] 📋 Loading ticket from URL:", ticketSerial);
+        ticketsToLoad = [ticketSerial];
+        const ticket = await ticketService.getTicketBySerial(ticketSerial);
+        if (ticket) {
+          eventId = ticket.event_id;
+          console.log("[Player] 🎫 Ticket found, event_id:", eventId);
+          const storedTickets = getStoredFreeTickets(eventId);
+          ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
+          console.log("[Player] 📚 Combined with stored tickets:", ticketsToLoad);
         }
-        // Priority 2: URL has eventId (open my tickets)
-        else if (eventIdParam) {
-          console.log("[PLAYER] 🎯 Loading tickets for event:", eventIdParam);
-          eventId = eventIdParam;
+      } else if (eventIdParam) {
+        console.log("[Player] 🎯 Loading tickets for event:", eventIdParam);
+        eventId = eventIdParam;
+        ticketsToLoad = getStoredFreeTickets(eventId);
+        console.log("[Player] 📚 Found stored tickets:", ticketsToLoad);
+      }
+
+      // STEP 2: If no tickets or failed to load, try ACTIVE event (self-heal)
+      if (ticketsToLoad.length === 0 || !eventId) {
+        console.log("[Player] 🔄 No tickets found, checking for ACTIVE event...");
+        
+        const { data: events, error } = await supabase
+          .from("events")
+          .select("*")
+          .eq("status", "active")
+          .limit(1);
+
+        if (error) {
+          console.error("[Player] ❌ Error fetching active event:", error);
+          throw error;
+        }
+
+        const activeEvent = events && events.length > 0 ? events[0] : null;
+
+        if (activeEvent) {
+          console.log("[Player] ✅ Active event found:", activeEvent.id);
+          eventId = activeEvent.id;
           ticketsToLoad = getStoredFreeTickets(eventId);
-          console.log("[PLAYER] 📚 Found stored tickets:", ticketsToLoad);
+          console.log("[Player] 📚 Loading tickets for active event:", ticketsToLoad.length);
         }
+      }
 
-        // If no tickets found, show empty state
-        if (ticketsToLoad.length === 0) {
-          console.log("[PLAYER] ❌ No tickets to load");
-          setLoading(false);
+      // STEP 3: If still no tickets, show friendly UI (not a crash)
+      if (ticketsToLoad.length === 0) {
+        console.log("[Player] ℹ️ No tickets to load");
+        setLoading(false);
+        setHealingInProgress(false);
+        
+        // Check if there's an active event to redirect to /play
+        const { data: events } = await supabase
+          .from("events")
+          .select("*")
+          .eq("status", "active")
+          .limit(1);
+        
+        const activeEvent = events && events.length > 0 ? events[0] : null;
+        
+        if (activeEvent && !isRetry) {
+          console.log("[Player] 🔄 Active event exists, suggesting to get ticket");
+          toast({
+            title: "Nemaš tikete za aktivni event",
+            description: "Preuzimaš li besplatni tiket?",
+            duration: 5000
+          });
+        }
+        
+        return;
+      }
+
+      // STEP 4: Fetch all tickets
+      console.log("[Player] 🔄 Fetching ticket details...");
+      const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
+      const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
+      
+      if (loadedTickets.length === 0) {
+        console.log("[Player] ⚠️ No valid tickets loaded");
+        
+        // SELF-HEAL: Retry with context clear
+        if (!isRetry && retryAttempt < MAX_RETRY_ATTEMPTS) {
+          console.log("[Player] 🔄 Clearing old context and retrying...");
+          setHealingInProgress(true);
+          clearOldEventContext();
+          setRetryAttempt(prev => prev + 1);
+          
+          toast({
+            title: "🔄 Prebacivanje na aktivni event...",
+            description: "Trenutak...",
+            duration: 2000
+          });
+          
+          setTimeout(() => loadTicketsWithSelfHeal(true), 800);
           return;
         }
-
-        // Fetch all tickets
-        console.log("[PLAYER] 🔄 Fetching ticket details...");
-        const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
-        const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
-        setTickets(loadedTickets);
-
-        console.log("[PLAYER] ✅ Loaded tickets:", loadedTickets.map(t => ({
-          id: t.id,
-          serial: t.serial_number,
-          event_id: t.event_id
-        })));
-
-        // Set focused ticket
-        if (ticketSerial) {
-          const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
-          setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
-        } else {
-          setFocusedTicketId(loadedTickets[0]?.id || null);
-        }
-
-        // Load event (active or last finished)
-        if (eventId || loadedTickets[0]?.event_id) {
-          const currentEventId = eventId || loadedTickets[0].event_id;
-          console.log("[PLAYER] 🎪 Loading event data for:", currentEventId);
-          await refetchEventData(currentEventId, loadedTickets);
-          
-          // Only subscribe to realtime if event is active
-          const event = await eventService.getEventById(currentEventId);
-          console.log("[PLAYER] 🎪 Event status:", event.status);
-          
-          if (event && event.status === "active") {
-            console.log("[PLAYER] 🔔 Setting up realtime subscription");
-            setupRealtimeSubscription(currentEventId);
-          } else {
-            console.log("[PLAYER] 📊 Event is finished, entering RESULTS mode");
-          }
-        }
-      } catch (error) {
-        console.error("[Player] ❌ Failed to load tickets:", error);
-        toast({
-          title: "Greška",
-          description: "Greška pri učitavanju tiketa.",
-          variant: "destructive"
-        });
-      } finally {
+        
+        // Final fallback: show friendly error
         setLoading(false);
-        console.log("[PLAYER] ✅ Ticket load complete");
+        setHealingInProgress(false);
+        toast({
+          title: "Nemaš tikete",
+          description: "Preuzmi besplatni tiket za aktivni event.",
+          duration: 5000
+        });
+        return;
       }
-    };
 
+      setTickets(loadedTickets);
+      console.log("[Player] ✅ Loaded tickets:", loadedTickets.map(t => ({
+        id: t.id,
+        serial: t.serial_number,
+        event_id: t.event_id
+      })));
+
+      // Set focused ticket
+      if (ticketSerial) {
+        const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
+        setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
+      } else {
+        setFocusedTicketId(loadedTickets[0]?.id || null);
+      }
+
+      // Load event data
+      const currentEventId = eventId || loadedTickets[0].event_id;
+      console.log("[Player] 🎪 Loading event data for:", currentEventId);
+      await refetchEventData(currentEventId, loadedTickets);
+      
+      // Subscribe to realtime only if event is active
+      const event = await eventService.getEventById(currentEventId);
+      console.log("[Player] 🎪 Event status:", event.status);
+      
+      if (event && event.status === "active") {
+        console.log("[Player] 🔔 Setting up realtime subscription");
+        setupRealtimeSubscription(currentEventId);
+      } else {
+        console.log("[Player] 📊 Event is finished, entering RESULTS mode");
+      }
+
+      // Success - reset retry counter
+      setRetryAttempt(0);
+      setHealingInProgress(false);
+
+    } catch (error) {
+      console.error("[Player] ❌ Failed to load tickets:", error);
+      
+      // SELF-HEAL: Retry with context clear
+      if (!isRetry && retryAttempt < MAX_RETRY_ATTEMPTS) {
+        console.log("[Player] 🔄 Error occurred, attempting self-heal...");
+        setHealingInProgress(true);
+        clearOldEventContext();
+        setRetryAttempt(prev => prev + 1);
+        
+        toast({
+          title: "🔄 Prebacivanje na aktivni event...",
+          description: "Trenutak...",
+          duration: 2000
+        });
+        
+        setTimeout(() => loadTicketsWithSelfHeal(true), 800);
+        return;
+      }
+      
+      // Final fallback: show user-friendly error but don't crash
+      console.error("[Player] ❌ Self-heal failed after retries");
+      setHealingInProgress(false);
+      toast({
+        title: "Privremeni problem",
+        description: "Pokušaj osvježiti stranicu. Ako problem traje, kontaktiraj podršku.",
+        variant: "destructive",
+        duration: 5000
+      });
+    } finally {
+      if (!isRetry || retryAttempt >= MAX_RETRY_ATTEMPTS) {
+        setLoading(false);
+      }
+    }
+  };
+
+  // Load tickets on mount
+  useEffect(() => {
     if (router.isReady) {
-      loadTickets();
+      loadTicketsWithSelfHeal();
     }
   }, [router.isReady, router.query.ticket, router.query.event]);
 
   // Refetch event data
   const refetchEventData = async (eventId: string, loadedTickets: TicketData[]) => {
-    console.log("[PLAYER] 🔄 Refetching event data for:", eventId);
+    console.log("[Player] 🔄 Refetching event data for:", eventId);
     try {
       const event = await eventService.getEventById(eventId);
-      console.log("[PLAYER] 🎪 Event data:", {
+      console.log("[Player] 🎪 Event data:", {
         id: event.id,
         name: event.name,
         status: event.status,
@@ -401,30 +520,30 @@ export default function PlayerPage() {
       setEventMode(event.status === "finished" ? "finished" : "active");
       setCurrentDrawnNumber(event.current_drawn_number);
       
-      console.log("[PLAYER] 🎯 Event mode set to:", event.status === "finished" ? "FINISHED" : "ACTIVE");
+      console.log("[Player] 🎯 Event mode set to:", event.status === "finished" ? "FINISHED" : "ACTIVE");
       
       // Handle winner
       if (event.winner_ticket_id) {
         const winnerTicket = await ticketService.getTicket(event.winner_ticket_id);
         setWinnerSerial(winnerTicket?.serial_number || null);
-        console.log("[PLAYER] 🏆 Winner ticket:", winnerTicket?.serial_number);
+        console.log("[Player] 🏆 Winner ticket:", winnerTicket?.serial_number);
       } else {
         setWinnerSerial(null);
       }
 
       // Create/Get session (only for active events)
       if (event.status === "active") {
-        console.log("[PLAYER] 🔑 Creating/getting session for active event");
+        console.log("[Player] 🔑 Creating/getting session for active event");
         const session = await answerService.getOrCreateSession(eventId);
         setSessionId(session.id);
-        console.log("[PLAYER] 🔑 Session ID:", session.id);
+        console.log("[Player] 🔑 Session ID:", session.id);
       } else {
-        console.log("[PLAYER] ⏸️ Skipping session creation (event is finished)");
+        console.log("[Player] ⏸️ Skipping session creation (event is finished)");
       }
 
       // Load current question (only for active events)
       if (event.status === "active" && event.current_drawn_number) {
-        console.log("[PLAYER] ❓ Loading current question:", event.current_drawn_number);
+        console.log("[Player] ❓ Loading current question:", event.current_drawn_number);
         const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
         if (questionData && questionData.questions) {
           setCurrentQuestion({
@@ -436,24 +555,24 @@ export default function PlayerPage() {
           const now = Date.now();
           const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
           setTimeLeft(remaining);
-          console.log("[PLAYER] ⏱️ Time left:", remaining, "seconds");
+          console.log("[Player] ⏱️ Time left:", remaining, "seconds");
         }
       } else {
         setCurrentQuestion(null);
         setTimeLeft(0);
-        console.log("[PLAYER] ⏸️ No current question (event finished or no drawn number)");
+        console.log("[Player] ⏸️ No current question (event finished or no drawn number)");
       }
 
       // Load ALL drawn questions correct answers
       try {
-        console.log("[PLAYER] 📚 Loading drawn questions map...");
+        console.log("[Player] 📚 Loading drawn questions map...");
         const answersMap = await eventService.getDrawnQuestions(event.id);
         setCorrectAnswersMap(answersMap);
-        console.log("[PLAYER] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
+        console.log("[Player] 📚 Drawn questions loaded:", Object.keys(answersMap).length, "questions");
         
         // If event is finished, load full question data for review
         if (event.status === "finished" && event.drawn_numbers && event.drawn_numbers.length > 0) {
-          console.log("[PLAYER] 📖 Loading full question data for review...");
+          console.log("[Player] 📖 Loading full question data for review...");
           const questionsData: Array<{ number: number; text: string; correct_answer: boolean }> = [];
           
           for (const qNum of event.drawn_numbers) {
@@ -467,40 +586,39 @@ export default function PlayerPage() {
                 });
               }
             } catch (err) {
-              console.warn(`[PLAYER] ⚠️ Failed to load question ${qNum}:`, err);
+              console.warn(`[Player] ⚠️ Failed to load question ${qNum}:`, err);
             }
           }
           
           setAllDrawnQuestions(questionsData.sort((a, b) => a.number - b.number));
-          console.log("[PLAYER] 📖 Loaded", questionsData.length, "questions for review");
+          console.log("[Player] 📖 Loaded", questionsData.length, "questions for review");
         } else {
-          // Clear allDrawnQuestions if event is active
           setAllDrawnQuestions([]);
         }
       } catch (err) {
-        console.error("[PLAYER] ❌ Failed to load drawn questions map:", err);
+        console.error("[Player] ❌ Failed to load drawn questions map:", err);
       }
 
       // Load answers for ALL tickets using SERIAL_NUMBER as key
-      console.log("[PLAYER] 💬 Loading answers for all tickets...");
+      console.log("[Player] 💬 Loading answers for all tickets...");
       const allAnswers: Answer[] = [];
       for (const ticket of loadedTickets) {
-        console.log(`[PLAYER] 💬 Loading answers for ticket: ${ticket.serial_number}`);
+        console.log(`[Player] 💬 Loading answers for ticket: ${ticket.serial_number}`);
         const ticketAnswers = await answerService.getAnswersForTicket(ticket.serial_number);
-        console.log(`[PLAYER] 💬 Found ${ticketAnswers.length} answers for ${ticket.serial_number}`);
+        console.log(`[Player] 💬 Found ${ticketAnswers.length} answers for ${ticket.serial_number}`);
         allAnswers.push(...ticketAnswers);
       }
       setAnswers([...allAnswers]);
       
-      console.log(`[PLAYER] ✅ Total answers loaded: ${allAnswers.length}`);
+      console.log(`[Player] ✅ Total answers loaded: ${allAnswers.length}`);
       console.log("[Player] ✅ Event data refetch complete");
 
       // Compute EVENT-LEVEL global stats
-      console.log("[PLAYER] 📊 Computing event-level global stats...");
+      console.log("[Player] 📊 Computing event-level global stats...");
       const ticketSerials = loadedTickets.map(t => t.serial_number);
       const eventGlobalStats = await computeEventLevelGlobalStats(event.id, ticketSerials);
       setGlobalStats(eventGlobalStats);
-      console.log("[PLAYER] 📊 Event-level global stats set:", eventGlobalStats);
+      console.log("[Player] 📊 Event-level global stats set:", eventGlobalStats);
     } catch (error) {
       console.error("[Player] ❌ Failed to refetch event data:", error);
     }
@@ -867,7 +985,7 @@ export default function PlayerPage() {
     }
   }
 
-  console.log(`[PLAYER] 📊 Stats computation:`, {
+  console.log(`[Player] 📊 Stats computation:`, {
     answersMapSize: globalAnswersMap.size,
     drawnCount: drawnNumbers.length,
     totalAnswers: answers.length,
@@ -875,24 +993,27 @@ export default function PlayerPage() {
     ticketsCount: tickets.length
   });
 
-  // Global stats are now managed via state (computeEventLevelGlobalStats)
-  
   const focusedTicket = tickets.find(t => t.id === focusedTicketId);
   const canAddTicket = activeEvent && eventMode === "active" && tickets.length < 4;
 
-  if (loading) {
+  if (loading || healingInProgress) {
     return (
       <>
         <SEO title="Igrač - Pitalica Skitalica" />
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
-          <Loader2 className="h-12 w-12 animate-spin text-white" />
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-4">
+          <Loader2 className="h-12 w-12 animate-spin text-white mb-4" />
+          {healingInProgress && (
+            <p className="text-white text-center">
+              Prebacivanje na aktivni event...
+            </p>
+          )}
         </div>
       </>
     );
   }
 
   if (tickets.length === 0) {
-    console.log("[PLAYER] ℹ️ No tickets found, showing empty state");
+    console.log("[Player] ℹ️ No tickets found, showing empty state");
     return (
       <>
         <SEO title="Igrač - Pitalica Skitalica" />
@@ -916,7 +1037,7 @@ export default function PlayerPage() {
 
   // Winner screen (only if user has winning ticket)
   if (winnerSerial && tickets.some(t => t.serial_number === winnerSerial)) {
-    console.log("[PLAYER] 🏆 Showing winner screen for:", winnerSerial);
+    console.log("[Player] 🏆 Showing winner screen for:", winnerSerial);
     return (
       <>
         <SEO title="POBJEDNIK! 🎉" />
@@ -974,7 +1095,6 @@ export default function PlayerPage() {
               <div className="flex gap-2 mt-6">
                 <Button 
                   onClick={() => {
-                    // Stay on page to show results
                     window.scrollTo({ top: 0, behavior: "smooth" });
                   }} 
                   variant="outline" 
@@ -995,7 +1115,7 @@ export default function PlayerPage() {
           </Card>
         </div>
 
-        {/* Ticket Detail Modal - COMPREHENSIVE READ-ONLY VIEW */}
+        {/* Ticket Detail Modal */}
         <Dialog open={ticketDetailOpen} onOpenChange={setTicketDetailOpen}>
           <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -1080,7 +1200,6 @@ export default function PlayerPage() {
                             textColor = "text-white";
                             break;
                           case "not-drawn":
-                            // Keep default
                             break;
                         }
                         
@@ -1118,7 +1237,7 @@ export default function PlayerPage() {
                   </div>
                 </div>
 
-                {/* ALL DRAWN QUESTIONS LIST - FULL TRANSPARENCY */}
+                {/* ALL DRAWN QUESTIONS LIST */}
                 <div className="border-t pt-4">
                   <p className="text-sm font-semibold mb-3">
                     📋 Sva Pitanja iz Eventa ({allDrawnQuestions.length} izvučeno, redoslijed izvlačenja)
@@ -1136,7 +1255,6 @@ export default function PlayerPage() {
                       const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
                       const isOnThisTicket = ticketNumbers.includes(qNum);
                       
-                      // Get answer for THIS ticket
                       const ans = answers.find(
                         a => a.ticket_id === selectedTicketForDetail.serial_number && Number(a.question_number) === qNum
                       );
@@ -1144,7 +1262,6 @@ export default function PlayerPage() {
                       const isMissed = !ans;
                       const isCorrect = ans ? normalizeAnswer(ans.answer) === normalizeAnswer(q.correct_answer) : false;
                       
-                      // Determine status
                       let statusBadge;
                       let borderColor = "border-gray-300";
                       let bgColor = "bg-white";
@@ -1176,7 +1293,6 @@ export default function PlayerPage() {
                             bgColor
                           )}
                         >
-                          {/* Header */}
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
                               <Badge variant="outline" className="text-sm font-bold">
@@ -1189,10 +1305,8 @@ export default function PlayerPage() {
                             {statusBadge}
                           </div>
                           
-                          {/* Question text */}
                           <p className="text-base font-medium mb-3">{q.text}</p>
                           
-                          {/* Answers comparison - ONLY if on this ticket */}
                           {isOnThisTicket && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div className={cn(
@@ -1217,7 +1331,6 @@ export default function PlayerPage() {
                             </div>
                           )}
                           
-                          {/* Show correct answer even if not on ticket (transparency) */}
                           {!isOnThisTicket && (
                             <div className="mt-2 p-2 bg-gray-100 rounded text-sm">
                               <span className="text-muted-foreground">Točan odgovor: </span>
@@ -1230,7 +1343,6 @@ export default function PlayerPage() {
                   </div>
                 </div>
 
-                {/* BACK BUTTON */}
                 <div className="border-t pt-4">
                   <Button 
                     variant="outline" 
@@ -1248,7 +1360,7 @@ export default function PlayerPage() {
     );
   }
 
-  console.log("[PLAYER] 📊 Rendering main player view, mode:", eventMode);
+  console.log("[Player] 📊 Rendering main player view, mode:", eventMode);
 
   return (
     <>
@@ -1358,15 +1470,12 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* MULTI-TICKET GRID - EACH TICKET USES SAME FUNCTION */}
+          {/* MULTI-TICKET GRID */}
           <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
             {tickets.map((ticket) => {
               const isFocused = ticket.id === focusedTicketId;
               
-              // CRITICAL: Normalize ticket numbers to Number[]
               const ticketNumbers = ticket.ticket_questions.map(tq => Number(tq.question_number));
-              
-              // CRITICAL: Compute stats using SAME function for ALL tickets
               const ticketStats = computeTicketStats(
                 ticketNumbers,
                 drawnNumbers,
@@ -1374,7 +1483,6 @@ export default function PlayerPage() {
                 ticket.serial_number
               );
               
-              // Current question status for this ticket
               const isOnThisTicket = currentDrawnNumber !== null && ticketNumbers.includes(currentDrawnNumber);
               const hasAnsweredCurrent = currentDrawnNumber !== null && 
                 answers.some(a => a.ticket_id === ticket.serial_number && Number(a.question_number) === currentDrawnNumber);
@@ -1391,7 +1499,6 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    {/* PER-TICKET STATS - SAME FOR ALL TICKETS */}
                     <div className="text-xs text-muted-foreground">
                       <div className="flex flex-col gap-1 mt-1">
                         <span>Izvučeno: {ticketStats.drawnOnTicketCount}/15</span>
@@ -1409,7 +1516,6 @@ export default function PlayerPage() {
                       </div>
                     )}
                     
-                    {/* Current question status (only in active mode) */}
                     {eventMode === "active" && isOnThisTicket && currentDrawnNumber !== null && (
                       <div className="mt-2">
                         {hasAnsweredCurrent ? (
@@ -1426,15 +1532,12 @@ export default function PlayerPage() {
                   </CardHeader>
                   
                   <CardContent className="p-3 sm:p-4 pt-0">
-                    {/* Ticket grid (5x3) - SAME getCellState FOR ALL */}
                     <div className="grid grid-cols-5 gap-2">
                       {ticket.ticket_questions
                         .sort((a, b) => a.question_number - b.question_number)
                         .map((tq) => {
                           const qNum = Number(tq.question_number);
                           const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
-                          
-                          // CRITICAL: Use SAME function for cell state
                           const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
@@ -1454,7 +1557,6 @@ export default function PlayerPage() {
                               textColor = "text-white";
                               break;
                             case "not-drawn":
-                              // Keep default
                               break;
                           }
                           
@@ -1478,7 +1580,7 @@ export default function PlayerPage() {
               );
             })}
 
-            {/* Add ticket card (only in active mode) */}
+            {/* Add ticket card */}
             {canAddTicket && (
               <Dialog open={addTicketOpen} onOpenChange={setAddTicketOpen}>
                 <DialogTrigger asChild>
@@ -1553,7 +1655,7 @@ export default function PlayerPage() {
             <p className="text-center text-xs text-white/80">Limit 4 tiketa (promo faza)</p>
           )}
 
-          {/* Current question (only in active mode) */}
+          {/* Current question */}
           {eventMode === "active" && focusedTicket && currentQuestion && currentDrawnNumber && (
             <Card className="bg-white/95 backdrop-blur">
               <CardHeader>
@@ -1640,7 +1742,7 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* Waiting message (only in active mode) */}
+          {/* Waiting message */}
           {eventMode === "active" && !currentQuestion && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
@@ -1650,7 +1752,7 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* Results mode - no active question */}
+          {/* Results mode */}
           {eventMode === "finished" && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
@@ -1660,14 +1762,12 @@ export default function PlayerPage() {
                   Izvučeno {drawnNumbers.length} od 90 brojeva
                 </p>
                 
-                {/* Show winner if exists */}
                 {winnerSerial && (
                   <div className="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4 mb-6">
                     <p className="text-lg font-bold text-yellow-800">🏆 Pobjednik: {winnerSerial}</p>
                   </div>
                 )}
                 
-                {/* Action buttons */}
                 <div className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
                   <Button 
                     onClick={() => setShowDetailedReview(!showDetailedReview)} 
@@ -1690,7 +1790,7 @@ export default function PlayerPage() {
             </Card>
           )}
 
-          {/* Detailed Review Section (FINISHED events only) */}
+          {/* Detailed Review Section */}
           {eventMode === "finished" && showDetailedReview && allDrawnQuestions.length > 0 && (
             <Card className="bg-white/95 backdrop-blur">
               <CardHeader>
@@ -1702,7 +1802,6 @@ export default function PlayerPage() {
                     </CardDescription>
                   </div>
                   
-                  {/* Filter buttons */}
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -1738,7 +1837,6 @@ export default function PlayerPage() {
                     
                     const ans = globalAnswersMap.get(q.number);
                     if (!ans) {
-                      // Missed question = incorrect
                       return reviewFilter === "incorrect";
                     }
                     
@@ -1761,7 +1859,6 @@ export default function PlayerPage() {
                           isMissed && "border-gray-400 bg-gray-50/50"
                         )}
                       >
-                        {/* Header */}
                         <div className="flex items-center justify-between mb-3">
                           <Badge variant="outline" className="text-base font-bold">
                             #{q.number}
@@ -1778,10 +1875,8 @@ export default function PlayerPage() {
                           </Badge>
                         </div>
                         
-                        {/* Question text */}
                         <p className="text-lg font-medium mb-4">{q.text}</p>
                         
-                        {/* Answers comparison */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className={cn(
                             "p-3 rounded-md",
@@ -1807,7 +1902,6 @@ export default function PlayerPage() {
                     );
                   })}
                 
-                {/* No results message */}
                 {allDrawnQuestions.filter((q) => {
                   if (reviewFilter === "all") return true;
                   const ans = globalAnswersMap.get(q.number);
