@@ -1323,7 +1323,7 @@ export default function PlayerPage() {
                                   "text-xl font-bold",
                                   isMissed ? "text-gray-600" : isCorrect ? "text-green-700" : "text-red-700"
                                 )}>
-                                  {isMissed ? "— (nije odgovoreno)" : ans?.answer ? "DA" : "NE"}
+                                  {isMissed ? "—" : ans?.answer ? "DA" : "NE"}
                                 </p>
                               </div>
                               
@@ -1696,7 +1696,7 @@ export default function PlayerPage() {
                         >
                           {isCorrect ? "✅" : "❌"}
                         </div>
-                        <p className="text-xl font-bold">
+                        <p className="text-lg font-bold">
                           {isCorrect ? "Točan odgovor!" : "Netočan odgovor"}
                         </p>
                         <p className="text-muted-foreground">
