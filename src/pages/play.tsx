@@ -8,6 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, RefreshCw, Ticket } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { OnboardingModal } from "@/components/OnboardingModal";
+import {
+  shouldShowOnboarding,
+  markOnboardingShown,
+  hideOnboardingPermanently,
+} from "@/lib/onboardingHelper";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -59,9 +65,26 @@ export default function PlayPage() {
   const [limitReached, setLimitReached] = useState(false);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [healingInProgress, setHealingInProgress] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
+
+  // Check if onboarding should be shown on mount
+  useEffect(() => {
+    const shouldShow = shouldShowOnboarding();
+    if (shouldShow) {
+      setShowOnboarding(true);
+      markOnboardingShown();
+    }
+  }, []);
+
+  const handleOnboardingDismiss = (dontShowAgain: boolean) => {
+    if (dontShowAgain) {
+      hideOnboardingPermanently();
+    }
+    setShowOnboarding(false);
+  };
 
   // SELF-HEAL: Load active event with automatic retry and context clearing
   const loadActiveEvent = async (isRetry = false) => {
@@ -401,6 +424,13 @@ export default function PlayPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Onboarding Modal */}
+      <OnboardingModal
+        open={showOnboarding}
+        onOpenChange={setShowOnboarding}
+        onDismiss={handleOnboardingDismiss}
+      />
     </>
   );
 }
