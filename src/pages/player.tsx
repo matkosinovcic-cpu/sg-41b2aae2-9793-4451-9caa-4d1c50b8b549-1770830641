@@ -1222,14 +1222,18 @@ export default function PlayerPage() {
                             break;
                         }
                         
+                        const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                        const shouldHighlight = qNum === lastDrawnNumber;
+
                         return (
                           <div
                             key={qNum}
                             className={cn(
-                              "aspect-square flex items-center justify-center rounded text-sm font-bold",
+                              "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                               bgColor,
                               textColor,
-                              borderClass
+                              shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110",
+                              isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
                             )}
                           >
                             {qNum}
@@ -1514,48 +1518,22 @@ export default function PlayerPage() {
                   )}
                   onClick={() => setFocusedTicketId(ticket.id)}
                 >
-                  <CardHeader className="p-3 sm:p-4">
-                    <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
-                    
-                    <div className="text-xs text-muted-foreground mt-1">
-                      <span style={{ color: "#9CA3AF" }}>{ticketStats.drawnOnTicketCount}/15</span>
-                      <span className="mx-1">|</span>
-                      <span style={{ color: "#22C55E" }}>T {ticketStats.correctOnTicket}</span>
-                      <span className="mx-1">•</span>
-                      <span style={{ color: "#EF4444" }}>N {ticketStats.incorrectOnTicket}</span>
-                      <span className="mx-1">|</span>
-                      <span style={{ 
-                        color: ticketStats.accuracyPct <= 50 ? "#EF4444" : 
-                               ticketStats.accuracyPct <= 70 ? "#EAB308" : 
-                               "#22C55E"
-                      }}>{ticketStats.accuracyPct}%</span>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm">
+                        {ticket.serial_number}
+                      </CardTitle>
+                      <div className="text-xs text-muted-foreground">
+                        {ticketStats.drawnOnTicketCount}/{ticket.ticket_questions.length} | T {ticketStats.correctOnTicket} • N {ticketStats.incorrectOnTicket} | {ticketStats.accuracyPct}%
+                      </div>
                     </div>
                     
-                    {ticket.is_winner && (
-                      <div className="mt-2">
-                        <Badge variant="default" className="bg-green-600">
-                          🎉 DOBITNIK!
-                        </Badge>
-                      </div>
-                    )}
-                    
-                    {eventMode === "active" && isOnThisTicket && currentDrawnNumber !== null && (
-                      <div className="mt-2">
-                        {hasAnsweredCurrent ? (
-                          <Badge variant="secondary">
-                            Odgovoreno na br. {currentDrawnNumber}
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="border-yellow-500 text-yellow-600">
-                            Pitanje br. {currentDrawnNumber} - čeka odgovor
-                          </Badge>
-                        )}
-                      </div>
-                    )}
+                    {/* Badge notification removed - using pulse on number instead */}
                   </CardHeader>
                   
                   <CardContent className="p-4">
-                    {/* Remove all question status text/badges here */}
+                    {/* Question status text - HARD DISABLED */}
+                    {null}
 
                     {/* Number grid */}
                     <div className="grid grid-cols-5 gap-2">
@@ -1586,13 +1564,17 @@ export default function PlayerPage() {
                               break;
                           }
                           
+                          const shouldHighlight = qNum === lastDrawnNumber;
+
                           return (
                             <div
                               key={qNum}
                               className={cn(
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
-                                textColor
+                                textColor,
+                                shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110",
+                                isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
                               )}
                             >
                               {qNum}
