@@ -877,7 +877,7 @@ export default function PlayerPage() {
       // Check if ticket belongs to the same event
       if (ticket.event_id !== activeEvent.id) {
         toast({
-          title: "Pogrešan event",
+          title: "Pogrešanan event",
           description: "Ovaj tiket pripada drugom eventu.",
           variant: "destructive"
         });
@@ -1203,7 +1203,7 @@ export default function PlayerPage() {
                         
                         let bgColor = "bg-gray-200 dark:bg-gray-700";
                         let textColor = "text-gray-900 dark:text-gray-100";
-                        let borderClass = "";
+                        const borderClass = "";
                         
                         switch (cellState) {
                           case "correct":
@@ -1215,12 +1215,8 @@ export default function PlayerPage() {
                             textColor = "text-white";
                             break;
                           case "missed":
-                            // Treat missed as wrong visually but with border to distinguish if needed, 
-                            // or just use red per request "Propuštena = Netočni".
-                            // Let's keep the visual distinction for the grid (red with border) but count it as N
                             bgColor = "bg-[#DC2626]";
                             textColor = "text-white";
-                            borderClass = "border-2 border-[#111111]";
                             break;
                           case "not-drawn":
                             break;
@@ -1240,24 +1236,6 @@ export default function PlayerPage() {
                           </div>
                         );
                       })}
-                  </div>
-                  <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-[#22C55E] rounded"></div>
-                      <span>Točno</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-[#DC2626] rounded"></div>
-                      <span>Netočno</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-[#DC2626] border-2 border-[#111111] rounded"></div>
-                      <span>Propušteno</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-gray-200 border border-gray-300 rounded"></div>
-                      <span>Nije izvučeno</span>
-                    </div>
                   </div>
                 </div>
 
@@ -1587,7 +1565,6 @@ export default function PlayerPage() {
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
                           let textColor = "text-gray-900 dark:text-gray-100";
-                          let borderClass = "";
                           
                           switch (cellState) {
                             case "correct":
@@ -1601,7 +1578,6 @@ export default function PlayerPage() {
                             case "missed":
                               bgColor = "bg-[#DC2626]";
                               textColor = "text-white";
-                              borderClass = "border-2 border-[#111111]";
                               break;
                             case "not-drawn":
                               break;
@@ -1613,8 +1589,7 @@ export default function PlayerPage() {
                               className={cn(
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
-                                textColor,
-                                borderClass
+                                textColor
                               )}
                             >
                               {qNum}
