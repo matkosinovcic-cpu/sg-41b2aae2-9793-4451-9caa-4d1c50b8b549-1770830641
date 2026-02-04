@@ -86,39 +86,64 @@ export function RegistrationModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
 
-    if (!validateFields()) {
+    // Validation
+    if (formData.email !== formData.confirmEmail) {
+      setError("E-mail adrese se ne podudaraju");
+      return;
+    }
+
+    if (!formData.agreeTerms) {
+      setError("Morate prihvatiti pravila igre");
+      return;
+    }
+
+    if (!formData.ageConfirm) {
+      setError("Morate potvrditi da imate 18+ godina");
       return;
     }
 
     setLoading(true);
 
     try {
-      // Import playerService dynamically to avoid circular deps
-      const { createPlayer } = await import("@/services/playerService");
-      const { savePlayerId } = await import("@/lib/playerHelper");
+      console.log("[RegistrationModal] 🎟️ Claiming free tickets atomically...");
 
-      // Create player profile
-      const player = await createPlayer(nickname.trim(), email.trim());
+      // ATOMIC: Call RPC to claim all 4 tickets in one transaction
+      const result = await claimFreeTickets(
+        formData.email.trim(),
+        formData.nickname.trim(),
+        4 // Max 4 free tickets
+      );
 
-      // Save player_id locally
-      savePlayerId(player.id);
+      console.log("[RegistrationModal] ✅ Tickets claimed:", result);
 
-      console.log("[RegistrationModal] Player registered successfully:", player.id);
-
-      // Call success callback with player_id
-      onSuccess(player.id);
-    } catch (error) {
-      console.error("[RegistrationModal] Registration failed:", error);
-      
-      // Show error to user
-      if (error instanceof Error) {
-        setErrors({
-          email: error.message.includes("već registriran") 
-            ? "Email je već registriran" 
-            : "Greška pri registraciji"
-        });
+      // Store session info in localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("ps_player_email", formData.email.trim());
+        localStorage.setItem("ps_player_nickname", formData.nickname.trim());
+        localStorage.setItem("ps_user_id", result.user_id);
+        localStorage.setItem("ps_session_id", result.session_id);
       }
+
+      // Success - close modal and notify parent
+      onSuccess({
+        email: formData.email.trim(),
+        nickname: formData.nickname.trim(),
+        userId: result.user_id,
+        sessionId: result.session_id,
+        tickets: result.tickets,
+        totalTickets: result.total_tickets,
+      });
+
+      onOpenChange(false);
+    } catch (err) {
+      console.error("[RegistrationModal] ❌ Registration failed:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Greška pri registraciji. Pokušajte ponovno."
+      );
     } finally {
       setLoading(false);
     }

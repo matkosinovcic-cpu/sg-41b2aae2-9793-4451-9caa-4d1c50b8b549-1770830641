@@ -397,6 +397,10 @@ export type Database = {
           ticket_serial: string
         }[]
       }
+      claim_free_tickets: {
+        Args: { p_email: string; p_limit?: number; p_nickname: string }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never

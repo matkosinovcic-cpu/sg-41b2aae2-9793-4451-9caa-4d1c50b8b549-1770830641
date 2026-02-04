@@ -295,4 +295,63 @@ const ticketService = {
   }
 };
 
+/**
+ * Atomically claim free tickets for a player (max 4)
+ * Uses RPC function to ensure transaction safety and idempotency
+ */
+export async function claimFreeTickets(
+  email: string,
+  nickname: string,
+  limit: number = 4
+): Promise<{
+  success: boolean;
+  tickets_created: number;
+  total_tickets: number;
+  session_id: string;
+  user_id: string;
+  tickets: Array<{
+    id: string;
+    serial_number: string;
+    source: string;
+    created_at: string;
+  }>;
+  error?: string;
+}> {
+  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (limit: ${limit})`);
+
+  try {
+    const { data, error } = await supabase.rpc("claim_free_tickets", {
+      p_email: email,
+      p_nickname: nickname,
+      p_limit: limit,
+    });
+
+    if (error) {
+      console.error("[TicketService] ❌ RPC error:", error);
+      throw new Error(error.message || "Failed to claim tickets");
+    }
+
+    if (!data) {
+      throw new Error("No data returned from RPC");
+    }
+
+    // Parse RPC response
+    const result = typeof data === "string" ? JSON.parse(data) : data;
+
+    if (!result.success) {
+      console.error("[TicketService] ❌ RPC returned error:", result.error);
+      throw new Error(result.error || "Failed to claim tickets");
+    }
+
+    console.log(
+      `[TicketService] ✅ Successfully claimed ${result.tickets_created} tickets (total: ${result.total_tickets})`
+    );
+
+    return result;
+  } catch (err) {
+    console.error("[TicketService] ❌ Failed to claim free tickets:", err);
+    throw err;
+  }
+}
+
 export default ticketService;
