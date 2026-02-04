@@ -1420,61 +1420,39 @@ export default function PlayerPage() {
                       {playerNickname || "Igrač"}
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
-                      {activeEvent?.name || "Event"}
+                      PITALICA SKITALICA
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={activeEvent?.status === "active" ? "default" : "secondary"} className="h-5 px-2 text-[10px]">
-                      {activeEvent?.status === "active" ? "U toku" : "Završen"}
-                    </Badge>
+                    {activeEvent?.status === "active" && (
+                      <Badge className="bg-green-600 text-white animate-pulse">
+                        U toku
+                      </Badge>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {tickets.findIndex(t => t.id === focusedTicketId) + 1}/{tickets.length}
                     </span>
                   </div>
                 </div>
 
-                {/* GLOBAL STATS - 6 METRICS (2 rows x 3 cols) - COMPACT */}
-                <div className="grid grid-cols-3 gap-x-2 gap-y-1 text-center">
-                  {/* Row 1 */}
-                  <div className="flex items-center justify-center">
-                    <span className="text-base font-bold text-black leading-none">
-                      {globalStats.totalDrawn}/90
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center justify-center">
-                    <span className="text-base font-bold text-green-600 leading-none">T {globalStats.correctTotal}</span>
-                  </div>
-                  
-                  {/* Place N in the 3rd column of 1st row for balance, or keep layout. 
-                      Let's put N in 3rd col, and % in 2nd row center or similar.
-                      Requested: "Zadrži ISTI raspored 3x2... ali ukloni P".
-                      If I remove P, I have an empty slot.
-                      Let's try:
-                      Row 1: X/90 | T | N
-                      Row 2: empty | empty | %
-                      
-                      Or better compact:
-                      X/90 | T {count} | N {count}
-                             % {pct}
-                  */}
-                  
-                  <div className="flex items-center justify-center">
-                    <span className="text-base font-bold text-red-600 leading-none">N {globalStats.incorrectTotal}</span>
-                  </div>
-
-                  {/* Row 2 */}
-                  <div className="col-start-1 flex items-center justify-center">
-                     {/* Empty */}
-                  </div>
-
-                  <div className="col-start-2 col-span-2 flex items-center justify-center">
-                    <span className={`text-base font-bold ${
-                      globalStats.accuracyPct <= 50 ? "text-red-600" : 
-                      globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
-                      "text-green-600"
-                    } leading-none`}>{globalStats.accuracyPct}%</span>
-                  </div>
+                {/* GLOBAL STATS - 1 ROW */}
+                <div className="flex items-center justify-between text-sm sm:text-base">
+                  <span className="font-bold text-black">
+                    {globalStats.totalDrawn}/90
+                  </span>
+                  <span className="font-bold text-green-600">
+                    T {globalStats.correctTotal}
+                  </span>
+                  <span className="font-bold text-red-600">
+                    N {globalStats.incorrectTotal}
+                  </span>
+                  <span className={`font-bold ${
+                    globalStats.accuracyPct <= 50 ? "text-red-600" : 
+                    globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
+                    "text-green-600"
+                  }`}>
+                    {globalStats.accuracyPct}%
+                  </span>
                 </div>
               </CardHeader>
             </Card>
@@ -1515,7 +1493,7 @@ export default function PlayerPage() {
                         </CardTitle>
 
                         {/* RED 2 — STATISTIKA */}
-                        <div className="text-xs text-muted-foreground leading-none mt-0.5">
+                        <div className="text-sm sm:text-base text-muted-foreground leading-none mt-0.5">
                           <span style={{ color: "#9CA3AF" }}>
                             {ticketStats.drawnOnTicketCount}/15
                           </span>
