@@ -1435,6 +1435,16 @@ export default function PlayerPage() {
                     {playerNickname?.trim() ? playerNickname : "Igrač"}
                   </CardTitle>
                   <p className="text-[10px] text-muted-foreground">DEBUG nick: {playerNickname || "(prazno)"}</p>
+                  <Badge
+                    variant={activeEvent?.status === "active" ? "default" : "secondary"}
+                    className={`text-[10px] px-2 py-0.5 ${
+                      activeEvent?.status === "active"
+                        ? "bg-green-500 hover:bg-green-600"
+                        : "bg-gray-400"
+                    }`}
+                  >
+                    {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                  </Badge>
                 </div>
 
                 {/* GLOBAL STATS ROW */}
