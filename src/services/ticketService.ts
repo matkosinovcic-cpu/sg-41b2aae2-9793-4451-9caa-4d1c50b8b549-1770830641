@@ -319,10 +319,13 @@ export async function claimFreeTickets(
 }> {
   console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (limit: ${limit})`);
 
+  // Normalize email (lowercase + trim) before sending to backend
+  const normalizedEmail = email.trim().toLowerCase();
+
   try {
     const { data, error } = await supabase.rpc("claim_free_tickets", {
-      p_email: email,
-      p_nickname: nickname,
+      p_email: normalizedEmail,
+      p_nickname: nickname.trim(),
       p_limit: limit,
     });
 

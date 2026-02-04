@@ -109,10 +109,14 @@ export function RegistrationModal({
     try {
       console.log("[RegistrationModal] 🎟️ Claiming free tickets atomically...");
 
+      // Normalize email before sending to backend
+      const normalizedEmail = email.trim().toLowerCase();
+      const trimmedNickname = nickname.trim();
+
       // ATOMIC: Call RPC to claim all 4 tickets in one transaction
       const result = await claimFreeTickets(
-        email.trim(),
-        nickname.trim(),
+        normalizedEmail,
+        trimmedNickname,
         4 // Max 4 free tickets
       );
 
@@ -120,16 +124,16 @@ export function RegistrationModal({
 
       // Store session info in localStorage
       if (typeof window !== "undefined") {
-        localStorage.setItem("ps_player_email", email.trim());
-        localStorage.setItem("ps_player_nickname", nickname.trim());
+        localStorage.setItem("ps_player_email", normalizedEmail);
+        localStorage.setItem("ps_player_nickname", trimmedNickname);
         localStorage.setItem("ps_user_id", result.user_id);
         localStorage.setItem("ps_session_id", result.session_id);
       }
 
       // Success - close modal and notify parent
       onSuccess({
-        email: email.trim(),
-        nickname: nickname.trim(),
+        email: normalizedEmail,
+        nickname: trimmedNickname,
         userId: result.user_id,
         sessionId: result.session_id,
         tickets: result.tickets,
@@ -138,10 +142,24 @@ export function RegistrationModal({
 
     } catch (err) {
       console.error("[RegistrationModal] ❌ Registration failed:", err);
+      
+      // User-friendly error messages
+      let errorMessage = "Greška pri registraciji. Pokušajte ponovno.";
+      
+      if (err instanceof Error) {
+        if (err.message.includes("NO_ACTIVE_EVENT")) {
+          errorMessage = "Trenutno nema aktivnog eventa. Pokušajte kasnije.";
+        } else if (err.message.includes("duplicate key") || err.message.includes("already exists")) {
+          errorMessage = "Email je već registriran. Koristite drugi email ili kontaktirajte podršku.";
+        } else if (err.message.includes("network") || err.message.includes("timeout")) {
+          errorMessage = "Problem s internetskom vezom. Provjerite vezu i pokušajte ponovno.";
+        } else {
+          errorMessage = err.message;
+        }
+      }
+      
       setErrors({
-        general: err instanceof Error
-          ? err.message
-          : "Greška pri registraciji. Pokušajte ponovno."
+        general: errorMessage
       });
     } finally {
       setLoading(false);
