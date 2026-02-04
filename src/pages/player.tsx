@@ -1554,7 +1554,10 @@ export default function PlayerPage() {
                     )}
                   </CardHeader>
                   
-                  <CardContent className="p-3 sm:p-4 pt-0">
+                  <CardContent className="p-4">
+                    {/* Remove all question status text/badges here */}
+
+                    {/* Number grid */}
                     <div className="grid grid-cols-5 gap-2">
                       {ticket.ticket_questions
                         .sort((a, b) => a.question_number - b.question_number)
