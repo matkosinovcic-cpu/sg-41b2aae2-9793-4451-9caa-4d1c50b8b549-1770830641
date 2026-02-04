@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { HelpCircle, CheckCircle, Clock, Trophy } from "lucide-react";
+import { Trophy, Clock, CheckCircle, ChevronDown, ChevronUp } from "lucide-react";
 
 interface OnboardingModalProps {
   open: boolean;
@@ -15,112 +14,118 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
-  const handleContinue = () => {
+  // Reset checkbox when modal opens
+  useEffect(() => {
+    if (open) {
+      setDontShowAgain(false);
+      console.log("[OnboardingModal] ✅ Modal opened");
+    }
+  }, [open]);
+
+  // Handle explicit close actions only
+  const handleClose = (reason: "X" | "START" | "OUTSIDE") => {
+    console.log("[OnboardingModal] 🔒 Close triggered - Reason:", reason);
+    console.log("[OnboardingModal] 📋 Don't show again:", dontShowAgain);
+    
+    // Call dismiss handler with checkbox state
     onDismiss(dontShowAgain);
+    
+    // Close modal
     onOpenChange(false);
   };
 
+  // Prevent auto-close from Dialog component on iOS
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      console.log("[OnboardingModal] ⚠️ Dialog auto-close detected - treating as OUTSIDE click");
+      handleClose("OUTSIDE");
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => {
+        console.log("[OnboardingModal] 👆 Outside click detected");
+      }}>
         <DialogHeader>
-          <DialogTitle className="text-2xl font-bold text-center mb-2">
-            Dobrodošao u Pitalicu Skitalicu! 🎲
+          <DialogTitle className="text-2xl font-bold text-center bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+            Dobrodošao u Pitalicu Skitalicu! 🎉
           </DialogTitle>
-          <DialogDescription className="text-center text-base">
-            Kviz uživo za brze umove
+          <DialogDescription className="text-center">
+            Kviz uživo koji se igra u kafiću na TV-u
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          {/* Main Points */}
-          <div className="space-y-4">
-            <div className="flex items-start gap-3 p-3 bg-primary/5 rounded-lg">
-              <Trophy className="w-6 h-6 text-primary flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="font-semibold mb-1">Igra se uživo na TV-u</h3>
-                <p className="text-sm text-muted-foreground">
-                  Sva pitanja se prikazuju na velikom ekranu u kafiću
-                </p>
-              </div>
+        <div className="space-y-4 py-4">
+          {/* Main points */}
+          <div className="space-y-3">
+            <div className="flex items-start gap-3">
+              <Trophy className="h-5 w-5 text-purple-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm">
+                <strong>Igra se uživo</strong> na TV-u u kafiću
+              </p>
             </div>
-
-            <div className="flex items-start gap-3 p-3 bg-primary/5 rounded-lg">
-              <Clock className="w-6 h-6 text-primary flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="font-semibold mb-1">Odgovaraš u 9 sekundi</h3>
-                <p className="text-sm text-muted-foreground">
-                  Brza DA/NE pitanja - brzina i točnost se boduju
-                </p>
-              </div>
+            <div className="flex items-start gap-3">
+              <Clock className="h-5 w-5 text-pink-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm">
+                Odgovaraš na <strong>DA/NE pitanja u 9 sekundi</strong>
+              </p>
             </div>
-
-            <div className="flex items-start gap-3 p-3 bg-primary/5 rounded-lg">
-              <CheckCircle className="w-6 h-6 text-primary flex-shrink-0 mt-1" />
-              <div>
-                <h3 className="font-semibold mb-1">Transparentni rezultati</h3>
-                <p className="text-sm text-muted-foreground">
-                  Vidi sve svoje odgovore i statistiku nakon igre
-                </p>
-              </div>
+            <div className="flex items-start gap-3">
+              <CheckCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+              <p className="text-sm">
+                <strong>Rezultati i tiketi su transparentni</strong> nakon igre
+              </p>
             </div>
           </div>
 
-          {/* How It Works Section */}
+          {/* Expandable "How it works" section */}
           <div className="border-t pt-4">
             <button
               onClick={() => setShowDetails(!showDetails)}
-              className="flex items-center gap-2 text-primary hover:text-primary/80 transition-colors w-full justify-center"
+              className="flex items-center justify-between w-full text-sm font-semibold text-purple-600 hover:text-purple-700"
             >
-              <HelpCircle className="w-5 h-5" />
-              <span className="font-medium">
-                {showDetails ? "Sakrij" : "Kako igra funkcionira"}
-              </span>
+              <span>Kako igra funkcionira</span>
+              {showDetails ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
             </button>
-
+            
             {showDetails && (
-              <div className="mt-4 space-y-3 text-sm bg-muted/30 p-4 rounded-lg">
-                <div className="flex items-start gap-2">
-                  <span className="font-bold text-primary">1.</span>
-                  <p>
-                    <strong>Preuzmi tiket:</strong> Unesi svoje ime i preuzmi jedinstveni tiket prije početka igre
-                  </p>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="font-bold text-primary">2.</span>
-                  <p>
-                    <strong>Prati pitanja:</strong> Gledaj TV ekran i odgovaraj što brže možeš - svaka sekunda se računa!
-                  </p>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="font-bold text-primary">3.</span>
-                  <p>
-                    <strong>Provjeri rezultate:</strong> Nakon igre vidi sve svoje odgovore, bodove i usporedi se s ostalima
-                  </p>
-                </div>
+              <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                <p>• <strong>Preuzmi tiket:</strong> Klikom na gumb dobivaš jedinstven serijski broj</p>
+                <p>• <strong>Prati TV:</strong> Pitanja se prikazuju na ekranu u kafiću</p>
+                <p>• <strong>Odgovaraj brzo:</strong> Imaš 9 sekundi za svako pitanje (DA/NE)</p>
+                <p>• <strong>Provjeri rezultate:</strong> Nakon eventa vidiš točne odgovore i svoju statistiku</p>
               </div>
             )}
           </div>
 
-          {/* Don't Show Again Checkbox */}
-          <div className="flex items-center space-x-2 pt-2 border-t">
+          {/* "Don't show again" checkbox */}
+          <div className="flex items-center space-x-2 pt-2">
             <Checkbox
-              id="dont-show"
+              id="dont-show-again"
               checked={dontShowAgain}
-              onCheckedChange={(checked) => setDontShowAgain(checked === true)}
+              onCheckedChange={(checked) => {
+                setDontShowAgain(checked === true);
+                console.log("[OnboardingModal] ☑️ Checkbox toggled:", checked);
+              }}
             />
-            <Label
-              htmlFor="dont-show"
+            <label
+              htmlFor="dont-show-again"
               className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
             >
               Ne prikazuj više
-            </Label>
+            </label>
           </div>
+        </div>
 
-          {/* Action Button */}
+        <div className="flex flex-col gap-2">
           <Button
-            onClick={handleContinue}
-            className="w-full text-lg py-6"
+            onClick={() => handleClose("START")}
+            className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
             size="lg"
           >
             Kreni

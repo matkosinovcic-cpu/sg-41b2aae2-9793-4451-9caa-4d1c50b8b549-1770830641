@@ -1,5 +1,5 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event } from "@/services/eventService";
 import { ticketService } from "@/services/ticketService";
@@ -65,25 +65,48 @@ export default function PlayPage() {
   const [limitReached, setLimitReached] = useState(false);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [healingInProgress, setHealingInProgress] = useState(false);
+  
+  // CRITICAL: Onboarding state must be SEPARATE from event loading
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const didCheckOnboarding = useRef(false); // Prevent multiple checks
 
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
 
-  // Check if onboarding should be shown on mount
+  // CRITICAL: Check onboarding ONCE on mount, INDEPENDENT of event loading
   useEffect(() => {
+    // Prevent multiple executions
+    if (didCheckOnboarding.current) {
+      console.log("[Play] ⏭️ Onboarding already checked, skipping");
+      return;
+    }
+
+    console.log("[Play] 🔍 Checking if onboarding should show (first time only)");
+    didCheckOnboarding.current = true;
+
     const shouldShow = shouldShowOnboarding();
+    console.log("[Play] 📋 Should show onboarding:", shouldShow);
+
     if (shouldShow) {
+      console.log("[Play] ✅ Setting onboarding visible");
       setShowOnboarding(true);
       markOnboardingShown();
+    } else {
+      console.log("[Play] ⏭️ Onboarding skipped (hidden or shown recently)");
     }
-  }, []);
+  }, []); // Empty deps = run ONCE on mount only
 
+  // Handle onboarding dismiss (ONLY way to close it)
   const handleOnboardingDismiss = (dontShowAgain: boolean) => {
+    console.log("[Play] 🎯 Onboarding dismissed by user. Don't show again:", dontShowAgain);
+    
     if (dontShowAgain) {
       hideOnboardingPermanently();
+      console.log("[Play] 🔒 Onboarding hidden permanently");
     }
+    
     setShowOnboarding(false);
+    console.log("[Play] ✅ Onboarding modal closed");
   };
 
   // SELF-HEAL: Load active event with automatic retry and context clearing
@@ -175,6 +198,7 @@ export default function PlayPage() {
     }
   };
 
+  // Load event on mount (SEPARATE from onboarding)
   useEffect(() => {
     loadActiveEvent();
   }, []);
@@ -425,10 +449,16 @@ export default function PlayPage() {
         </Card>
       </div>
 
-      {/* Onboarding Modal */}
+      {/* CRITICAL: Onboarding Modal - Completely separate from event loading */}
       <OnboardingModal
         open={showOnboarding}
-        onOpenChange={setShowOnboarding}
+        onOpenChange={(open) => {
+          // ONLY allow close through explicit user actions (X, START, OUTSIDE)
+          // This prevents auto-close on re-renders
+          if (!open) {
+            console.log("[Play] ⚠️ Unexpected modal close attempt blocked");
+          }
+        }}
         onDismiss={handleOnboardingDismiss}
       />
     </>
