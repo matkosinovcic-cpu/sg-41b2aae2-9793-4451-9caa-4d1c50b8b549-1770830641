@@ -1531,15 +1531,29 @@ export default function PlayerPage() {
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
                     <div className="text-xs text-muted-foreground mt-1">
-                      <span>{ticketStats.drawnOnTicketCount}/15</span>
+                      <span style={{ color: "#9CA3AF" }}>{ticketStats.drawnOnTicketCount}/15</span>
                       <span className="mx-1">|</span>
-                      <span>T {ticketStats.correctOnTicket}</span>
+                      <span style={{ color: "#22C55E" }}>T {ticketStats.correctOnTicket}</span>
                       <span className="mx-1">•</span>
-                      <span>N {ticketStats.incorrectOnTicket}</span>
+                      <span style={{ color: "#EF4444" }}>N {ticketStats.incorrectOnTicket}</span>
                       <span className="mx-1">|</span>
-                      <span>P {ticketStats.missedOnTicket}</span>
+                      <span 
+                        style={{ 
+                          background: "#EF4444", 
+                          color: "white",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          border: "1px solid #000000"
+                        }}
+                      >
+                        P {ticketStats.missedOnTicket}
+                      </span>
                       <span className="mx-1">|</span>
-                      <span>{ticketStats.accuracyPct}%</span>
+                      <span style={{ 
+                        color: ticketStats.accuracyPct <= 50 ? "#EF4444" : 
+                               ticketStats.accuracyPct <= 70 ? "#EAB308" : 
+                               "#22C55E"
+                      }}>{ticketStats.accuracyPct}%</span>
                     </div>
                     
                     {ticket.is_winner && (
