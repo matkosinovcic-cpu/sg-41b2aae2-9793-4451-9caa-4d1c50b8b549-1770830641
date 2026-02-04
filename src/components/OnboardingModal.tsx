@@ -44,9 +44,12 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => {
-        console.log("[OnboardingModal] 👆 Outside click detected");
-      }}>
+      <DialogContent 
+        className="sm:max-w-md max-h-[85vh] flex flex-col" 
+        onPointerDownOutside={(e) => {
+          console.log("[OnboardingModal] 👆 Outside click detected");
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold text-center bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             Dobrodošao u Pitalicu Skitalicu! 🎉
@@ -56,74 +59,78 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
-          {/* Main points */}
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <Trophy className="h-5 w-5 text-purple-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm">
-                <strong>Igra se uživo na mobitelu, tabletu ili računalu</strong><br />
-                Sva pitanja se prikazuju i na velikom TV ekranu u kafiću
-              </p>
-            </div>
-            <div className="flex items-start gap-3">
-              <Clock className="h-5 w-5 text-pink-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm">
-                Odgovaraš na <strong>DA/NE pitanja u 9 sekundi</strong>
-              </p>
-            </div>
-            <div className="flex items-start gap-3">
-              <CheckCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm">
-                <strong>Rezultati i tiketi su transparentni</strong> nakon igre
-              </p>
-            </div>
-          </div>
-
-          {/* Expandable "How it works" section */}
-          <div className="border-t pt-4">
-            <button
-              onClick={() => setShowDetails(!showDetails)}
-              className="flex items-center justify-between w-full text-sm font-semibold text-purple-600 hover:text-purple-700"
-            >
-              <span>Kako igra funkcionira</span>
-              {showDetails ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </button>
-            
-            {showDetails && (
-              <div className="mt-3 space-y-2 text-sm text-muted-foreground">
-                <p>• <strong>Preuzmi tiket:</strong> Klikom na gumb dobivaš jedinstven serijski broj</p>
-                <p>• <strong>Prati igru:</strong> Na svom mobitelu i na TV-u ako se zatekneš u kafiću</p>
-                <p>• <strong>Odgovaraj brzo:</strong> Imaš 9 sekundi za svako pitanje (DA/NE)</p>
-                <p>• <strong>Provjeri rezultate:</strong> Nakon eventa vidiš točne odgovore i svoju statistiku</p>
+        {/* Scrollable content area */}
+        <div className="overflow-y-auto flex-1 -mx-6 px-6">
+          <div className="space-y-4 py-4">
+            {/* Main points */}
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <Trophy className="h-5 w-5 text-purple-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm">
+                  <strong>Igra se uživo na mobitelu, tabletu ili računalu</strong><br />
+                  Sva pitanja se prikazuju i na velikom TV ekranu u kafiću
+                </p>
               </div>
-            )}
-          </div>
+              <div className="flex items-start gap-3">
+                <Clock className="h-5 w-5 text-pink-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm">
+                  Odgovaraš na <strong>DA/NE pitanja u 9 sekundi</strong>
+                </p>
+              </div>
+              <div className="flex items-start gap-3">
+                <CheckCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm">
+                  <strong>Rezultati i tiketi su transparentni</strong> nakon igre
+                </p>
+              </div>
+            </div>
 
-          {/* "Don't show again" checkbox */}
-          <div className="flex items-center space-x-2 pt-2">
-            <Checkbox
-              id="dont-show-again"
-              checked={dontShowAgain}
-              onCheckedChange={(checked) => {
-                setDontShowAgain(checked === true);
-                console.log("[OnboardingModal] ☑️ Checkbox toggled:", checked);
-              }}
-            />
-            <label
-              htmlFor="dont-show-again"
-              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-            >
-              Ne prikazuj više
-            </label>
+            {/* Expandable "How it works" section */}
+            <div className="border-t pt-4">
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                className="flex items-center justify-between w-full text-sm font-semibold text-purple-600 hover:text-purple-700"
+              >
+                <span>Kako igra funkcionira</span>
+                {showDetails ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
+              
+              {showDetails && (
+                <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+                  <p>• <strong>Preuzmi tiket:</strong> Klikom na gumb dobivaš jedinstven serijski broj</p>
+                  <p>• <strong>Prati igru:</strong> Na svom mobitelu i na TV-u ako se zatekneš u kafiću</p>
+                  <p>• <strong>Odgovaraj brzo:</strong> Imaš 9 sekundi za svako pitanje (DA/NE)</p>
+                  <p>• <strong>Provjeri rezultate:</strong> Nakon eventa vidiš točne odgovore i svoju statistiku</p>
+                </div>
+              )}
+            </div>
+
+            {/* "Don't show again" checkbox */}
+            <div className="flex items-center space-x-2 pt-2">
+              <Checkbox
+                id="dont-show-again"
+                checked={dontShowAgain}
+                onCheckedChange={(checked) => {
+                  setDontShowAgain(checked === true);
+                  console.log("[OnboardingModal] ☑️ Checkbox toggled:", checked);
+                }}
+              />
+              <label
+                htmlFor="dont-show-again"
+                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+              >
+                Ne prikazuj više
+              </label>
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
+        {/* Sticky button at bottom with safe area padding for iOS */}
+        <div className="flex flex-col gap-2 pt-4 pb-safe sticky bottom-0 bg-background border-t -mx-6 px-6 mt-2">
           <Button
             onClick={() => handleClose("START")}
             className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
