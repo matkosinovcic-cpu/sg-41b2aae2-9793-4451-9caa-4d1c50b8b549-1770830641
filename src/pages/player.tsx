@@ -1088,16 +1088,16 @@ export default function PlayerPage() {
               {/* Show global stats summary */}
               <div className="p-4 bg-muted rounded-lg">
                 <p className="text-sm text-muted-foreground mb-2">Tvoja statistika:</p>
-                <div className="grid grid-cols-3 gap-2 text-sm">
-                  <div>
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="text-center">
                     <p className="font-semibold">{globalStats.correctTotal}</p>
                     <p className="text-muted-foreground">Točno</p>
                   </div>
-                  <div>
+                  <div className="text-center">
                     <p className="font-semibold">{globalStats.incorrectTotal}</p>
                     <p className="text-muted-foreground">Netočno</p>
                   </div>
-                  <div>
+                  <div className="text-center">
                     <p className="font-semibold">{globalStats.accuracyPct}%</p>
                     <p className="text-muted-foreground">Točnost</p>
                   </div>
@@ -1412,15 +1412,23 @@ export default function PlayerPage() {
 
           {/* GLOBAL STATS HEADER */}
           {focusedTicket && (
-            <Card className="bg-white/95 backdrop-blur shadow-sm" data-testid="global-summary-card">
+            <Card className="border-2">
               <CardHeader className="p-2 sm:p-3 pb-2">
-                <div className="flex items-center justify-between mb-2">
+                {/* ROW 1: Brand line - PITALICA SKITALICA */}
+                <div className="text-center -mt-1 mb-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-tight">
+                    PITALICA SKITALICA
+                  </p>
+                </div>
+
+                {/* ROW 2: Player info + Event name + Badge */}
+                <div className="flex items-start justify-between mb-2">
                   <div>
-                    <CardTitle className="text-base font-bold leading-none">
+                    <CardTitle className="text-base font-bold">
                       {playerNickname || "Igrač"}
                     </CardTitle>
-                    <CardDescription className="text-xs mt-0.5">
-                      PITALICA SKITALICA
+                    <CardDescription className="text-sm">
+                      {activeEvent?.name}
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1429,13 +1437,10 @@ export default function PlayerPage() {
                         U toku
                       </Badge>
                     )}
-                    <span className="text-xs text-muted-foreground">
-                      {tickets.findIndex(t => t.id === focusedTicketId) + 1}/{tickets.length}
-                    </span>
                   </div>
                 </div>
 
-                {/* GLOBAL STATS - 1 ROW */}
+                {/* GLOBAL STATS ROW */}
                 <div className="flex items-center justify-between text-sm sm:text-base">
                   <span className="font-bold text-black">
                     {globalStats.totalDrawn}/90
