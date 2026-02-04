@@ -2,7 +2,7 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event } from "@/services/eventService";
-import { ticketService } from "@/services/ticketService";
+import ticketService from "@/services/ticketService";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, RefreshCw, Ticket } from "lucide-react";

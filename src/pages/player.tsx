@@ -1,20 +1,28 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
-import { eventService, Event, Question } from "@/services/eventService";
 import { answerService } from "@/services/answerService";
-import { ticketService } from "@/services/ticketService";
-import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Loader2, Clock, Trophy, Ticket, Plus, RefreshCw } from "lucide-react";
+import ticketService from "@/services/ticketService";
+import { Ticket as TicketIcon, Check, X, AlertCircle, Trophy, Loader2, RefreshCw, Plus, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { computeEventLevelGlobalStats } from "@/lib/statsHelper";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Event } from "@/services/eventService";
+import { eventService } from "@/services/eventService";
+
+// Interface definitions
+interface Question {
+  id: string;
+  text: string;
+  correct_answer: boolean;
+}
 
 // localStorage helpers for multi-ticket support
 function getStoredFreeTickets(eventId: string): string[] {
@@ -890,7 +898,14 @@ export default function PlayerPage() {
       addStoredFreeTicket(activeEvent.id, ticket.serial_number);
 
       // Add ticket to state
-      const updatedTickets = [...tickets, ticket];
+      const newTicketData: TicketData = {
+        id: ticket.id,
+        serial_number: ticket.serial_number,
+        event_id: ticket.event_id,
+        ticket_questions: ticket.ticket_questions || [],
+        is_winner: ticket.is_winner
+      };
+      const updatedTickets = [...tickets, newTicketData];
       setTickets(updatedTickets);
 
       // Load answers for new ticket
@@ -1029,7 +1044,7 @@ export default function PlayerPage() {
             </CardHeader>
             <CardContent>
               <Button onClick={() => router.push("/play")} className="w-full" size="lg">
-                <Ticket className="mr-2 h-5 w-5" />
+                <TicketIcon className="mr-2 h-5 w-5" />
                 Preuzmi tiket
               </Button>
             </CardContent>
@@ -1759,7 +1774,7 @@ export default function PlayerPage() {
           {eventMode === "active" && !currentQuestion && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
-                <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-purple-600" />
+                <Loader2 className="h-12 w-12 animate-spin mx-auto text-purple-600" />
                 <p className="text-lg text-muted-foreground">Čekamo sljedeće pitanje...</p>
               </CardContent>
             </Card>
@@ -1769,7 +1784,7 @@ export default function PlayerPage() {
           {eventMode === "finished" && (
             <Card className="bg-white/80 backdrop-blur">
               <CardContent className="text-center py-12">
-                <Trophy className="h-16 w-16 mx-auto mb-4 text-yellow-500" />
+                <Trophy className="h-16 w-16 mx-auto text-yellow-500" />
                 <p className="text-xl font-bold mb-2">Rezultati za {activeEvent?.name}</p>
                 <p className="text-muted-foreground mb-6">
                   Izvučeno {drawnNumbers.length} od 90 brojeva
@@ -1795,7 +1810,7 @@ export default function PlayerPage() {
                     size="lg"
                     className="flex-1"
                   >
-                    <Ticket className="mr-2 h-5 w-5" />
+                    <TicketIcon className="mr-2 h-5 w-5" />
                     Novi event
                   </Button>
                 </div>
