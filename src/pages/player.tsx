@@ -769,7 +769,7 @@ export default function PlayerPage() {
       console.log("[Player] ⏸️ Stopping fallback polling");
       clearInterval(pollInterval);
     };
-  }, [activeEvent?.id, activeEvent?.status, currentDrawnNumber, tickets.length]);
+  }, [activeEvent?.id, activeEvent?.status, currentDrawnNumber, tickets]);
 
   // Resync on window focus (only for active events)
   useEffect(() => {
@@ -1422,15 +1422,15 @@ export default function PlayerPage() {
           {focusedTicket && (
             <Card className="border-2">
               <CardHeader className="p-2 sm:p-3 pb-2">
-                {/* ROW 1: Brand line - PITALICA SKITALICA */}
-                <div className="text-center -mt-1 mb-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground leading-tight">
+                {/* ROW 1: PITALICA SKITALICA */}
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
                     PITALICA SKITALICA
                   </p>
                 </div>
 
                 {/* ROW 2: Player name + Status badge */}
-                <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
                     {playerNickname?.trim() ? playerNickname : "Igrač"}
                   </CardTitle>
