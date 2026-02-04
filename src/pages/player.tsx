@@ -850,11 +850,7 @@ export default function PlayerPage() {
       const isCorrect = normalizeAnswer(answer) === normalizeAnswer(currentQuestion.correct_answer);
       console.log("[Player] ✅ Answer submitted:", isCorrect ? "CORRECT" : "INCORRECT");
       
-      toast({
-        title: isCorrect ? "✅ Točno!" : "❌ Netočno",
-        description: isCorrect ? "Odgovor je točan!" : "Odgovor nije točan.",
-        variant: isCorrect ? "default" : "destructive"
-      });
+      // Toast removed - feedback shown in UI
     } catch (error) {
       console.error("[Player] ❌ Failed to submit answer:", error);
       toast({
