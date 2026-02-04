@@ -1434,17 +1434,18 @@ export default function PlayerPage() {
                   <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
                     {playerNickname?.trim() ? playerNickname : "Igrač"}
                   </CardTitle>
-                  <p className="text-[10px] text-muted-foreground">DEBUG nick: {playerNickname || "(prazno)"}</p>
-                  <Badge
-                    variant={activeEvent?.status === "active" ? "default" : "secondary"}
-                    className={`text-[10px] px-2 py-0.5 ${
-                      activeEvent?.status === "active"
-                        ? "bg-green-500 hover:bg-green-600"
-                        : "bg-gray-400"
-                    }`}
-                  >
-                    {activeEvent?.status === "active" ? "U toku" : "Završen"}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={activeEvent?.status === "active" ? "default" : "secondary"}
+                      className={`text-[10px] px-2 py-0.5 ${
+                        activeEvent?.status === "active"
+                          ? "bg-green-500 hover:bg-green-600"
+                          : "bg-gray-400"
+                      }`}
+                    >
+                      {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                    </Badge>
+                  </div>
                 </div>
 
                 {/* GLOBAL STATS ROW */}
