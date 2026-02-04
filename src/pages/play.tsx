@@ -14,6 +14,8 @@ import {
   markOnboardingShown,
   hideOnboardingPermanently,
 } from "@/lib/onboardingHelper";
+import { RegistrationModal } from "@/components/RegistrationModal";
+import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -65,6 +67,9 @@ export default function PlayPage() {
   const [limitReached, setLimitReached] = useState(false);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [healingInProgress, setHealingInProgress] = useState(false);
+  
+  // Registration state
+  const [showRegistration, setShowRegistration] = useState(false);
   
   // CRITICAL: Onboarding state must be SEPARATE from event loading
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -203,31 +208,24 @@ export default function PlayPage() {
     loadActiveEvent();
   }, []);
 
-  // Handle free ticket creation with mobile-friendly delayed redirect
-  const handleGetFreeTicket = async () => {
-    if (!activeEvent) {
-      toast({
-        title: "Nema aktivnog eventa",
-        description: "Trenutno nema aktivnog eventa. Pokušaj kasnije.",
-        variant: "destructive"
-      });
-      return;
-    }
-    
-    if (limitReached) return;
+  // Core logic to generate ticket
+  const executeTicketCreation = async (playerId?: string) => {
+    if (!activeEvent) return;
 
     setCreating(true);
     
     try {
-      console.log("[Play] 🎫 Creating free ticket for event:", activeEvent.id);
+      console.log("[Play] 🎫 Creating free ticket for event:", activeEvent.id, "PlayerID:", playerId);
       
       // STEP 1: Create ticket in database and WAIT for response
-      const ticket = await ticketService.createFreeTicket(activeEvent.id);
+      // playerId will be passed if coming from registration, or fetched inside helper if already exists
+      const ticket = await ticketService.createFreeTicket(activeEvent.id, playerId);
       
       console.log("[Play] ✅ Ticket created successfully:", {
         serial: ticket.serial_number,
         ticket_id: ticket.id,
-        event_id: activeEvent.id
+        event_id: activeEvent.id,
+        player_id: ticket.player_id
       });
 
       // STEP 2: Store in localStorage for this event
@@ -280,6 +278,39 @@ export default function PlayPage() {
         });
       }
     }
+  };
+
+  // Handle "Get Ticket" click
+  const handleGetFreeTicket = () => {
+    if (!activeEvent) {
+      toast({
+        title: "Nema aktivnog eventa",
+        description: "Trenutno nema aktivnog eventa. Pokušaj kasnije.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    if (limitReached) return;
+
+    // CHECK REGISTRATION FIRST
+    if (hasPlayerProfile()) {
+      // User has profile, proceed directly
+      console.log("[Play] 👤 User has profile, proceeding to ticket creation");
+      executeTicketCreation();
+    } else {
+      // User needs to register
+      console.log("[Play] 👤 New user, showing registration modal");
+      setShowRegistration(true);
+    }
+  };
+
+  const handleRegistrationSuccess = (playerId: string) => {
+    console.log("[Play] ✅ Registration successful, player_id:", playerId);
+    setShowRegistration(false);
+    
+    // Auto-continue to ticket creation with new player_id
+    executeTicketCreation(playerId);
   };
 
   // Handle "Open my tickets" button with delayed redirect
@@ -449,17 +480,22 @@ export default function PlayPage() {
         </Card>
       </div>
 
-      {/* CRITICAL: Onboarding Modal - Completely separate from event loading */}
+      {/* Onboarding Modal - Separate from registration */}
       <OnboardingModal
         open={showOnboarding}
         onOpenChange={(open) => {
-          // ONLY allow close through explicit user actions (X, START, OUTSIDE)
-          // This prevents auto-close on re-renders
           if (!open) {
             console.log("[Play] ⚠️ Unexpected modal close attempt blocked");
           }
         }}
         onDismiss={handleOnboardingDismiss}
+      />
+
+      {/* Registration Modal - Shows only if needed */}
+      <RegistrationModal
+        open={showRegistration}
+        onSuccess={handleRegistrationSuccess}
+        onCancel={() => setShowRegistration(false)}
       />
     </>
   );

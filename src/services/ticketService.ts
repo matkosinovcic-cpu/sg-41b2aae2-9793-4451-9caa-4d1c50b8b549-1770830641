@@ -1,12 +1,16 @@
 import { supabase } from "@/integrations/supabase/client";
+import { generateTicketSerial } from "@/lib/utils";
+import { v4 as uuidv4 } from 'uuid';
+import { getPlayerId } from "@/lib/playerHelper";
 
 export interface Ticket {
   id: string;
-  serial_number: string;
   event_id: string;
-  is_winner: boolean;
+  serial_number: string;
+  status: 'active' | 'used' | 'expired';
   created_at: string;
-  ticket_questions: TicketQuestion[];
+  session_id: string;
+  player_id?: string; // Added field
 }
 
 export interface TicketQuestion {
@@ -18,31 +22,54 @@ export interface TicketQuestion {
 const MAX_FREE_TICKETS_PER_PLAYER = 4;
 
 /**
- * Generate a cryptographically unique ticket serial number
- * Format: T-{8_random_chars} (e.g., T-A7F3K9M2)
+ * Creates a free ticket for an event
+ * @param eventId The event ID
+ * @param playerId Optional player ID if registered
+ * @returns The created ticket
  */
-const generateUniqueSerial = (): string => {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Readable chars (no 0/O, 1/I)
-  let serial = "T-";
-  for (let i = 0; i < 8; i++) {
-    serial += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return serial;
-};
+export async function createFreeTicket(eventId: string, playerId?: string): Promise<Ticket> {
+  console.log("[TicketService] Creating free ticket for event:", eventId);
 
-/**
- * Generate 15 unique random numbers between 1 and 90
- */
-const generateTicketNumbers = (): number[] => {
-  const numbers: number[] = [];
-  while (numbers.length < 15) {
-    const num = Math.floor(Math.random() * 90) + 1;
-    if (!numbers.includes(num)) {
-      numbers.push(num);
-    }
+  // 1. Get or create a session ID (fingerprint)
+  let sessionId = localStorage.getItem("ps_session_id");
+  if (!sessionId) {
+    sessionId = uuidv4();
+    localStorage.setItem("ps_session_id", sessionId);
   }
-  return numbers.sort((a, b) => a - b);
-};
+
+  // 2. Resolve player_id if not provided
+  const resolvedPlayerId = playerId || getPlayerId();
+
+  // 3. Generate unique serial
+  const serialNumber = generateTicketSerial();
+
+  // 4. Create ticket in database
+  const { data, error } = await supabase
+    .from("tickets")
+    .insert({
+      event_id: eventId,
+      serial_number: serialNumber,
+      status: "active",
+      session_id: sessionId,
+      player_id: resolvedPlayerId, // Link to player profile
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("[TicketService] Error creating ticket:", error);
+    
+    // Check for limit reached error (from database trigger or constraint if exists)
+    if (error.message.includes("limit")) {
+      throw new Error("FREE_LIMIT_REACHED");
+    }
+    
+    throw error;
+  }
+
+  console.log("[TicketService] Ticket created:", data.serial_number);
+  return data as Ticket;
+}
 
 /**
  * Get player ID from localStorage (device-based identification)

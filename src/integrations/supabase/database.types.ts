@@ -100,6 +100,7 @@ export type Database = {
           name: string
           question_open_until: string | null
           status: string
+          updated_at: string | null
           winner_ticket_id: string | null
         }
         Insert: {
@@ -112,6 +113,7 @@ export type Database = {
           name: string
           question_open_until?: string | null
           status?: string
+          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Update: {
@@ -124,6 +126,7 @@ export type Database = {
           name?: string
           question_open_until?: string | null
           status?: string
+          updated_at?: string | null
           winner_ticket_id?: string | null
         }
         Relationships: []
@@ -198,18 +201,21 @@ export type Database = {
           created_at: string | null
           event_id: string
           id: string
+          player_id: string | null
           session_token: string
         }
         Insert: {
           created_at?: string | null
           event_id: string
           id?: string
+          player_id?: string | null
           session_token: string
         }
         Update: {
           created_at?: string | null
           event_id?: string
           id?: string
+          player_id?: string | null
           session_token?: string
         }
         Relationships: [
@@ -220,7 +226,35 @@ export type Database = {
             referencedRelation: "events"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "player_sessions_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      players: {
+        Row: {
+          created_at: string | null
+          email: string
+          id: string
+          nickname: string
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          id?: string
+          nickname: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          id?: string
+          nickname?: string
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
@@ -254,18 +288,21 @@ export type Database = {
           correct_answer: boolean
           created_at: string | null
           id: string
+          question_type: string | null
           text: string
         }
         Insert: {
           correct_answer: boolean
           created_at?: string | null
           id?: string
+          question_type?: string | null
           text: string
         }
         Update: {
           correct_answer?: boolean
           created_at?: string | null
           id?: string
+          question_type?: string | null
           text?: string
         }
         Relationships: []
@@ -302,21 +339,27 @@ export type Database = {
           event_id: string
           id: string
           is_winner: boolean | null
+          player_id: string | null
           serial_number: string
+          session_id: string | null
         }
         Insert: {
           created_at?: string | null
           event_id: string
           id?: string
           is_winner?: boolean | null
+          player_id?: string | null
           serial_number: string
+          session_id?: string | null
         }
         Update: {
           created_at?: string | null
           event_id?: string
           id?: string
           is_winner?: boolean | null
+          player_id?: string | null
           serial_number?: string
+          session_id?: string | null
         }
         Relationships: [
           {
@@ -324,6 +367,20 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tickets_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tickets_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
         ]
