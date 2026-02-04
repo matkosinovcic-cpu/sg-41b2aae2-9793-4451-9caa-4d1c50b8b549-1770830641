@@ -560,7 +560,7 @@ export default function PlayerPage() {
       // Load current question (only for active events)
       if (event.status === "active" && event.current_drawn_number) {
         console.log("[Player] ❓ Loading current question:", event.current_drawn_number);
-        const questionData = await eventService.getQuestionForNumber(event.id, event.current_drawn_number);
+        const questionData = await eventService.getQuestionForNumber(eventId, event.current_drawn_number);
         if (questionData && questionData.questions) {
           setCurrentQuestion({
             id: questionData.question_id,
