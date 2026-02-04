@@ -1684,14 +1684,6 @@ export default function PlayerPage() {
                         <p className="text-lg font-bold">
                           {isCorrect ? "Točan odgovor!" : "Netočan odgovor"}
                         </p>
-                        <p className="text-muted-foreground">
-                          Tvoj odgovor:{" "}
-                          {existingAnswer.answer ? "DA" : "NE"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Točan odgovor:{" "}
-                          {currentQuestion.correct_answer ? "DA" : "NE"}
-                        </p>
                       </div>
                     );
                   }
