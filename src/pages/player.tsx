@@ -1871,7 +1871,7 @@ export default function PlayerPage() {
                       onClick={() => setReviewFilter("incorrect")}
                       className="text-red-600 border-red-600 hover:bg-red-50"
                     >
-                      Netočna ({globalStats.incorrectTotal + globalStats.skippedTotal})
+                      Netočna ({globalStats.incorrectTotal})
                     </Button>
                   </div>
                 </div>
