@@ -305,12 +305,41 @@ export default function PlayPage() {
     }
   };
 
-  const handleRegistrationSuccess = (playerId: string) => {
-    console.log("[Play] ✅ Registration successful, player_id:", playerId);
+  const handleRegistrationSuccess = (data: {
+    userId: string;
+    sessionId: string;
+    tickets: any[];
+    totalTickets: number;
+  }) => {
+    console.log("[Play] ✅ Registration successful & tickets claimed:", data);
     setShowRegistration(false);
     
-    // Auto-continue to ticket creation with new player_id
-    executeTicketCreation(playerId);
+    // Store all claimed tickets in localStorage for this event
+    if (activeEvent && data.tickets && data.tickets.length > 0) {
+      data.tickets.forEach((ticket: any) => {
+        storeFreeTicket(activeEvent.id, ticket.serial_number);
+      });
+      
+      toast({
+        title: "✅ Tiketi uspješno preuzeti!",
+        description: `Preuzeto ${data.tickets.length} tiketa. Sretno!`,
+        duration: 3000
+      });
+      
+      // Redirect to player page with the first ticket (or just event context)
+      setRedirecting(true);
+      setTimeout(() => {
+        router.push(`/player?ticket=${data.tickets[0].serial_number}`);
+      }, 500);
+    } else {
+      // Fallback if no tickets returned (e.g. limit reached already)
+      toast({
+        title: "Registracija uspješna",
+        description: "Provjerite svoje tikete.",
+        duration: 2000
+      });
+      handleOpenMyTickets();
+    }
   };
 
   // Handle "Open my tickets" button with delayed redirect

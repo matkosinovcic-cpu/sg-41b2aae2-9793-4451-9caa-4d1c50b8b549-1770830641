@@ -22,10 +22,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, UserPlus } from "lucide-react";
+import { claimFreeTickets } from "@/services/ticketService";
+
+interface RegistrationSuccessData {
+  email: string;
+  nickname: string;
+  userId: string;
+  sessionId: string;
+  tickets: any[];
+  totalTickets: number;
+}
 
 interface RegistrationModalProps {
   open: boolean;
-  onSuccess: (playerId: string) => void;
+  onSuccess: (data: RegistrationSuccessData) => void;
   onCancel: () => void;
 }
 
@@ -45,6 +55,7 @@ export function RegistrationModal({
     email?: string;
     confirmEmail?: string;
     checkboxes?: string;
+    general?: string;
   }>({});
 
   // Real-time validation
@@ -86,21 +97,10 @@ export function RegistrationModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    setErrors({});
 
-    // Validation
-    if (formData.email !== formData.confirmEmail) {
-      setError("E-mail adrese se ne podudaraju");
-      return;
-    }
-
-    if (!formData.agreeTerms) {
-      setError("Morate prihvatiti pravila igre");
-      return;
-    }
-
-    if (!formData.ageConfirm) {
-      setError("Morate potvrditi da imate 18+ godina");
+    // Validate all fields
+    if (!validateFields()) {
       return;
     }
 
@@ -111,8 +111,8 @@ export function RegistrationModal({
 
       // ATOMIC: Call RPC to claim all 4 tickets in one transaction
       const result = await claimFreeTickets(
-        formData.email.trim(),
-        formData.nickname.trim(),
+        email.trim(),
+        nickname.trim(),
         4 // Max 4 free tickets
       );
 
@@ -120,30 +120,29 @@ export function RegistrationModal({
 
       // Store session info in localStorage
       if (typeof window !== "undefined") {
-        localStorage.setItem("ps_player_email", formData.email.trim());
-        localStorage.setItem("ps_player_nickname", formData.nickname.trim());
+        localStorage.setItem("ps_player_email", email.trim());
+        localStorage.setItem("ps_player_nickname", nickname.trim());
         localStorage.setItem("ps_user_id", result.user_id);
         localStorage.setItem("ps_session_id", result.session_id);
       }
 
       // Success - close modal and notify parent
       onSuccess({
-        email: formData.email.trim(),
-        nickname: formData.nickname.trim(),
+        email: email.trim(),
+        nickname: nickname.trim(),
         userId: result.user_id,
         sessionId: result.session_id,
         tickets: result.tickets,
         totalTickets: result.total_tickets,
       });
 
-      onOpenChange(false);
     } catch (err) {
       console.error("[RegistrationModal] ❌ Registration failed:", err);
-      setError(
-        err instanceof Error
+      setErrors({
+        general: err instanceof Error
           ? err.message
           : "Greška pri registraciji. Pokušajte ponovno."
-      );
+      });
     } finally {
       setLoading(false);
     }
@@ -284,6 +283,12 @@ export function RegistrationModal({
 
             {errors.checkboxes && (
               <p className="text-sm text-destructive">{errors.checkboxes}</p>
+            )}
+            
+            {errors.general && (
+              <p className="text-sm text-destructive font-medium bg-destructive/10 p-2 rounded text-center">
+                {errors.general}
+              </p>
             )}
           </div>
 
