@@ -275,9 +275,10 @@ export default function PlayerPage() {
 
   // Load nickname from localStorage on mount
   useEffect(() => {
-    const storedNickname = localStorage.getItem("player_nickname");
-    if (storedNickname) {
-      setPlayerNickname(storedNickname);
+    const keys = ["player_nickname", "playerNickname", "ps_player_nickname"];
+    const raw = keys.map((k) => localStorage.getItem(k)).find((v) => v && v.trim());
+    if (raw) {
+      setPlayerNickname(raw.trim());
     }
   }, []);
 
