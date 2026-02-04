@@ -1469,24 +1469,24 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.missedCount}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center pt-1">
                   <div>
                     <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectCount}</p>
                   </div>
                   
                   <div>
