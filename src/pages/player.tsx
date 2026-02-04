@@ -9,7 +9,6 @@ import { cn } from "@/lib/utils";
 import { computeEventLevelGlobalStats } from "@/lib/statsHelper";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -274,7 +273,13 @@ export default function PlayerPage() {
   // Game state
   const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
   const [lastDrawnNumber, setLastDrawnNumber] = useState<number | null>(null);
-
+  const [myTickets, setMyTickets] = useState<TicketWithNumbers[]>([]);
+  const [eventMode, setEventMode] = useState<"pending" | "active" | "completed">("pending");
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const [answers, setAnswers] = useState<Answer[]>([]);
+  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
+  
   // Stores correct answer for ALL drawn questions
   const [correctAnswersMap, setCorrectAnswersMap] = useState<Record<number, boolean>>({});
 
@@ -792,7 +797,7 @@ export default function PlayerPage() {
 
   // Subscribe to event updates
   useEffect(() => {
-    if (!activeEvent?.id) return;
+    if (!eventId) return;
   }, [currentDrawnNumber]);
 
   // Countdown timer (only for active events)
