@@ -177,6 +177,19 @@ function getCellState(
   return "missed";
 }
 
+function getStatusStyles(status: "not-drawn" | "correct" | "wrong" | "missed") {
+  switch (status) {
+    case "correct":
+      return { bgColor: "bg-[#22C55E]", textColor: "text-white" };
+    case "wrong":
+    case "missed":
+      return { bgColor: "bg-[#DC2626]", textColor: "text-white" };
+    case "not-drawn":
+    default:
+      return { bgColor: "bg-gray-100", textColor: "text-gray-900" };
+  }
+}
+
 // GLOBAL STATS: Aggregate across ALL tickets
 function computeGlobalStats(
   tickets: TicketData[],
@@ -1194,50 +1207,27 @@ export default function PlayerPage() {
                 {/* TICKET GRID VISUAL */}
                 <div>
                   <p className="text-sm font-semibold mb-2">Vizualni Prikaz Tiketa (15 brojeva)</p>
-                  <div className="grid grid-cols-5 gap-2">
-                    {selectedTicketForDetail.ticket_questions
-                      .sort((a, b) => a.question_number - b.question_number)
-                      .map((tq) => {
-                        const qNum = Number(tq.question_number);
-                        const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
-                        
-                        let bgColor = "bg-gray-200 dark:bg-gray-700";
-                        let textColor = "text-gray-900 dark:text-gray-100";
-                        const borderClass = "";
-                        
-                        switch (cellState) {
-                          case "correct":
-                            bgColor = "bg-[#22C55E]";
-                            textColor = "text-white";
-                            break;
-                          case "wrong":
-                            bgColor = "bg-[#DC2626]";
-                            textColor = "text-white";
-                            break;
-                          case "missed":
-                            bgColor = "bg-[#DC2626]";
-                            textColor = "text-white";
-                            break;
-                          case "not-drawn":
-                            break;
-                        }
-                        
-                        const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                  <div className="grid grid-cols-5 gap-1">
+                    {selectedTicketForDetail.ticket_questions.map((tq) => {
+                      const qNum = Number(tq.question_number);
+                      const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                      const status = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                      const { bgColor, textColor } = getStatusStyles(status);
 
-                        return (
-                          <div
-                            key={qNum}
-                            className={cn(
-                              "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
-                              bgColor,
-                              textColor,
-                              isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
-                            )}
-                          >
-                            {qNum}
-                          </div>
-                        );
-                      })}
+                      return (
+                        <div
+                          key={qNum}
+                          className={cn(
+                            "h-7 sm:h-8 flex items-center justify-center rounded-sm text-[11px] sm:text-xs font-bold transition-all",
+                            bgColor,
+                            textColor,
+                            isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
+                          )}
+                        >
+                          {qNum}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1423,7 +1413,7 @@ export default function PlayerPage() {
           {/* GLOBAL STATS HEADER */}
           {focusedTicket && (
             <Card className="bg-white/95 backdrop-blur shadow-sm" data-testid="global-summary-card">
-              <CardHeader className="p-3">
+              <CardHeader className="p-2 sm:p-3 pb-2">
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <CardTitle className="text-base font-bold leading-none">
@@ -1516,28 +1506,28 @@ export default function PlayerPage() {
                   )}
                   onClick={() => setFocusedTicketId(ticket.id)}
                 >
-                  <CardHeader className="pb-3">
+                  <CardHeader className="p-2 sm:p-3 pb-2">
                     <div className="flex justify-between items-start">
-                      <div className="flex flex-col gap-1">
+                      <div className="flex flex-col gap-0.5">
                         {/* RED 1 — SERIJSKI BROJ */}
-                        <CardTitle className="text-sm sm:text-base truncate leading-tight">
+                        <CardTitle className="text-sm leading-none truncate">
                           {ticket.serial_number}
                         </CardTitle>
 
                         {/* RED 2 — STATISTIKA */}
-                        <div className="text-xs text-muted-foreground leading-none">
+                        <div className="text-[11px] sm:text-xs text-muted-foreground leading-none mt-0.5">
                           <span style={{ color: "#9CA3AF" }}>
                             {ticketStats.drawnOnTicketCount}/15
                           </span>
-                          <span className="mx-1">|</span>
+                          <span className="mx-0.5">|</span>
                           <span style={{ color: "#22C55E" }}>
                             T {ticketStats.correctOnTicket}
                           </span>
-                          <span className="mx-1">•</span>
+                          <span className="mx-0.5">•</span>
                           <span style={{ color: "#EF4444" }}>
                             N {ticketStats.incorrectOnTicket}
                           </span>
-                          <span className="mx-1">|</span>
+                          <span className="mx-0.5">|</span>
                           <span
                             style={{
                               color:
@@ -1545,7 +1535,7 @@ export default function PlayerPage() {
                                   ? "#EF4444"
                                   : ticketStats.accuracyPct <= 70
                                   ? "#EAB308"
-                                  : "#22C55E",
+                                  : "#22C55E"
                             }}
                           >
                             {ticketStats.accuracyPct}%
@@ -1557,53 +1547,32 @@ export default function PlayerPage() {
                     {/* Badge notification removed - using pulse on number instead */}
                   </CardHeader>
                   
-                  <CardContent className="p-4">
+                  <CardContent className="p-2 sm:p-3">
                     {/* Question status text - HARD DISABLED */}
                     {null}
 
                     {/* Number grid */}
-                    <div className="grid grid-cols-5 gap-2">
-                      {ticket.ticket_questions
-                        .sort((a, b) => a.question_number - b.question_number)
-                        .map((tq) => {
-                          const qNum = Number(tq.question_number);
-                          const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
-                          const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
-                          
-                          let bgColor = "bg-gray-200 dark:bg-gray-700";
-                          let textColor = "text-gray-900 dark:text-gray-100";
-                          
-                          switch (cellState) {
-                            case "correct":
-                              bgColor = "bg-[#22C55E]";
-                              textColor = "text-white";
-                              break;
-                            case "wrong":
-                              bgColor = "bg-[#DC2626]";
-                              textColor = "text-white";
-                              break;
-                            case "missed":
-                              bgColor = "bg-[#DC2626]";
-                              textColor = "text-white";
-                              break;
-                            case "not-drawn":
-                              break;
-                          }
-                          
-                          return (
-                            <div
-                              key={qNum}
-                              className={cn(
-                                "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
-                                bgColor,
-                                textColor,
-                                isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
-                              )}
-                            >
-                              {qNum}
-                            </div>
-                          );
-                        })}
+                    <div className="grid grid-cols-5 gap-1">
+                      {ticket.ticket_questions.map((tq) => {
+                        const qNum = Number(tq.question_number);
+                        const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                        const status = getCellState(qNum, drawnNumbers, globalAnswersMap);
+                        const { bgColor, textColor } = getStatusStyles(status);
+
+                        return (
+                          <div
+                            key={qNum}
+                            className={cn(
+                              "h-7 sm:h-8 flex items-center justify-center rounded-sm text-[11px] sm:text-xs font-bold transition-all",
+                              bgColor,
+                              textColor,
+                              isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
+                            )}
+                          >
+                            {qNum}
+                          </div>
+                        );
+                      })}
                     </div>
                   </CardContent>
                 </Card>
@@ -1885,7 +1854,7 @@ export default function PlayerPage() {
                         className={cn(
                           "border-l-4 p-4 rounded-lg transition-all",
                           isCorrect && "border-green-500 bg-green-50/50",
-                          !isCorrect && !isMissed && "border-red-500 bg-red-50/50",
+                          !isCorrect && !isMissed && "border-red-500",
                           isMissed && "border-red-500 bg-red-50/50"
                         )}
                       >
