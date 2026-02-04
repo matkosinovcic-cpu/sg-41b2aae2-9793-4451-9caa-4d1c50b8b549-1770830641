@@ -266,6 +266,18 @@ export default function PlayerPage() {
   const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const [eventMode, setEventMode] = useState<"active" | "finished">("active");
   const [sessionId, setSessionId] = useState<string>("");
+  const [playerNickname, setPlayerNickname] = useState<string>("");
+
+  useEffect(() => {
+    // Load nickname from localStorage
+    const savedNickname = localStorage.getItem("player_nickname");
+    if (savedNickname) {
+      setPlayerNickname(savedNickname);
+    }
+  }, []);
+
+  // Hydration check
+  const [mounted, setMounted] = useState(false);
 
   // Game state
   const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
@@ -1127,6 +1139,7 @@ export default function PlayerPage() {
                   size="lg"
                   className="flex-1"
                 >
+                  <TicketIcon className="mr-2 h-5 w-5" />
                   Nova igra
                 </Button>
               </div>
@@ -1440,59 +1453,62 @@ export default function PlayerPage() {
 
           {/* GLOBAL STATS HEADER */}
           {focusedTicket && (
-            <Card className="bg-white/95 backdrop-blur" data-testid="global-summary-card">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
+            <Card className="bg-white/95 backdrop-blur shadow-sm" data-testid="global-summary-card">
+              <CardHeader className="p-3">
+                <div className="flex items-center justify-between mb-2">
                   <div>
-                    <CardTitle className="text-lg sm:text-xl">
-                      Igrač
+                    <CardTitle className="text-base font-bold leading-none">
+                      {playerNickname || "Igrač"}
                     </CardTitle>
-                    <CardDescription className="text-sm">
+                    <CardDescription className="text-xs mt-0.5">
                       {activeEvent?.name || "Event"}
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={activeEvent?.status === "active" ? "default" : "secondary"}>
+                    <Badge variant={activeEvent?.status === "active" ? "default" : "secondary"} className="h-5 px-2 text-[10px]">
                       {activeEvent?.status === "active" ? "U toku" : "Završen"}
                     </Badge>
-                    <span className="text-sm text-muted-foreground">
-                      {tickets.findIndex(t => t.id === focusedTicketId) + 1} / {tickets.length}
+                    <span className="text-xs text-muted-foreground">
+                      {tickets.findIndex(t => t.id === focusedTicketId) + 1}/{tickets.length}
                     </span>
                   </div>
                 </div>
 
-                {/* GLOBAL STATS - 6 METRICS (2 rows x 3 cols) */}
-                <div className="grid grid-cols-3 gap-2 text-center pt-2">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Izvučeno</p>
-                    <p className="text-lg font-bold">{globalStats.totalDrawn}/90</p>
+                {/* GLOBAL STATS - 6 METRICS (2 rows x 3 cols) - COMPACT */}
+                <div className="grid grid-cols-3 gap-x-2 gap-y-1 text-center">
+                  {/* Row 1 */}
+                  <div className="flex items-center justify-center">
+                    <span className="text-base font-bold text-black leading-none">
+                      {globalStats.totalDrawn}/90
+                    </span>
                   </div>
                   
-                  <div>
-                    <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
+                  <div className="flex items-center justify-center">
+                    <span className="text-base font-bold text-green-600 leading-none">T {globalStats.correctTotal}</span>
                   </div>
                   
-                  <div>
-                    <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
+                  <div className="flex items-center justify-center">
+                    <Badge variant="secondary" className="bg-red-500 text-white border border-black text-[10px] font-bold h-5 px-1.5">
+                      P {globalStats.skippedTotal}
+                    </Badge>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-3 gap-2 text-center pt-1">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
+                  {/* Row 2 */}
+                  <div className="col-start-1 flex items-center justify-center">
+                     {/* Placeholder for alignment if needed, or maybe empty per previous request "Odgovoreno hidden" */}
+                     {/* We need N here? Previous layout had N in second row */}
+                  </div>
+
+                  <div className="col-start-2 flex items-center justify-center">
+                    <span className="text-base font-bold text-red-600 leading-none">N {globalStats.incorrectTotal}</span>
                   </div>
                   
-                  <div>
-                    <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-xs text-muted-foreground">Točnost</p>
-                    <p className="text-lg font-bold">{globalStats.accuracyPct}%</p>
+                  <div className="col-start-3 flex items-center justify-center">
+                    <span className={`text-base font-bold ${
+                      globalStats.accuracyPct <= 50 ? "text-red-600" : 
+                      globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
+                      "text-green-600"
+                    } leading-none`}>{globalStats.accuracyPct}%</span>
                   </div>
                 </div>
               </CardHeader>
@@ -1605,7 +1621,6 @@ export default function PlayerPage() {
                               borderClass = "border-2 border-[#111111]";
                               break;
                             case "not-drawn":
-                              bgColor = "bg-[#E5E7EB]";
                               break;
                           }
                           
