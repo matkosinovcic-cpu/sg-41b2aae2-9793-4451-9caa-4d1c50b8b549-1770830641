@@ -1208,17 +1208,17 @@ export default function PlayerPage() {
                         
                         switch (cellState) {
                           case "correct":
-                            bgColor = "bg-green-500";
+                            bgColor = "bg-[#22C55E]";
                             textColor = "text-white";
                             break;
                           case "wrong":
-                            bgColor = "bg-red-500";
+                            bgColor = "bg-[#DC2626]";
                             textColor = "text-white";
                             break;
                           case "missed":
-                            bgColor = "bg-red-500";
+                            bgColor = "bg-[#DC2626]";
                             textColor = "text-white";
-                            borderClass = "border-2 border-black";
+                            borderClass = "border-2 border-[#111111]";
                             break;
                           case "not-drawn":
                             break;
@@ -1241,15 +1241,15 @@ export default function PlayerPage() {
                   </div>
                   <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
                     <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-green-500 rounded"></div>
+                      <div className="w-4 h-4 bg-[#22C55E] rounded"></div>
                       <span>Točno</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-red-500 rounded"></div>
+                      <div className="w-4 h-4 bg-[#DC2626] rounded"></div>
                       <span>Netočno</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-red-500 border-2 border-black rounded"></div>
+                      <div className="w-4 h-4 bg-[#DC2626] border-2 border-[#111111] rounded"></div>
                       <span>Propušteno</span>
                     </div>
                     <div className="flex items-center gap-1">
@@ -1580,19 +1580,20 @@ export default function PlayerPage() {
                           
                           switch (cellState) {
                             case "correct":
-                              bgColor = "bg-green-500";
+                              bgColor = "bg-[#22C55E]";
                               textColor = "text-white";
                               break;
                             case "wrong":
-                              bgColor = "bg-red-500";
+                              bgColor = "bg-[#DC2626]";
                               textColor = "text-white";
                               break;
                             case "missed":
-                              bgColor = "bg-red-500";
+                              bgColor = "bg-[#DC2626]";
                               textColor = "text-white";
-                              borderClass = "border-2 border-black";
+                              borderClass = "border-2 border-[#111111]";
                               break;
                             case "not-drawn":
+                              bgColor = "bg-[#E5E7EB]";
                               break;
                           }
                           
@@ -1603,8 +1604,7 @@ export default function PlayerPage() {
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
                                 textColor,
-                                borderClass,
-                                cellState === "correct" && "ring-2 ring-yellow-400 scale-110"
+                                borderClass
                               )}
                             >
                               {qNum}
