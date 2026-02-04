@@ -45,23 +45,26 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent 
-        className="sm:max-w-md max-h-[85vh] flex flex-col" 
+        className="sm:max-w-md max-h-[85vh] flex flex-col p-0" 
         onPointerDownOutside={(e) => {
           console.log("[OnboardingModal] 👆 Outside click detected");
         }}
       >
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold text-center bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-            Dobrodošao u Pitalicu Skitalicu! 🎉
-          </DialogTitle>
-          <DialogDescription className="text-center">
-            Kviz uživo koji se igra gdje god da se zatekneš – na ćenifi, fakultetu, autobusu, kafiću ili zidiću.
-          </DialogDescription>
-        </DialogHeader>
+        {/* Header - fixed at top */}
+        <div className="px-6 pt-6 pb-4 border-b bg-background">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold text-center bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+              Dobrodošao u Pitalicu Skitalicu! 🎉
+            </DialogTitle>
+            <DialogDescription className="text-center">
+              Kviz uživo koji se igra gdje god da se zatekneš – na ćenifi, fakultetu, autobusu, kafiću ili zidiću.
+            </DialogDescription>
+          </DialogHeader>
+        </div>
 
-        {/* Scrollable content area */}
-        <div className="overflow-y-auto flex-1 -mx-6 px-6">
-          <div className="space-y-4 py-4">
+        {/* Scrollable content area - takes available space */}
+        <div className="overflow-y-auto flex-1 px-6 py-4">
+          <div className="space-y-4">
             {/* Main points */}
             <div className="space-y-3">
               <div className="flex items-start gap-3">
@@ -110,7 +113,7 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
             </div>
 
             {/* "Don't show again" checkbox */}
-            <div className="flex items-center space-x-2 pt-2">
+            <div className="flex items-center space-x-2 pt-2 pb-4">
               <Checkbox
                 id="dont-show-again"
                 checked={dontShowAgain}
@@ -129,8 +132,8 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
           </div>
         </div>
 
-        {/* Sticky button at bottom with safe area padding for iOS */}
-        <div className="flex flex-col gap-2 pt-4 pb-safe sticky bottom-0 bg-background border-t -mx-6 px-6 mt-2">
+        {/* Fixed footer with CTA button - always at bottom */}
+        <div className="border-t bg-background px-6 py-4 pb-safe">
           <Button
             onClick={() => handleClose("START")}
             className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
