@@ -1223,7 +1223,6 @@ export default function PlayerPage() {
                         }
                         
                         const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
-                        const shouldHighlight = qNum === lastDrawnNumber;
 
                         return (
                           <div
@@ -1232,7 +1231,6 @@ export default function PlayerPage() {
                               "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                               bgColor,
                               textColor,
-                              shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110",
                               isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
                             )}
                           >
@@ -1519,12 +1517,40 @@ export default function PlayerPage() {
                   onClick={() => setFocusedTicketId(ticket.id)}
                 >
                   <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm">
-                        {ticket.serial_number}
-                      </CardTitle>
-                      <div className="text-xs text-muted-foreground">
-                        {ticketStats.drawnOnTicketCount}/{ticket.ticket_questions.length} | T {ticketStats.correctOnTicket} • N {ticketStats.incorrectOnTicket} | {ticketStats.accuracyPct}%
+                    <div className="flex justify-between items-start">
+                      <div className="flex flex-col gap-1">
+                        {/* RED 1 — SERIJSKI BROJ */}
+                        <CardTitle className="text-sm sm:text-base truncate leading-tight">
+                          {ticket.serial_number}
+                        </CardTitle>
+
+                        {/* RED 2 — STATISTIKA */}
+                        <div className="text-xs text-muted-foreground leading-none">
+                          <span style={{ color: "#9CA3AF" }}>
+                            {ticketStats.drawnOnTicketCount}/15
+                          </span>
+                          <span className="mx-1">|</span>
+                          <span style={{ color: "#22C55E" }}>
+                            T {ticketStats.correctOnTicket}
+                          </span>
+                          <span className="mx-1">•</span>
+                          <span style={{ color: "#EF4444" }}>
+                            N {ticketStats.incorrectOnTicket}
+                          </span>
+                          <span className="mx-1">|</span>
+                          <span
+                            style={{
+                              color:
+                                ticketStats.accuracyPct <= 50
+                                  ? "#EF4444"
+                                  : ticketStats.accuracyPct <= 70
+                                  ? "#EAB308"
+                                  : "#22C55E",
+                            }}
+                          >
+                            {ticketStats.accuracyPct}%
+                          </span>
+                        </div>
                       </div>
                     </div>
                     
@@ -1564,8 +1590,6 @@ export default function PlayerPage() {
                               break;
                           }
                           
-                          const shouldHighlight = qNum === lastDrawnNumber;
-
                           return (
                             <div
                               key={qNum}
@@ -1573,7 +1597,6 @@ export default function PlayerPage() {
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
                                 textColor,
-                                shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110",
                                 isCurrent && "animate-pulse shadow-[0_0_18px_rgba(250,204,21,0.95)]"
                               )}
                             >
