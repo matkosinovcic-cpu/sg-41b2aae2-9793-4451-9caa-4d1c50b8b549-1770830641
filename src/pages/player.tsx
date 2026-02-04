@@ -1204,6 +1204,7 @@ export default function PlayerPage() {
                         
                         let bgColor = "bg-gray-200 dark:bg-gray-700";
                         let textColor = "text-gray-900 dark:text-gray-100";
+                        let borderClass = "";
                         
                         switch (cellState) {
                           case "correct":
@@ -1215,8 +1216,9 @@ export default function PlayerPage() {
                             textColor = "text-white";
                             break;
                           case "missed":
-                            bgColor = "bg-gray-400 dark:bg-gray-600";
+                            bgColor = "bg-red-500";
                             textColor = "text-white";
+                            borderClass = "border-2 border-black";
                             break;
                           case "not-drawn":
                             break;
@@ -1228,7 +1230,8 @@ export default function PlayerPage() {
                             className={cn(
                               "aspect-square flex items-center justify-center rounded text-sm font-bold",
                               bgColor,
-                              textColor
+                              textColor,
+                              borderClass
                             )}
                           >
                             {qNum}
@@ -1246,7 +1249,7 @@ export default function PlayerPage() {
                       <span>Netočno</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <div className="w-4 h-4 bg-gray-400 rounded"></div>
+                      <div className="w-4 h-4 bg-red-500 border-2 border-black rounded"></div>
                       <span>Propušteno</span>
                     </div>
                     <div className="flex items-center gap-1">
@@ -1299,9 +1302,9 @@ export default function PlayerPage() {
                         borderColor = "border-gray-200";
                         bgColor = "bg-gray-50/50";
                       } else if (isMissed) {
-                        statusBadge = <Badge variant="secondary" className="bg-gray-500 text-white">⏭️ PROPUŠTENO</Badge>;
-                        borderColor = "border-gray-400";
-                        bgColor = "bg-gray-50";
+                        statusBadge = <Badge variant="secondary" className="bg-red-600 text-white border-2 border-black">⏭️ PROPUŠTENO</Badge>;
+                        borderColor = "border-red-500";
+                        bgColor = "bg-red-50";
                       } else if (isCorrect) {
                         statusBadge = <Badge variant="default" className="bg-green-600">✅ TOČNO</Badge>;
                         borderColor = "border-green-500";
@@ -1339,12 +1342,12 @@ export default function PlayerPage() {
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div className={cn(
                                 "p-3 rounded-md",
-                                isMissed ? "bg-gray-100" : isCorrect ? "bg-green-100" : "bg-red-100"
+                                isMissed ? "bg-red-100 border-2 border-red-600" : isCorrect ? "bg-green-100" : "bg-red-100"
                               )}>
                                 <p className="text-xs text-muted-foreground mb-1">Tvoj odgovor:</p>
                                 <p className={cn(
                                   "text-xl font-bold",
-                                  isMissed ? "text-gray-600" : isCorrect ? "text-green-700" : "text-red-700"
+                                  isMissed ? "text-red-700" : isCorrect ? "text-green-700" : "text-red-700"
                                 )}>
                                   {isMissed ? "—" : ans?.answer ? "DA" : "NE"}
                                 </p>
@@ -1565,6 +1568,7 @@ export default function PlayerPage() {
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
                           let textColor = "text-gray-900 dark:text-gray-100";
+                          let borderClass = "";
                           
                           switch (cellState) {
                             case "correct":
@@ -1576,8 +1580,9 @@ export default function PlayerPage() {
                               textColor = "text-white";
                               break;
                             case "missed":
-                              bgColor = "bg-gray-400 dark:bg-gray-600";
+                              bgColor = "bg-red-500";
                               textColor = "text-white";
+                              borderClass = "border-2 border-black";
                               break;
                             case "not-drawn":
                               break;
@@ -1590,7 +1595,8 @@ export default function PlayerPage() {
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
                                 textColor,
-                                isCurrent && "ring-2 ring-yellow-400 scale-110"
+                                borderClass,
+                                cellState === "correct" && "ring-2 ring-yellow-400 scale-110"
                               )}
                             >
                               {qNum}
@@ -1879,7 +1885,7 @@ export default function PlayerPage() {
                           "border-l-4 p-4 rounded-lg transition-all",
                           isCorrect && "border-green-500 bg-green-50/50",
                           !isCorrect && !isMissed && "border-red-500 bg-red-50/50",
-                          isMissed && "border-gray-400 bg-gray-50/50"
+                          isMissed && "border-red-500 bg-red-50/50"
                         )}
                       >
                         <div className="flex items-center justify-between mb-3">
@@ -1891,7 +1897,7 @@ export default function PlayerPage() {
                             className={cn(
                               "text-sm",
                               isCorrect && "bg-green-600",
-                              isMissed && "bg-gray-500"
+                              isMissed && "bg-red-600 border-2 border-black"
                             )}
                           >
                             {isMissed ? "⏭️ Propušteno" : isCorrect ? "✅ Točno" : "❌ Netočno"}
@@ -1903,12 +1909,12 @@ export default function PlayerPage() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className={cn(
                             "p-3 rounded-md",
-                            isMissed ? "bg-gray-100" : isCorrect ? "bg-green-100" : "bg-red-100"
+                            isMissed ? "bg-red-100 border-2 border-red-600" : isCorrect ? "bg-green-100" : "bg-red-100"
                           )}>
                             <p className="text-xs text-muted-foreground mb-1">Tvoj odgovor:</p>
                             <p className={cn(
                               "text-xl font-bold",
-                              isMissed ? "text-gray-600" : isCorrect ? "text-green-700" : "text-red-700"
+                              isMissed ? "text-red-700" : isCorrect ? "text-green-700" : "text-red-700"
                             )}>
                               {isMissed ? "—" : ans?.answer ? "DA" : "NE"}
                             </p>
