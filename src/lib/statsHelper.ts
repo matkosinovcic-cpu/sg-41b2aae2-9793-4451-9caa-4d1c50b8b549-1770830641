@@ -31,13 +31,14 @@ export interface EventStats {
  * EVENT-LEVEL GLOBAL STATS (for /player global header)
  * Computes stats from event.drawn_numbers and ALL player_answers
  * MUST NOT depend on tickets or "active tickets"
+ * 
+ * NEW RULE: Propuštena pitanja = Netočni odgovori
  */
 export interface EventLevelGlobalStats {
   totalDrawn: number;
   answeredTotal: number;
   correctTotal: number;
   incorrectTotal: number;
-  skippedTotal: number;
   accuracyPct: number;
 }
 
@@ -48,8 +49,8 @@ export interface EventLevelGlobalStats {
  * - TOTAL_DRAWN = event.drawn_numbers.length
  * - ANSWERED_TOTAL = unique question numbers answered by player
  * - CORRECT_TOTAL = count of is_correct = true
- * - INCORRECT_TOTAL = count of is_correct = false
- * - SKIPPED_TOTAL = TOTAL_DRAWN - ANSWERED_TOTAL
+ * - INCORRECT_TOTAL = count of is_correct = false + (TOTAL_DRAWN - ANSWERED_TOTAL)
+ * - SKIPPED questions are treated as INCORRECT
  * - ACCURACY = (CORRECT_TOTAL / TOTAL_DRAWN) * 100
  * 
  * @param eventId - Event ID
@@ -66,7 +67,6 @@ export async function computeEventLevelGlobalStats(
       answeredTotal: 0,
       correctTotal: 0,
       incorrectTotal: 0,
-      skippedTotal: 0,
       accuracyPct: 0
     };
   }
@@ -81,7 +81,6 @@ export async function computeEventLevelGlobalStats(
       answeredTotal: 0,
       correctTotal: 0,
       incorrectTotal: 0,
-      skippedTotal: 0,
       accuracyPct: 0
     };
   }
@@ -100,8 +99,7 @@ export async function computeEventLevelGlobalStats(
       totalDrawn,
       answeredTotal: 0,
       correctTotal: 0,
-      incorrectTotal: 0,
-      skippedTotal: totalDrawn,
+      incorrectTotal: totalDrawn, // All skipped = incorrect
       accuracyPct: 0
     };
   }
@@ -125,20 +123,21 @@ export async function computeEventLevelGlobalStats(
   // 4. Compute stats
   const answeredTotal = answerMap.size;
   let correctTotal = 0;
-  let incorrectTotal = 0;
+  let answeredIncorrect = 0;
 
   for (const [, ans] of answerMap) {
     if (ans.is_correct) {
       correctTotal++;
     } else {
-      incorrectTotal++;
+      answeredIncorrect++;
     }
   }
 
-  const skippedTotal = totalDrawn - answeredTotal;
+  // Skipped questions = incorrect
+  const skippedCount = totalDrawn - answeredTotal;
+  const incorrectTotal = answeredIncorrect + skippedCount;
   
   // ACCURACY = (CORRECT / TOTAL_DRAWN) * 100
-  // Propuštena pitanja SE RAČUNAJU kao netočna u postotku
   const accuracyPct = totalDrawn > 0 
     ? Math.round((correctTotal / totalDrawn) * 100)
     : 0;
@@ -148,7 +147,7 @@ export async function computeEventLevelGlobalStats(
     answeredTotal,
     correctTotal,
     incorrectTotal,
-    skippedTotal,
+    skippedCount,
     accuracyPct
   });
 
@@ -157,7 +156,6 @@ export async function computeEventLevelGlobalStats(
     answeredTotal,
     correctTotal,
     incorrectTotal,
-    skippedTotal,
     accuracyPct
   };
 }

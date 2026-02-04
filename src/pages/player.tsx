@@ -95,7 +95,6 @@ function computeTicketStats(
   answeredOnTicket: number;
   correctOnTicket: number;
   incorrectOnTicket: number;
-  missedOnTicket: number;
   accuracyPct: number;
 } {
   // 1. Intersection: drawn numbers that are on this ticket
@@ -110,7 +109,6 @@ function computeTicketStats(
       answeredOnTicket: 0,
       correctOnTicket: 0,
       incorrectOnTicket: 0,
-      missedOnTicket: 0,
       accuracyPct: 0
     };
   }
@@ -118,7 +116,8 @@ function computeTicketStats(
   // 2. Count stats from answersMap (global map by question number)
   let answeredOnTicket = 0;
   let correctOnTicket = 0;
-  let incorrectOnTicket = 0;
+  // answer-based incorrect count (not used for final incorrect stats anymore)
+  let _answeredIncorrect = 0;
 
   for (const qNum of drawnOnTicket) {
     const ans = answersMap.get(qNum);
@@ -127,12 +126,13 @@ function computeTicketStats(
       if (ans.isCorrect) {
         correctOnTicket++;
       } else {
-        incorrectOnTicket++;
+        _answeredIncorrect++;
       }
     }
   }
 
-  const missedOnTicket = drawnOnTicketCount - answeredOnTicket;
+  // INCORRECT = Total Drawn - Total Correct (includes both wrong answers and missed questions)
+  const incorrectOnTicket = drawnOnTicketCount - correctOnTicket;
   
   // ❗ PROPUŠTENA PITANJA = NETOČNA U POSTOTKU
   const accuracyPct = drawnOnTicketCount > 0 
@@ -145,7 +145,6 @@ function computeTicketStats(
     answered: answeredOnTicket,
     correct: correctOnTicket,
     incorrect: incorrectOnTicket,
-    missed: missedOnTicket,
     accuracy: accuracyPct
   });
 
@@ -154,7 +153,6 @@ function computeTicketStats(
     answeredOnTicket,
     correctOnTicket,
     incorrectOnTicket,
-    missedOnTicket,
     accuracyPct
   };
 }
@@ -189,7 +187,6 @@ function computeGlobalStats(
   answeredCount: number;
   correctCount: number;
   incorrectCount: number;
-  missedCount: number;
   accuracyPct: number;
 } {
   const totalDrawn = drawnNumbers.length;
@@ -200,7 +197,6 @@ function computeGlobalStats(
       answeredCount: 0,
       correctCount: 0,
       incorrectCount: 0,
-      missedCount: 0,
       accuracyPct: 0
     };
   }
@@ -208,7 +204,6 @@ function computeGlobalStats(
   // Aggregate stats across ALL tickets
   let totalCorrect = 0;
   let totalIncorrect = 0;
-  let totalMissed = 0;
   let totalAnswered = 0;
   let totalDrawnOnTickets = 0;
 
@@ -225,7 +220,6 @@ function computeGlobalStats(
     totalAnswered += ticketStats.answeredOnTicket;
     totalCorrect += ticketStats.correctOnTicket;
     totalIncorrect += ticketStats.incorrectOnTicket;
-    totalMissed += ticketStats.missedOnTicket;
   }
 
   // ❗ PROPUŠTENA PITANJA = NETOČNA U POSTOTKU
@@ -239,7 +233,6 @@ function computeGlobalStats(
     totalAnswered,
     totalCorrect,
     totalIncorrect,
-    totalMissed,
     accuracyPct
   });
 
@@ -248,7 +241,6 @@ function computeGlobalStats(
     answeredCount: totalAnswered,
     correctCount: totalCorrect,
     incorrectCount: totalIncorrect,
-    missedCount: totalMissed,
     accuracyPct
   };
 }
@@ -309,14 +301,12 @@ export default function PlayerPage() {
     answeredTotal: number;
     correctTotal: number;
     incorrectTotal: number;
-    skippedTotal: number;
     accuracyPct: number;
   }>({
     totalDrawn: 0,
     answeredTotal: 0,
     correctTotal: 0,
     incorrectTotal: 0,
-    skippedTotal: 0,
     accuracyPct: 0
   });
 
@@ -695,7 +685,7 @@ export default function PlayerPage() {
                 setCurrentQuestion({
                   id: questionData.question_id,
                   text: questionData.questions.text,
-                  correct_answer: questionData.questions.correct_answer
+                  correct_answer: questionData.questions!.correct_answer
                 });
                 
                 setCorrectAnswersMap(prev => ({
@@ -1194,11 +1184,7 @@ export default function PlayerPage() {
                         </div>
                         <div className="text-center">
                           <p className="text-red-600 font-bold text-xl">{ticketStats.incorrectOnTicket}</p>
-                          <p className="text-xs text-muted-foreground">Netočno</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-gray-600 font-bold text-xl">{ticketStats.missedOnTicket}</p>
-                          <p className="text-xs text-muted-foreground">Propušteno</p>
+                          <p className="text-xs text-muted-foreground">Netočno (uklj. propušteno)</p>
                         </div>
                       </div>
                     </div>
@@ -1229,6 +1215,9 @@ export default function PlayerPage() {
                             textColor = "text-white";
                             break;
                           case "missed":
+                            // Treat missed as wrong visually but with border to distinguish if needed, 
+                            // or just use red per request "Propuštena = Netočni".
+                            // Let's keep the visual distinction for the grid (red with border) but count it as N
                             bgColor = "bg-[#DC2626]";
                             textColor = "text-white";
                             borderClass = "border-2 border-[#111111]";
@@ -1487,23 +1476,29 @@ export default function PlayerPage() {
                     <span className="text-base font-bold text-green-600 leading-none">T {globalStats.correctTotal}</span>
                   </div>
                   
+                  {/* Place N in the 3rd column of 1st row for balance, or keep layout. 
+                      Let's put N in 3rd col, and % in 2nd row center or similar.
+                      Requested: "Zadrži ISTI raspored 3x2... ali ukloni P".
+                      If I remove P, I have an empty slot.
+                      Let's try:
+                      Row 1: X/90 | T | N
+                      Row 2: empty | empty | %
+                      
+                      Or better compact:
+                      X/90 | T {count} | N {count}
+                             % {pct}
+                  */}
+                  
                   <div className="flex items-center justify-center">
-                    <Badge variant="secondary" className="bg-red-500 text-white border border-black text-[10px] font-bold h-5 px-1.5">
-                      P {globalStats.skippedTotal}
-                    </Badge>
+                    <span className="text-base font-bold text-red-600 leading-none">N {globalStats.incorrectTotal}</span>
                   </div>
 
                   {/* Row 2 */}
                   <div className="col-start-1 flex items-center justify-center">
-                     {/* Placeholder for alignment if needed, or maybe empty per previous request "Odgovoreno hidden" */}
-                     {/* We need N here? Previous layout had N in second row */}
+                     {/* Empty */}
                   </div>
 
-                  <div className="col-start-2 flex items-center justify-center">
-                    <span className="text-base font-bold text-red-600 leading-none">N {globalStats.incorrectTotal}</span>
-                  </div>
-                  
-                  <div className="col-start-3 flex items-center justify-center">
+                  <div className="col-start-2 col-span-2 flex items-center justify-center">
                     <span className={`text-base font-bold ${
                       globalStats.accuracyPct <= 50 ? "text-red-600" : 
                       globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
@@ -1550,18 +1545,6 @@ export default function PlayerPage() {
                       <span style={{ color: "#22C55E" }}>T {ticketStats.correctOnTicket}</span>
                       <span className="mx-1">•</span>
                       <span style={{ color: "#EF4444" }}>N {ticketStats.incorrectOnTicket}</span>
-                      <span className="mx-1">|</span>
-                      <span 
-                        style={{ 
-                          background: "#EF4444", 
-                          color: "white",
-                          padding: "2px 6px",
-                          borderRadius: "4px",
-                          border: "1px solid #000000"
-                        }}
-                      >
-                        P {ticketStats.missedOnTicket}
-                      </span>
                       <span className="mx-1">|</span>
                       <span style={{ 
                         color: ticketStats.accuracyPct <= 50 ? "#EF4444" : 
