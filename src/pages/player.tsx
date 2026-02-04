@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Event } from "@/services/eventService";
@@ -272,9 +273,6 @@ export default function PlayerPage() {
 
   // Game state
   const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
-  const [lastDrawnNumber, setLastDrawnNumber] = useState<number | null>(null);
-  const [myTickets, setMyTickets] = useState<TicketWithNumbers[]>([]);
-  const [eventMode, setEventMode] = useState<"pending" | "active" | "completed">("pending");
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [answers, setAnswers] = useState<Answer[]>([]);
@@ -784,22 +782,6 @@ export default function PlayerPage() {
     };
   }, [activeEvent?.id, tickets]);
 
-  // Handle highlight timer for last drawn number
-  useEffect(() => {
-    if (currentDrawnNumber !== null) {
-      setLastDrawnNumber(currentDrawnNumber);
-      const timer = setTimeout(() => {
-        setLastDrawnNumber(null);
-      }, 2500); // 2.5 seconds highlight
-      return () => clearTimeout(timer);
-    }
-  }, [currentDrawnNumber]);
-
-  // Subscribe to event updates
-  useEffect(() => {
-    if (!eventId) return;
-  }, [currentDrawnNumber]);
-
   // Countdown timer (only for active events)
   useEffect(() => {
     if (timeLeft <= 0 || eventMode !== "active") return;
@@ -1216,39 +1198,41 @@ export default function PlayerPage() {
                     {selectedTicketForDetail.ticket_questions
                       .sort((a, b) => a.question_number - b.question_number)
                       .map((tq) => {
-                        const num = Number(tq.question_number);
-                        const isCurrentQuestion = num === currentDrawnNumber;
+                        const qNum = Number(tq.question_number);
+                        const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
                         
-                        // Check if this is the last drawn number (for highlight)
-                        const shouldHighlight = num === lastDrawnNumber;
-
-                        // Find answer for this specific question number
-                        // We check the answers array/map. `answers` is an array of Answer objects.
-                        const answerObj = answers.find(a => a.ticket_id === selectedTicketForDetail.serial_number && Number(a.question_number) === num);
+                        let bgColor = "bg-gray-200 dark:bg-gray-700";
+                        let textColor = "text-gray-900 dark:text-gray-100";
+                        const borderClass = "";
                         
-                        let tileClass = "text-white font-bold text-lg";
-                        
-                        if (answerObj) {
-                          const val = normalizeAnswer(answerObj.answer);
-                          // If normalization returns true (YES) -> green, false (NO) -> red
-                          // But original code used: answer === 1 ? green : red. 
-                          // normalizeAnswer returns boolean | null.
-                          // Let's assume true = green, false = red.
-                          tileClass += val === true ? " bg-green-600" : " bg-red-600";
-                        } else {
-                          tileClass += " bg-gray-600";
+                        switch (cellState) {
+                          case "correct":
+                            bgColor = "bg-[#22C55E]";
+                            textColor = "text-white";
+                            break;
+                          case "wrong":
+                            bgColor = "bg-[#DC2626]";
+                            textColor = "text-white";
+                            break;
+                          case "missed":
+                            bgColor = "bg-[#DC2626]";
+                            textColor = "text-white";
+                            break;
+                          case "not-drawn":
+                            break;
                         }
-
+                        
                         return (
                           <div
-                            key={num}
+                            key={qNum}
                             className={cn(
-                              "flex items-center justify-center h-12 rounded transition-all duration-300",
-                              tileClass,
-                              shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110"
+                              "aspect-square flex items-center justify-center rounded text-sm font-bold",
+                              bgColor,
+                              textColor,
+                              borderClass
                             )}
                           >
-                            {num}
+                            {qNum}
                           </div>
                         );
                       })}
@@ -1555,48 +1539,19 @@ export default function PlayerPage() {
                       </div>
                     )}
                     
-                    {/* Number grid */}
-                    <div className="grid grid-cols-5 gap-2 mt-4">
-                      {ticket.ticket_questions
-                        .sort((a, b) => a.question_number - b.question_number)
-                        .map((tq) => {
-                          const num = Number(tq.question_number);
-                          const isCurrentQuestion = num === currentDrawnNumber;
-                          
-                          // Check if this is the last drawn number (for highlight)
-                          const shouldHighlight = num === lastDrawnNumber;
-
-                          // Find answer for this specific question number
-                          // We check the answers array/map. `answers` is an array of Answer objects.
-                          const answerObj = answers.find(a => a.ticket_id === ticket.serial_number && Number(a.question_number) === num);
-                          
-                          let tileClass = "text-white font-bold text-lg";
-                          
-                          if (answerObj) {
-                            const val = normalizeAnswer(answerObj.answer);
-                            // If normalization returns true (YES) -> green, false (NO) -> red
-                            // But original code used: answer === 1 ? green : red. 
-                            // normalizeAnswer returns boolean | null.
-                            // Let's assume true = green, false = red.
-                            tileClass += val === true ? " bg-green-600" : " bg-red-600";
-                          } else {
-                            tileClass += " bg-gray-600";
-                          }
-
-                          return (
-                            <div
-                              key={num}
-                              className={cn(
-                                "flex items-center justify-center h-12 rounded transition-all duration-300",
-                                tileClass,
-                                shouldHighlight && "ps-drawn-highlight ring-4 ring-white/50 z-10 scale-110"
-                              )}
-                            >
-                              {num}
-                            </div>
-                          );
-                        })}
-                    </div>
+                    {eventMode === "active" && isOnThisTicket && currentDrawnNumber !== null && (
+                      <div className="mt-2">
+                        {hasAnsweredCurrent ? (
+                          <Badge variant="secondary">
+                            Odgovoreno na br. {currentDrawnNumber}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="border-yellow-500 text-yellow-600">
+                            Pitanje br. {currentDrawnNumber} - čeka odgovor
+                          </Badge>
+                        )}
+                      </div>
+                    )}
                   </CardHeader>
                   
                   <CardContent className="p-3 sm:p-4 pt-0">
@@ -1604,13 +1559,12 @@ export default function PlayerPage() {
                       {ticket.ticket_questions
                         .sort((a, b) => a.question_number - b.question_number)
                         .map((tq) => {
-                          const num = Number(tq.question_number);
-                          const isCurrent = currentDrawnNumber === num && eventMode === "active";
-                          const cellState = getCellState(num, drawnNumbers, globalAnswersMap);
+                          const qNum = Number(tq.question_number);
+                          const isCurrent = currentDrawnNumber === qNum && eventMode === "active";
+                          const cellState = getCellState(qNum, drawnNumbers, globalAnswersMap);
                           
                           let bgColor = "bg-gray-200 dark:bg-gray-700";
                           let textColor = "text-gray-900 dark:text-gray-100";
-                          const borderClass = "";
                           
                           switch (cellState) {
                             case "correct":
@@ -1631,15 +1585,14 @@ export default function PlayerPage() {
                           
                           return (
                             <div
-                              key={num}
+                              key={qNum}
                               className={cn(
                                 "aspect-square flex items-center justify-center rounded text-xs font-bold transition-all",
                                 bgColor,
-                                textColor,
-                                borderClass
+                                textColor
                               )}
                             >
-                              {num}
+                              {qNum}
                             </div>
                           );
                         })}
