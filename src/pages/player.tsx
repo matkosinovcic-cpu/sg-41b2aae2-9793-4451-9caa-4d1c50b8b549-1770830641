@@ -1507,15 +1507,15 @@ export default function PlayerPage() {
                   onClick={() => setFocusedTicketId(ticket.id)}
                 >
                   <CardHeader className="p-2 sm:p-3 pb-2">
-                    <div className="flex justify-between items-start">
+                    <div className="flex justify-between items-start mb-2">
                       <div className="flex flex-col gap-0.5">
                         {/* RED 1 — SERIJSKI BROJ */}
-                        <CardTitle className="text-sm leading-none truncate">
+                        <CardTitle className="text-xs leading-none truncate">
                           {ticket.serial_number}
                         </CardTitle>
 
                         {/* RED 2 — STATISTIKA */}
-                        <div className="text-[11px] sm:text-xs text-muted-foreground leading-none mt-0.5">
+                        <div className="text-xs text-muted-foreground leading-none mt-0.5">
                           <span style={{ color: "#9CA3AF" }}>
                             {ticketStats.drawnOnTicketCount}/15
                           </span>
