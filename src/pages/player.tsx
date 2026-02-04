@@ -1165,7 +1165,7 @@ export default function PlayerPage() {
               <div className="space-y-6">
                 {/* BRAND - Glavni naslov */}
                 <div className="text-center mb-2">
-                  <h1 className="text-3xl font-bold uppercase tracking-wider leading-tight">
+                  <h1 className="text-2xl font-bold tracking-wide leading-tight">
                     PITALICA SKITALICA
                   </h1>
                 </div>
