@@ -274,6 +274,11 @@ export default function PlayerPage() {
   // Game state
   const [currentDrawnNumber, setCurrentDrawnNumber] = useState<number | null>(null);
   const [lastDrawnNumber, setLastDrawnNumber] = useState<number | null>(null);
+  
+  const [winnerSerial, setWinnerSerial] = useState<string | null>(null);
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [answers, setAnswers] = useState<Answer[]>([]);
 
   // Stores correct answer for ALL drawn questions
   const [correctAnswersMap, setCorrectAnswersMap] = useState<Record<number, boolean>>({});
