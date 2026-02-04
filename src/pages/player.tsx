@@ -1445,18 +1445,18 @@ export default function PlayerPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-lg sm:text-xl">
-                      {playerNickname || "Igrač"}
+                      Igrač
                     </CardTitle>
                     <CardDescription className="text-sm">
                       {activeEvent?.name || "Event"}
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={getEventStatusVariant(activeEvent?.status)}>
-                      {getEventStatusText(activeEvent?.status)}
+                    <Badge variant={activeEvent?.status === "active" ? "default" : "secondary"}>
+                      {activeEvent?.status === "active" ? "U toku" : "Završen"}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
-                      {focusedTicketIndex + 1} / {myTickets.length}
+                      {tickets.findIndex(t => t.id === focusedTicketId) + 1} / {tickets.length}
                     </span>
                   </div>
                 </div>
@@ -1470,24 +1470,24 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
+                    <p className="text-lg font-bold">{globalStats.skippedCount}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center pt-1">
                   <div>
                     <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectCount}</p>
                   </div>
                   
                   <div>
