@@ -52,7 +52,7 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
             Dobrodošao u Pitalicu Skitalicu! 🎉
           </DialogTitle>
           <DialogDescription className="text-center">
-            Kviz uživo koji se igra u kafiću na TV-u
+            Kviz uživo koji se igra gdje god da se zatekneš – na ćenifi, fakultetu, autobusu, kafiću ili zidiću.
           </DialogDescription>
         </DialogHeader>
 
@@ -62,7 +62,8 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
             <div className="flex items-start gap-3">
               <Trophy className="h-5 w-5 text-purple-600 flex-shrink-0 mt-0.5" />
               <p className="text-sm">
-                <strong>Igra se uživo</strong> na TV-u u kafiću
+                <strong>Igra se uživo na mobitelu, tabletu ili računalu</strong><br />
+                Sva pitanja se prikazuju i na velikom TV ekranu u kafiću
               </p>
             </div>
             <div className="flex items-start gap-3">
@@ -96,7 +97,7 @@ export function OnboardingModal({ open, onOpenChange, onDismiss }: OnboardingMod
             {showDetails && (
               <div className="mt-3 space-y-2 text-sm text-muted-foreground">
                 <p>• <strong>Preuzmi tiket:</strong> Klikom na gumb dobivaš jedinstven serijski broj</p>
-                <p>• <strong>Prati TV:</strong> Pitanja se prikazuju na ekranu u kafiću</p>
+                <p>• <strong>Prati igru:</strong> Na svom mobitelu i na TV-u ako se zatekneš u kafiću</p>
                 <p>• <strong>Odgovaraj brzo:</strong> Imaš 9 sekundi za svako pitanje (DA/NE)</p>
                 <p>• <strong>Provjeri rezultate:</strong> Nakon eventa vidiš točne odgovore i svoju statistiku</p>
               </div>
