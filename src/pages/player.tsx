@@ -1651,7 +1651,7 @@ export default function PlayerPage() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <Badge variant="secondary" className="text-lg">
-                    Pitanje #{currentDrawnNumber}
+                    Pitanje {currentDrawnNumber}
                   </Badge>
                   <div className="flex items-center gap-2">
                     <Clock className="h-5 w-5" />
