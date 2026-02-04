@@ -1440,26 +1440,24 @@ export default function PlayerPage() {
 
           {/* GLOBAL STATS HEADER */}
           {focusedTicket && (
-            <Card className="bg-white/95 backdrop-blur">
+            <Card className="bg-white/95 backdrop-blur" data-testid="global-summary-card">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-lg sm:text-xl">
-                      {focusedTicket.serial_number}
+                      {playerNickname || "Igrač"}
                     </CardTitle>
-                    <CardDescription className="text-xs sm:text-sm">
+                    <CardDescription className="text-sm">
                       {activeEvent?.name || "Event"}
                     </CardDescription>
                   </div>
-                  <div className="flex gap-2">
-                    <Badge variant="outline" className="text-xs sm:text-sm">
-                      {tickets.length} / 4 tiketa
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getEventStatusVariant(activeEvent?.status)}>
+                      {getEventStatusText(activeEvent?.status)}
                     </Badge>
-                    {eventMode === "finished" && (
-                      <Badge variant="secondary" className="text-xs sm:text-sm">
-                        Završeno
-                      </Badge>
-                    )}
+                    <span className="text-sm text-muted-foreground">
+                      {focusedTicketIndex + 1} / {myTickets.length}
+                    </span>
                   </div>
                 </div>
 
