@@ -1428,16 +1428,11 @@ export default function PlayerPage() {
                   </p>
                 </div>
 
-                {/* ROW 2: Player info + Event name + Badge */}
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <CardTitle className="text-base font-bold">
-                      {playerNickname || "Igrač"}
-                    </CardTitle>
-                    <CardDescription className="text-sm">
-                      {activeEvent?.name}
-                    </CardDescription>
-                  </div>
+                {/* ROW 2: Player name + Status badge */}
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
+                    Igrač
+                  </CardTitle>
                   <div className="flex items-center gap-2">
                     {activeEvent?.status === "active" && (
                       <Badge className="bg-green-600 text-white animate-pulse">
