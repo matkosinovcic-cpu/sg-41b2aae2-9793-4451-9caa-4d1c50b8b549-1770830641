@@ -1163,6 +1163,13 @@ export default function PlayerPage() {
             
             {selectedTicketForDetail && (
               <div className="space-y-6">
+                {/* BRAND - Glavni naslov */}
+                <div className="text-center mb-2">
+                  <h1 className="text-3xl font-bold uppercase tracking-wider leading-tight">
+                    PITALICA SKITALICA
+                  </h1>
+                </div>
+
                 {/* SUMMARY STATS */}
                 {(() => {
                   const ticketNumbers = selectedTicketForDetail.ticket_questions.map(tq => Number(tq.question_number));
@@ -1652,7 +1659,7 @@ export default function PlayerPage() {
                     </span>
                   </div>
                 </div>
-                <CardTitle className="text-xl sm:text-2xl mt-4">{currentQuestion.text}</CardTitle>
+                <CardTitle className="text-xl sm:text-2xl mt-4 font-bold">{currentQuestion.text}</CardTitle>
               </CardHeader>
               <CardContent>
                 {(() => {
