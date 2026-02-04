@@ -1469,24 +1469,24 @@ export default function PlayerPage() {
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Odgovoreno</p>
-                    <p className="text-lg font-bold">{globalStats.answeredCount}</p>
+                    <p className="text-lg font-bold">{globalStats.answeredTotal}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Propušteno</p>
-                    <p className="text-lg font-bold">{globalStats.missedCount}</p>
+                    <p className="text-lg font-bold">{globalStats.skippedTotal}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center pt-1">
                   <div>
                     <p className="text-xs text-muted-foreground">Točno</p>
-                    <p className="text-lg font-bold text-green-600">{globalStats.correctCount}</p>
+                    <p className="text-lg font-bold text-green-600">{globalStats.correctTotal}</p>
                   </div>
                   
                   <div>
                     <p className="text-xs text-muted-foreground">Netočno</p>
-                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectCount}</p>
+                    <p className="text-lg font-bold text-red-600">{globalStats.incorrectTotal}</p>
                   </div>
                   
                   <div>
@@ -1527,13 +1527,8 @@ export default function PlayerPage() {
                   <CardHeader className="p-3 sm:p-4">
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
-                    <div className="text-xs text-muted-foreground">
-                      <div className="flex flex-col gap-1 mt-1">
-                        <span>Izvučeno: {ticketStats.drawnOnTicketCount}/15</span>
-                        <span>Točno: {ticketStats.correctOnTicket} • Netočno: {ticketStats.incorrectOnTicket}</span>
-                        <span>Propušteno: {ticketStats.missedOnTicket}</span>
-                        <span>Točnost: {ticketStats.accuracyPct}%</span>
-                      </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Izvučeno: {ticketStats.drawnOnTicketCount}/15 | Točno: {ticketStats.correctOnTicket} • Netočno: {ticketStats.incorrectOnTicket} | Propušteno: {ticketStats.missedOnTicket} | Točnost: {ticketStats.accuracyPct}%
                     </div>
                     
                     {ticket.is_winner && (
