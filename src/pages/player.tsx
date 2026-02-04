@@ -1531,7 +1531,15 @@ export default function PlayerPage() {
                     <CardTitle className="text-sm sm:text-base truncate">{ticket.serial_number}</CardTitle>
                     
                     <div className="text-xs text-muted-foreground mt-1">
-                      Izvučeno: {ticketStats.drawnOnTicketCount}/15 | Točno: {ticketStats.correctOnTicket} • Netočno: {ticketStats.incorrectOnTicket} | Propušteno: {ticketStats.missedOnTicket} | Točnost: {ticketStats.accuracyPct}%
+                      <span>{ticketStats.drawnOnTicketCount}/15</span>
+                      <span className="mx-1">|</span>
+                      <span>T {ticketStats.correctOnTicket}</span>
+                      <span className="mx-1">•</span>
+                      <span>N {ticketStats.incorrectOnTicket}</span>
+                      <span className="mx-1">|</span>
+                      <span>P {ticketStats.missedOnTicket}</span>
+                      <span className="mx-1">|</span>
+                      <span>{ticketStats.accuracyPct}%</span>
                     </div>
                     
                     {ticket.is_winner && (
