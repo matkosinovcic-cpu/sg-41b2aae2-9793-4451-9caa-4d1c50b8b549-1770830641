@@ -10,6 +10,10 @@ export interface Ticket {
   session_id: string;
   player_id: string | null;
   is_winner: boolean;
+  ticket_questions?: {
+    id: string;
+    question_number: number;
+  }[];
 }
 
 export interface TicketQuestion {
@@ -196,7 +200,7 @@ export const ticketService = {
     try {
       const { data, error } = await supabase
         .from("tickets")
-        .select("*")
+        .select("*, ticket_questions(*)")
         .eq("id", ticketId)
         .maybeSingle();
 
@@ -215,7 +219,7 @@ export const ticketService = {
     try {
       const { data, error } = await supabase
         .from("tickets")
-        .select("*")
+        .select("*, ticket_questions(*)")
         .eq("serial_number", serialNumber)
         .maybeSingle();
 

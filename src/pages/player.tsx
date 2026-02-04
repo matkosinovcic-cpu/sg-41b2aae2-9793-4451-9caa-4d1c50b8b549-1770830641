@@ -391,7 +391,15 @@ export default function PlayerPage() {
       // STEP 4: Fetch all tickets
       console.log("[Player] 🔄 Fetching ticket details...");
       const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
-      const loadedTickets = (await Promise.all(ticketPromises)).filter(t => t !== null) as TicketData[];
+      const rawTickets = (await Promise.all(ticketPromises)).filter(t => t !== null);
+      
+      const loadedTickets: TicketData[] = rawTickets.map(t => ({
+        id: t!.id,
+        serial_number: t!.serial_number,
+        event_id: t!.event_id,
+        ticket_questions: t!.ticket_questions || [], // Ensure array exists
+        is_winner: t!.is_winner
+      }));
       
       if (loadedTickets.length === 0) {
         console.log("[Player] ⚠️ No valid tickets loaded");
