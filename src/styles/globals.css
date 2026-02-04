@@ -96,14 +96,3 @@
     @apply mx-auto px-4 md:px-6 lg:px-8 max-w-7xl w-full;
   }
 }
-
-/* Glow/Highlight animation for just drawn number */
-@keyframes psGlow {
-  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,255,255,0.9); }
-  50% { transform: scale(1.06); box-shadow: 0 0 0 12px rgba(255,255,255,0); }
-  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255,255,255,0); }
-}
-.ps-drawn-highlight {
-  animation: psGlow 0.9s ease-out infinite;
-  will-change: transform, box-shadow;
-}
