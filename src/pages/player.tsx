@@ -273,11 +273,11 @@ export default function PlayerPage() {
   const [sessionId, setSessionId] = useState<string>("");
   const [playerNickname, setPlayerNickname] = useState<string>("");
 
+  // Load nickname from localStorage on mount
   useEffect(() => {
-    // Load nickname from localStorage
-    const savedNickname = localStorage.getItem("player_nickname");
-    if (savedNickname) {
-      setPlayerNickname(savedNickname);
+    const storedNickname = localStorage.getItem("player_nickname");
+    if (storedNickname) {
+      setPlayerNickname(storedNickname);
     }
   }, []);
 
@@ -1429,17 +1429,11 @@ export default function PlayerPage() {
                 </div>
 
                 {/* ROW 2: Player name + Status badge */}
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 mb-2">
                   <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
                     {playerNickname?.trim() ? playerNickname : "Igrač"}
                   </CardTitle>
-                  <div className="flex items-center gap-2">
-                    {activeEvent?.status === "active" && (
-                      <Badge className="bg-green-600 text-white animate-pulse">
-                        U toku
-                      </Badge>
-                    )}
-                  </div>
+                  <p className="text-[10px] text-muted-foreground">DEBUG nick: {playerNickname || "(prazno)"}</p>
                 </div>
 
                 {/* GLOBAL STATS ROW */}
