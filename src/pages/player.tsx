@@ -581,7 +581,7 @@ export default function PlayerPage() {
           setCurrentQuestion({
             id: questionData.question_id,
             text: questionData.questions.text,
-            correct_answer: questionData.questions.correct_answer
+            correct_answer: questionData.questions!.correct_answer
           });
           const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
           const now = Date.now();
@@ -1430,17 +1430,16 @@ export default function PlayerPage() {
                   <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
                     {playerNickname?.trim() ? playerNickname : "Igrač"}
                   </CardTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-end gap-1">
                     <Badge
                       variant={activeEvent?.status === "active" ? "default" : "secondary"}
-                      className={`text-[10px] px-2 py-0.5 ${
-                        activeEvent?.status === "active"
-                          ? "bg-green-500 hover:bg-green-600"
-                          : "bg-gray-400"
-                      }`}
+                      className="text-[10px] px-2 py-0.5 bg-green-500"
                     >
                       {activeEvent?.status === "active" ? "U toku" : "Završen"}
                     </Badge>
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {globalStats.accuracyPct}%
+                    </p>
                   </div>
                 </div>
 
