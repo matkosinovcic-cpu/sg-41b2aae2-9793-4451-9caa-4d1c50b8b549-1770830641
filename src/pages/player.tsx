@@ -581,7 +581,7 @@ export default function PlayerPage() {
           setCurrentQuestion({
             id: questionData.question_id,
             text: questionData.questions.text,
-            correct_answer: questionData.questions!.correct_answer
+            correct_answer: questionData.questions.correct_answer
           });
           const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
           const now = Date.now();
@@ -1415,35 +1415,57 @@ export default function PlayerPage() {
           )}
 
           {/* GLOBAL STATS HEADER */}
-          <Card className="border-2 border-primary shadow-lg">
-            <CardHeader className="p-2 sm:p-3 pb-2">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
-                  PITALICA SKITALICA
-                </p>
-              </div>
+          {focusedTicket && (
+            <Card className="border-2">
+              <CardHeader className="p-2 sm:p-3 pb-2">
+                {/* ROW 1: PITALICA SKITALICA */}
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
+                    PITALICA SKITALICA
+                  </p>
+                </div>
 
-              {/* Global Stats: Question Progress, Correct/Wrong counts, Accuracy */}
-              <div className="flex items-center justify-between text-sm sm:text-base">
-                <span className="font-bold text-black">
-                  {globalStats.totalDrawn}/90
-                </span>
-                <span className="font-bold text-green-600">
-                  T {globalStats.correctTotal}
-                </span>
-                <span className="font-bold text-red-600">
-                  N {globalStats.incorrectTotal}
-                </span>
-                <span className={`font-bold ${
-                  globalStats.accuracyPct <= 50 ? "text-red-600" : 
-                  globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
-                  "text-green-600"
-                }`}>
-                  {globalStats.accuracyPct}%
-                </span>
-              </div>
-            </CardHeader>
-          </Card>
+                {/* ROW 2: Player name + Status badge */}
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
+                    {playerNickname?.trim() ? playerNickname : "Igrač"}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={activeEvent?.status === "active" ? "default" : "secondary"}
+                      className={`text-[10px] px-2 py-0.5 ${
+                        activeEvent?.status === "active"
+                          ? "bg-green-500 hover:bg-green-600"
+                          : "bg-gray-400"
+                      }`}
+                    >
+                      {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* GLOBAL STATS ROW */}
+                <div className="flex items-center justify-between text-sm sm:text-base">
+                  <span className="font-bold text-black">
+                    {globalStats.totalDrawn}/90
+                  </span>
+                  <span className="font-bold text-green-600">
+                    T {globalStats.correctTotal}
+                  </span>
+                  <span className="font-bold text-red-600">
+                    N {globalStats.incorrectTotal}
+                  </span>
+                  <span className={`font-bold ${
+                    globalStats.accuracyPct <= 50 ? "text-red-600" : 
+                    globalStats.accuracyPct <= 70 ? "text-yellow-600" : 
+                    "text-green-600"
+                  }`}>
+                    {globalStats.accuracyPct}%
+                  </span>
+                </div>
+              </CardHeader>
+            </Card>
+          )}
 
           {/* MULTI-TICKET GRID */}
           <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
