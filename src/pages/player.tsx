@@ -581,7 +581,7 @@ export default function PlayerPage() {
           setCurrentQuestion({
             id: questionData.question_id,
             text: questionData.questions.text,
-            correct_answer: questionData.questions.correct_answer
+            correct_answer: questionData.questions!.correct_answer
           });
           const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
           const now = Date.now();
