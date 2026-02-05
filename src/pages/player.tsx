@@ -1415,37 +1415,13 @@ export default function PlayerPage() {
           )}
 
           {/* GLOBAL STATS HEADER */}
-          {focusedTicket && (
-            <Card className="border-2">
-              <CardHeader className="p-2 sm:p-3 pb-2">
-                {/* ROW 1: PITALICA SKITALICA */}
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
-                    PITALICA SKITALICA
-                  </p>
-                </div>
-
-                {/* ROW 2: Player name + Status badge */}
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
-                    {playerNickname?.trim() ? playerNickname : "Igrač"}
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant={activeEvent?.status === "active" ? "default" : "secondary"}
-                      className={`text-[10px] px-2 py-0.5 ${
-                        activeEvent?.status === "active"
-                          ? "bg-green-500 hover:bg-green-600"
-                          : "bg-gray-400"
-                      }`}
-                    >
-                      {activeEvent?.status === "active" ? "U toku" : "Završen"}
-                    </Badge>
-                  </div>
-                </div>
-
-                {/* GLOBAL STATS ROW */}
-                <div className="flex items-center justify-between text-sm sm:text-base">
+          <CardHeader className="pb-3 space-y-2">
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  PITALICA SKITALICA
+                </p>
+                <div className="flex items-center gap-4 text-sm">
                   <span className="font-bold text-black">
                     {globalStats.totalDrawn}/90
                   </span>
@@ -1463,9 +1439,32 @@ export default function PlayerPage() {
                     {globalStats.accuracyPct}%
                   </span>
                 </div>
-              </CardHeader>
-            </Card>
-          )}
+                {playerNickname && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {playerNickname}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                {activeEvent?.name && (
+                  <p className="text-xs text-right text-muted-foreground mb-1">
+                    {activeEvent.name}
+                  </p>
+                )}
+                <Badge
+                  variant={activeEvent?.status === "active" ? "default" : "secondary"}
+                  className="shrink-0"
+                >
+                  {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                </Badge>
+                {globalStats && (
+                  <p className="text-lg font-bold text-primary">
+                    {Math.round(globalStats.accuracyPct)}%
+                  </p>
+                )}
+              </div>
+            </div>
+          </CardHeader>
 
           {/* MULTI-TICKET GRID */}
           <div className={`grid gap-2 ${tickets.length === 1 ? "grid-cols-1" : tickets.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-2"}`}>
