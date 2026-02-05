@@ -1301,15 +1301,84 @@ export default function PlayerPage() {
                           )}
                         >
                           <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="text-sm font-bold">
-                                #{index + 1} → Q{qNum}
-                              </Badge>
-                              {!isOnThisTicket && (
-                                <span className="text-xs text-muted-foreground italic">(nije na ovom tiketu)</span>
+                            <div className="flex flex-col">
+                              <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
+                                PITALICA SKITALICA
+                              </p>
+
+                              {activeEvent?.name && (
+                                <p className="text-xs font-bold text-black leading-tight mt-0.5">
+                                  {activeEvent.name}
+                                </p>
                               )}
                             </div>
-                            {statusBadge}
+
+                            <div className="flex flex-col items-end gap-1">
+                              <div
+                                className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                  activeEvent?.status === "active"
+                                    ? "bg-green-500 text-white"
+                                    : "bg-gray-400 text-white"
+                                }`}
+                              >
+                                {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="flex flex-col">
+                              <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
+                                PITALICA SKITALICA
+                              </p>
+
+                              {activeEvent?.name && (
+                                <p className="text-xs font-bold text-black leading-tight mt-0.5">
+                                  {activeEvent.name}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex flex-col items-end gap-1">
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant={activeEvent?.status === "active" ? "default" : "secondary"}
+                                  className={`text-[10px] px-2 py-0.5 ${
+                                    activeEvent?.status === "active"
+                                      ? "bg-green-500 hover:bg-green-600"
+                                      : "bg-gray-400"
+                                  }`}
+                                >
+                                  {activeEvent?.status === "active" ? "U toku" : "Završen"}
+                                </Badge>
+                                <div className="text-sm sm:text-base text-muted-foreground leading-none mt-0.5">
+                                  <span style={{ color: "#9CA3AF" }}>
+                                    {ticketStats.drawnOnTicketCount}/15
+                                  </span>
+                                  <span className="mx-0.5">|</span>
+                                  <span style={{ color: "#22C55E" }}>
+                                    T {ticketStats.correctOnTicket}
+                                  </span>
+                                  <span className="mx-0.5">•</span>
+                                  <span style={{ color: "#EF4444" }}>
+                                    N {ticketStats.incorrectOnTicket}
+                                  </span>
+                                  <span className="mx-0.5">|</span>
+                                  <span
+                                    style={{
+                                      color:
+                                        ticketStats.accuracyPct <= 50
+                                          ? "#EF4444"
+                                          : ticketStats.accuracyPct <= 70
+                                          ? "#EAB308"
+                                          : "#22C55E"
+                                    }}
+                                  >
+                                    {ticketStats.accuracyPct}%
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           
                           <p className="text-base font-medium mb-3">{q.text}</p>
@@ -1420,9 +1489,16 @@ export default function PlayerPage() {
               <CardHeader className="p-2 sm:p-3 pb-2">
                 {/* ROW 1: PITALICA SKITALICA */}
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
-                    PITALICA SKITALICA
-                  </p>
+                  <div className="flex flex-col gap-0.5">
+                    <p className="text-base sm:text-lg font-extrabold uppercase tracking-wide text-black dark:text-white leading-tight">
+                      PITALICA SKITALICA
+                    </p>
+                    {activeEvent?.name && (
+                      <p className="text-xs font-bold text-black leading-tight mt-0.5">
+                        {activeEvent.name}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* ROW 2: Player name + Status badge */}
