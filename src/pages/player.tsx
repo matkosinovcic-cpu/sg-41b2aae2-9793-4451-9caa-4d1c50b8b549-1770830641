@@ -1427,9 +1427,16 @@ export default function PlayerPage() {
 
                 {/* ROW 2: Player name + Status badge */}
                 <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
-                    {playerNickname?.trim() ? playerNickname : "Igrač"}
-                  </CardTitle>
+                  <div>
+                    <CardTitle className="text-sm font-bold text-gray-900 dark:text-white">
+                      {playerNickname?.trim() ? playerNickname : "Igrač"}
+                    </CardTitle>
+                    {activeEvent?.name && (
+                      <p className="text-xs font-bold text-black mt-0.5">
+                        {activeEvent.name}
+                      </p>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <Badge
                       variant={activeEvent?.status === "active" ? "default" : "secondary"}
