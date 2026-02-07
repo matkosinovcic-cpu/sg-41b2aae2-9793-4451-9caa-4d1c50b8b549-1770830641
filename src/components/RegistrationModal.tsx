@@ -35,14 +35,12 @@ interface RegistrationSuccessData {
 
 interface RegistrationModalProps {
   open: boolean;
-  eventId: string; // CRITICAL: Event ID for ticket creation
   onSuccess: (data: RegistrationSuccessData) => void;
   onCancel: () => void;
 }
 
 export function RegistrationModal({
   open,
-  eventId,
   onSuccess,
   onCancel,
 }: RegistrationModalProps) {
@@ -117,7 +115,6 @@ export function RegistrationModal({
 
       // ATOMIC: Call RPC to claim all 4 tickets in one transaction
       const result = await claimFreeTickets(
-        eventId,
         normalizedEmail,
         trimmedNickname,
         4 // Max 4 free tickets

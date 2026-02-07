@@ -16,8 +16,6 @@ import {
 } from "@/lib/onboardingHelper";
 import { RegistrationModal } from "@/components/RegistrationModal";
 import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
-import { resolveVenue, storeVenue } from "@/lib/venueHelper";
-import { cn } from "@/lib/utils";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -77,16 +75,8 @@ export default function PlayPage() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const didCheckOnboarding = useRef(false); // Prevent multiple checks
 
-  // Venue state
-  const [venueSlug, setVenueSlug] = useState<string | null>(null);
-  const [venueResolutionAttempt, setVenueResolutionAttempt] = useState(0);
-  
-  // DEBUG: Show venue resolution state (TEMPORARY - remove after bug is fixed)
-  const [showDebug] = useState(true);
-
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
-  const MAX_VENUE_RESOLUTION_ATTEMPTS = 3;
 
   // CRITICAL: Check onboarding ONCE on mount, INDEPENDENT of event loading
   useEffect(() => {
@@ -131,124 +121,37 @@ export default function PlayPage() {
     try {
       console.log("[Play] 🔍 Loading active event", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
-      // CRITICAL: Use venueSlug state directly (must be set before this function is called)
-      const venue = venueSlug;
-      
-      // DEBUG LOGGING
-      console.log("[Play] 🏢 Venue check:", {
-        venueSlugState: venueSlug,
-        queryVenue: router.query.venue,
-        routerIsReady: router.isReady,
-        usingVenue: venue
-      });
-      
-      if (!venue) {
-        console.log("[Play] ⚠️ No venue in state - user needs to scan QR code");
-        setActiveEvent(null);
-        setLoading(false);
-        setHealingInProgress(false);
-        return;
-      }
-      
-      console.log("[Play] 🎯 Fetching ACTIVE event for venue:", venue);
-      
-      // CRITICAL: STRICT filter by venue_slug - NO FALLBACK to other venues
-      console.log("[Play] 📡 DB Query:", {
-        table: "events",
-        filters: {
-          status: "active",
-          venue_slug: venue
-        },
-        limit: 1
-      });
-      
+      // CRITICAL: Always fetch ACTIVE event (no .single() crash)
       const { data: events, error } = await supabase
         .from("events")
         .select("*")
         .eq("status", "active")
-        .eq("venue_slug", venue)
         .limit(1);
 
       if (error) {
-        console.error("[Play] ❌ Error fetching active event for venue:", error);
+        console.error("[Play] ❌ Error fetching active event:", error);
         throw error;
       }
 
       const event = events && events.length > 0 ? (events[0] as unknown as Event) : null;
 
       if (!event) {
-        console.log("[Play] ℹ️ No active event found for venue:", venue);
+        console.log("[Play] ℹ️ No active event found");
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
         return;
       }
 
-      console.log("[Play] ✅ Active event found for venue:", {
-        venue,
+      console.log("[Play] ✅ Active event found:", {
         id: event.id,
         name: event.name,
-        status: event.status,
-        event_venue_slug: event.venue_slug
+        status: event.status
       });
-      
-      // CRITICAL VALIDATION: Ensure loaded event matches venue slug
-      if (event.venue_slug !== venue) {
-        console.error("[Play] 🚨 VENUE MISMATCH!", {
-          expectedVenue: venue,
-          loadedEventVenue: event.venue_slug,
-          eventName: event.name,
-          eventId: event.id
-        });
-        
-        toast({
-          title: "⚠️ Greška u venue-u",
-          description: `Očekivan venue "${venue}", ali je učitan event za "${event.venue_slug}".`,
-          variant: "destructive",
-          duration: 10000
-        });
-        
-        setActiveEvent(null);
-        setLoading(false);
-        setHealingInProgress(false);
-        return;
-      }
-      
-      // ADDITIONAL VALIDATION: If URL has venue query param, it must match
-      const queryVenue = router.query.venue;
-      if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
-        const normalizedQuery = queryVenue.trim().toLowerCase();
-        if (event.venue_slug !== normalizedQuery) {
-          console.error("[Play] 🚨 URL VENUE MISMATCH!", {
-            urlQueryParam: normalizedQuery,
-            loadedEventVenue: event.venue_slug,
-            eventName: event.name,
-            eventId: event.id
-          });
-          
-          toast({
-            title: "⚠️ Greška u venue-u",
-            description: `URL traži "${normalizedQuery}", ali je učitan event za "${event.venue_slug}". Molimo osvježite stranicu.`,
-            variant: "destructive",
-            duration: 10000
-          });
-          
-          setActiveEvent(null);
-          setLoading(false);
-          setHealingInProgress(false);
-          return;
-        } else {
-          console.log("[Play] ✅ URL venue validation passed:", {
-            urlQueryParam: normalizedQuery,
-            loadedEventVenue: event.venue_slug,
-            match: true
-          });
-        }
-      }
       
       setActiveEvent(event);
 
-      // Check ticket limit for this ACTIVE event ONLY
+      // Check ticket limit for this ACTIVE event
       const storedTickets = getStoredFreeTickets(event.id);
       setFreeTicketCount(storedTickets.length);
       setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
@@ -273,6 +176,7 @@ export default function PlayPage() {
         clearOldEventContext();
         setRetryAttempt(prev => prev + 1);
         
+        // Show healing toast
         toast({
           title: "🔄 Prebacivanje na aktivni event...",
           description: "Trenutak...",
@@ -283,7 +187,7 @@ export default function PlayPage() {
         return;
       }
       
-      // Final fallback
+      // Final fallback: show user-friendly error but don't crash
       console.error("[Play] ❌ Self-heal failed after retries");
       setHealingInProgress(false);
       toast({
@@ -301,69 +205,8 @@ export default function PlayPage() {
 
   // Load event on mount (SEPARATE from onboarding)
   useEffect(() => {
-    // CRITICAL: Wait for router.isReady before resolving venue
-    if (!router.isReady) {
-      console.log("[Play] ⏳ Router not ready yet, waiting...");
-      return;
-    }
-    
-    console.log("[Play] ✅ Router ready, resolving venue...");
-    console.log("[Play] 🌐 Full router state:", {
-      isReady: router.isReady,
-      query: router.query,
-      pathname: router.pathname,
-      asPath: router.asPath
-    });
-    
-    // CRITICAL: Query param MUST have absolute priority
-    const queryVenue = router.query.venue;
-    let resolved: string | null = null;
-    
-    if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
-      // Query param exists and is not empty - USE IT (absolute priority)
-      resolved = queryVenue.trim().toLowerCase();
-      console.log("[Play] ✅ Using venue from QUERY (absolute priority):", resolved);
-      
-      // Store as new fallback
-      storeVenue(resolved);
-    } else {
-      // No query param - use localStorage fallback
-      if (typeof window !== "undefined") {
-        const stored = localStorage.getItem("ps_venue");
-        if (stored && stored.trim()) {
-          resolved = stored.trim().toLowerCase();
-          console.log("[Play] ✅ Using venue from LOCALSTORAGE (fallback):", resolved);
-        }
-      }
-    }
-    
-    console.log("[Play] 🏢 Venue resolution result:", {
-      queryVenue: router.query.venue,
-      storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
-      resolvedVenue: resolved,
-      routerIsReady: router.isReady
-    });
-    
-    if (resolved) {
-      setVenueSlug(resolved);
-      console.log("[Play] 🎯 Set venueSlug state to:", resolved);
-    } else {
-      console.log("[Play] ⚠️ No venue resolved");
-      setVenueSlug(null);
-    }
-  }, [router.isReady, router.query.venue]); // Re-run when router becomes ready or venue changes
-
-  // SEPARATE useEffect: Load event ONLY when venueSlug is set
-  useEffect(() => {
-    if (venueSlug) {
-      console.log("[Play] 🔄 venueSlug changed to:", venueSlug, "- loading active event");
-      loadActiveEvent();
-    } else {
-      console.log("[Play] ⏭️ venueSlug is null, skipping loadActiveEvent");
-      setActiveEvent(null);
-      setLoading(false);
-    }
-  }, [venueSlug]); // Trigger ONLY when venueSlug changes
+    loadActiveEvent();
+  }, []);
 
   // Core logic to generate ticket
   const executeTicketCreation = async (playerId?: string) => {
@@ -510,24 +353,15 @@ export default function PlayPage() {
       return;
     }
     
-    // CRITICAL: Only show tickets for THIS event (prevents mixing venues)
     const storedTickets = getStoredFreeTickets(activeEvent.id);
     
-    console.log("[Play] 🎫 Opening my tickets:", {
-      eventId: activeEvent.id,
-      eventName: activeEvent.name,
-      venue: activeEvent.venue_slug,
-      ticketCount: storedTickets.length
-    });
-    
     if (storedTickets.length > 0) {
-      console.log("[Play] 🔄 Redirecting to player with event:", activeEvent.id);
+      console.log("[Play] 🔄 Opening player with stored tickets for event:", activeEvent.id);
       
       setRedirecting(true);
       
       setTimeout(() => {
-        // Pass both event and venue to ensure correct context
-        router.push(`/player?event=${activeEvent.id}&venue=${activeEvent.venue_slug}`);
+        router.push(`/player?event=${activeEvent.id}`);
       }, 200);
     } else {
       toast({
@@ -544,32 +378,7 @@ export default function PlayPage() {
         title="Preuzmi tiket - Pitalica Skitalica"
         description="Skeniraj QR i preuzmi besplatni tiket za aktivni event!"
       />
-      
-      {/* DEBUG OVERLAY - TEMPORARY (remove after bug is fixed) */}
-      {showDebug && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 dark:bg-yellow-900 border-b-2 border-yellow-400 p-2 text-xs font-mono">
-          <div className="max-w-6xl mx-auto space-y-1">
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <span className="font-bold">🔍 DEBUG:</span>
-              <span>query={String(router.query.venue || "null")}</span>
-              <span>resolved={venueSlug || "null"}</span>
-              <span>stored={typeof window !== "undefined" ? localStorage.getItem("ps_venue") || "null" : "null"}</span>
-              <span>isReady={String(router.isReady)}</span>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <span className="font-bold">📋 EVENT:</span>
-              <span>id={activeEvent?.id?.slice(0, 8) || "null"}</span>
-              <span>name={activeEvent?.name || "null"}</span>
-              <span>venue={activeEvent?.venue_slug || "null"}</span>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      <div className={cn(
-        "min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400",
-        showDebug && "pt-24" // Add padding when debug overlay is visible
-      )}>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
         <Card className="w-full max-w-md shadow-2xl">
           <CardHeader className="text-center space-y-2">
             <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
@@ -587,17 +396,6 @@ export default function PlayPage() {
                   {healingInProgress ? "Prebacivanje na aktivni event..." : "Učitavam..."}
                 </p>
               </div>
-            ) : !venueSlug ? (
-              <>
-                <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
-                  <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
-                    📱 Odaberi kafić
-                  </p>
-                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                    Skeniraj QR kod na svom stolu da bi preuzeo/la tiket.
-                  </p>
-                </div>
-              </>
             ) : activeEvent ? (
               <>
                 <div className="space-y-2 text-center">
@@ -690,7 +488,7 @@ export default function PlayPage() {
               <>
                 <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
                   <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
-                    ⏳ Nema aktivnog eventa za ovaj kafić.
+                    ⏳ Trenutno nema aktivnog eventa.
                   </p>
                   <p className="text-sm text-yellow-700 dark:text-yellow-300">
                     Molimo pričekajte da event započne.
@@ -725,7 +523,6 @@ export default function PlayPage() {
       {/* Registration Modal - Shows only if needed */}
       <RegistrationModal
         open={showRegistration}
-        eventId={activeEvent?.id || ""} 
         onSuccess={handleRegistrationSuccess}
         onCancel={() => setShowRegistration(false)}
       />

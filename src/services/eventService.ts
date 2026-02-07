@@ -10,7 +10,6 @@ export interface Event {
   id: string;
   name: string;
   status: "draft" | "active" | "paused" | "finished";
-  venue_slug: string;
   current_question_number: number | null;
   current_drawn_number: number | null;
   drawn_numbers: number[];
