@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Gamepad2, Trophy, Clock } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 
 interface TicketData {
   id: string;
@@ -49,27 +50,22 @@ export default function TVScreen() {
       try {
         console.log("[TV] 🚀 Initializing TV display...");
         
-        // Priority 1: URL query param
-        const urlVenue = router.query.venue as string;
+        // Use venue helper to resolve venue (priority: URL → localStorage)
+        const resolvedVenue = resolveVenue(router.query.venue);
         
-        // Priority 2: localStorage
-        const storedVenue = localStorage.getItem("ps_venue");
-        
-        const targetVenue = urlVenue || storedVenue;
-        
-        if (!targetVenue) {
+        if (!resolvedVenue) {
           console.log("[TV] ⚠️ No venue parameter - waiting for venue selection");
           setVenueSlug("");
           setLoadingError(null);
           return;
         }
         
-        console.log("[TV] 📌 Venue detected:", targetVenue);
-        setVenueSlug(targetVenue);
-        localStorage.setItem("ps_venue", targetVenue);
+        console.log("[TV] 📌 Venue resolved:", resolvedVenue);
+        setVenueSlug(resolvedVenue);
+        storeVenue(resolvedVenue);
         
         // Fetch ACTIVE event for this venue only
-        await loadActiveEventForVenue(targetVenue);
+        await loadActiveEventForVenue(resolvedVenue);
         
       } catch (error) {
         console.error("[TV] ❌ Initialization failed:", error);
