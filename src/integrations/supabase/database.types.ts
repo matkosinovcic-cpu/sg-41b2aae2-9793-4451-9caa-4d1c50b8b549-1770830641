@@ -203,6 +203,7 @@ export type Database = {
           id: string
           player_id: string | null
           session_token: string
+          venue_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -210,6 +211,7 @@ export type Database = {
           id?: string
           player_id?: string | null
           session_token: string
+          venue_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -217,6 +219,7 @@ export type Database = {
           id?: string
           player_id?: string | null
           session_token?: string
+          venue_id?: string | null
         }
         Relationships: [
           {
@@ -231,6 +234,13 @@ export type Database = {
             columns: ["player_id"]
             isOneToOne: false
             referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "player_sessions_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
             referencedColumns: ["id"]
           },
         ]
@@ -387,6 +397,27 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      venues: {
+        Row: {
+          created_at: string | null
+          id: string
+          name: string
+          slug: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          name: string
+          slug: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          name?: string
+          slug?: string
+        }
+        Relationships: []
       }
     }
     Views: {

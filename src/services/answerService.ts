@@ -97,8 +97,11 @@ function checkCorrectness(
 export const answerService = {
   /**
    * Get or create a session for the player/event
+   * @param venueId - Optional venue ID for venue-specific sessions
    */
-  async getOrCreateSession(eventId: string): Promise<PlayerSession> {
+  async getOrCreateSession(eventId: string, venueId?: string): Promise<PlayerSession> {
+    console.log("[ANSWER SERVICE] getOrCreateSession:", { eventId, venueId });
+    
     // Try to find existing session in localStorage first to avoid DB calls if possible
     // But for now, let's just use DB to be safe
     const { data: existingSession } = await supabase
@@ -108,19 +111,27 @@ export const answerService = {
       .maybeSingle();
 
     if (existingSession) {
+      console.log("[ANSWER SERVICE] Found existing session:", existingSession.id);
       return existingSession;
     }
 
+    console.log("[ANSWER SERVICE] Creating new session with venue_id:", venueId);
     const { data: newSession, error } = await supabase
       .from("player_sessions")
       .insert({ 
         event_id: eventId,
-        session_token: crypto.randomUUID()
+        session_token: crypto.randomUUID(),
+        venue_id: venueId || null
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[ANSWER SERVICE] Error creating session:", error);
+      throw error;
+    }
+    
+    console.log("[ANSWER SERVICE] Session created:", newSession.id, "venue_id:", newSession.venue_id);
     return newSession;
   },
 
