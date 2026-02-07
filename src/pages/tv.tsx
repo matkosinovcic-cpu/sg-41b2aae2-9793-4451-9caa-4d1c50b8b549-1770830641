@@ -47,32 +47,29 @@ export default function TVScreen() {
     const initializeTV = async () => {
       try {
         console.log("[TV] 🚀 Initializing TV display...");
-        await loadEvents();
-        console.log("[TV] ✅ Events loaded successfully");
         
         // Priority 1: URL query param
-        const urlEventId = router.query.eventId as string;
+        const urlVenue = router.query.venue as string;
         
         // Priority 2: localStorage
-        const storedEventId = localStorage.getItem("tv_event_id");
+        const storedVenue = localStorage.getItem("ps_venue");
         
-        const targetEventId = urlEventId || storedEventId;
+        const targetVenue = urlVenue || storedVenue;
         
-        if (targetEventId) {
-          console.log("[TV] 📌 Auto-selecting event:", targetEventId, "from", urlEventId ? "URL" : "localStorage");
-          
-          // Validate event exists before selecting
-          const eventExists = await validateEventExists(targetEventId);
-          if (eventExists) {
-            setSelectedEventId(targetEventId);
-          } else {
-            console.warn("[TV] ⚠️ Event", targetEventId, "no longer exists, clearing and showing selection");
-            localStorage.removeItem("tv_event_id");
-            setSelectedEventId("");
-          }
-        } else {
-          console.log("[TV] ℹ️ No stored event, user must select");
+        if (!targetVenue) {
+          console.log("[TV] ⚠️ No venue parameter - waiting for venue selection");
+          setVenueSlug("");
+          setLoadingError(null);
+          return;
         }
+        
+        console.log("[TV] 📌 Venue detected:", targetVenue);
+        setVenueSlug(targetVenue);
+        localStorage.setItem("ps_venue", targetVenue);
+        
+        // Fetch ACTIVE event for this venue only
+        await loadActiveEventForVenue(targetVenue);
+        
       } catch (error) {
         console.error("[TV] ❌ Initialization failed:", error);
         setLoadingError("Failed to initialize TV display. Please refresh the page.");
@@ -80,7 +77,7 @@ export default function TVScreen() {
     };
 
     initializeTV();
-  }, [router.query.eventId]);
+  }, [router.query.venue]);
 
   // Validate event exists in database
   const validateEventExists = async (eventId: string): Promise<boolean> => {
@@ -297,6 +294,49 @@ export default function TVScreen() {
         stack: error instanceof Error ? error.stack : undefined,
       });
       setLoadingError("Failed to load events. Please refresh the page.");
+    }
+  };
+
+  const loadActiveEventForVenue = async (venue: string) => {
+    try {
+      console.log("[TV] 🔍 loadActiveEventForVenue:", venue);
+      setLoadingError(null);
+      
+      // Fetch active event for this venue
+      const { data, error } = await supabase
+        .from("events")
+        .select("*")
+        .eq("status", "active")
+        .eq("venue_slug", venue)
+        .maybeSingle();
+      
+      if (error) {
+        console.error("[TV] ❌ Failed to fetch active event for venue:", error);
+        setLoadingError(`Greška pri dohvaćanju eventa: ${error.message}`);
+        return;
+      }
+      
+      if (!data) {
+        console.log("[TV] ℹ️ No active event found for venue:", venue);
+        setEvent(null);
+        setSelectedEventId("");
+        setLoadingError(null);
+        return;
+      }
+      
+      console.log("[TV] ✅ Active event found for venue:", data.name);
+      setEvent(data);
+      setSelectedEventId(data.id);
+      lastDrawnNumberRef.current = data.current_drawn_number;
+      setDrawnNumbers(new Set(data.drawn_numbers || []));
+      
+      if (data.current_drawn_number) {
+        await loadCurrentQuestion(data.id, data.current_drawn_number);
+      }
+      
+    } catch (error) {
+      console.error("[TV] ❌ loadActiveEventForVenue failed:", error);
+      setLoadingError("Failed to load active event for venue.");
     }
   };
 
@@ -532,19 +572,31 @@ export default function TVScreen() {
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
           <Card className="w-full max-w-md">
             <CardContent className="pt-6">
-              <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
-              <Select onValueChange={setSelectedEventId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an event" />
-                </SelectTrigger>
-                <SelectContent>
-                  {events.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.name} ({e.status})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {!venueSlug ? (
+                /* No venue - ask to scan QR code */
+                <>
+                  <h1 className="text-2xl font-bold mb-4 text-center">TV Display</h1>
+                  <div className="text-center p-8">
+                    <div className="text-6xl mb-4">📱</div>
+                    <p className="text-lg text-gray-600">
+                      Odaberi kafić (skeniraj QR kod)
+                    </p>
+                  </div>
+                </>
+              ) : (
+                /* Venue exists but no active event */
+                <>
+                  <h1 className="text-2xl font-bold mb-4 text-center">
+                    {venueSlug.toUpperCase()}
+                  </h1>
+                  <div className="text-center p-8">
+                    <div className="text-6xl mb-4">⏸️</div>
+                    <p className="text-lg text-gray-600">
+                      Nema aktivnog eventa za ovaj kafić
+                    </p>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
