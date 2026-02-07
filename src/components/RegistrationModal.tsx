@@ -117,7 +117,6 @@ export function RegistrationModal({
 
       // ATOMIC: Call RPC to claim all 4 tickets in one transaction
       const result = await claimFreeTickets(
-        eventId, // CRITICAL: Pass event ID to ensure tickets are created for correct event
         normalizedEmail,
         trimmedNickname,
         4 // Max 4 free tickets
