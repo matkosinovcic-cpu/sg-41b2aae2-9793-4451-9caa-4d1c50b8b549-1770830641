@@ -632,7 +632,7 @@ export default function TVScreen() {
                       <div className="text-lg text-indigo-300 tracking-wide uppercase">
                         Trenutno pitanje
                       </div>
-                      <div className="text-7xl font-black text-white drop-shadow-2xl">
+                      <div className="text-6xl font-black text-white drop-shadow-2xl">
                         {event.current_drawn_number}
                       </div>
                       {timeRemaining > 0 && (
