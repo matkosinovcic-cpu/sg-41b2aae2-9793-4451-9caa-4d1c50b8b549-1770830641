@@ -11,8 +11,8 @@ const VENUE_STORAGE_KEY = "ps_venue";
  * Resolve venue slug from URL parameter or localStorage
  * 
  * Priority:
- * 1. URL query parameter (if provided)
- * 2. localStorage (if no URL parameter)
+ * 1. URL query parameter (if provided and not empty)
+ * 2. localStorage (ONLY if query is not provided at all - i.e., no ?venue= in URL)
  * 3. null (if neither exists)
  * 
  * @param queryVenue - Venue slug from URL query parameter
@@ -22,22 +22,45 @@ export function resolveVenue(queryVenue: string | string[] | undefined): string 
   // Handle array case (Next.js can pass query params as arrays)
   const venueFromQuery = Array.isArray(queryVenue) ? queryVenue[0] : queryVenue;
 
-  if (venueFromQuery && typeof venueFromQuery === "string" && venueFromQuery.trim()) {
-    const resolved = venueFromQuery.trim().toLowerCase();
-    console.log("[VENUE HELPER] Resolved venue from query:", resolved);
-    return resolved;
-  }
+  console.log("[VENUE HELPER] 🔍 Resolving venue:", {
+    queryVenue: venueFromQuery,
+    queryType: typeof venueFromQuery,
+    queryTrimmed: venueFromQuery?.trim(),
+    isUndefined: venueFromQuery === undefined,
+    isEmpty: venueFromQuery === "",
+    isNull: venueFromQuery === null
+  });
 
-  // Fallback to localStorage
-  if (typeof window !== "undefined") {
-    const storedVenue = localStorage.getItem(VENUE_STORAGE_KEY);
-    if (storedVenue && storedVenue.trim()) {
-      console.log("[VENUE HELPER] Resolved venue from localStorage:", storedVenue);
-      return storedVenue.trim().toLowerCase();
+  // CRITICAL: If query param EXISTS (not undefined), it MUST win - even if empty string
+  // Only fall back to localStorage if query param is COMPLETELY MISSING (undefined)
+  if (venueFromQuery !== undefined) {
+    // Query param exists (could be empty string, which means "no venue in URL")
+    if (typeof venueFromQuery === "string" && venueFromQuery.trim()) {
+      const resolved = venueFromQuery.trim().toLowerCase();
+      console.log("[VENUE HELPER] ✅ Resolved venue from QUERY:", resolved);
+      return resolved;
+    } else {
+      // Query param exists but is empty - user explicitly set ?venue= with no value
+      console.log("[VENUE HELPER] ⚠️ Query param is empty string - treating as 'no venue'");
+      return null;
     }
   }
 
-  console.log("[VENUE HELPER] No venue resolved (query and localStorage empty)");
+  // ONLY fall back to localStorage if query param is UNDEFINED (not in URL at all)
+  console.log("[VENUE HELPER] 🔄 Query param undefined, checking localStorage as fallback");
+  
+  if (typeof window !== "undefined") {
+    const storedVenue = localStorage.getItem(VENUE_STORAGE_KEY);
+    console.log("[VENUE HELPER] 💾 localStorage value:", storedVenue);
+    
+    if (storedVenue && storedVenue.trim()) {
+      const resolved = storedVenue.trim().toLowerCase();
+      console.log("[VENUE HELPER] ✅ Resolved venue from LOCALSTORAGE:", resolved);
+      return resolved;
+    }
+  }
+
+  console.log("[VENUE HELPER] ❌ No venue resolved (query and localStorage empty)");
   return null;
 }
 
@@ -50,7 +73,7 @@ export function storeVenue(venue: string): void {
   if (typeof window !== "undefined" && venue && venue.trim()) {
     const normalized = venue.trim().toLowerCase();
     localStorage.setItem(VENUE_STORAGE_KEY, normalized);
-    console.log("[VENUE HELPER] Stored venue in localStorage:", normalized);
+    console.log("[VENUE HELPER] 💾 Stored venue in localStorage:", normalized);
   }
 }
 
@@ -60,7 +83,7 @@ export function storeVenue(venue: string): void {
 export function clearVenue(): void {
   if (typeof window !== "undefined") {
     localStorage.removeItem(VENUE_STORAGE_KEY);
-    console.log("[VENUE HELPER] Cleared venue from localStorage");
+    console.log("[VENUE HELPER] 🗑️ Cleared venue from localStorage");
   }
 }
 

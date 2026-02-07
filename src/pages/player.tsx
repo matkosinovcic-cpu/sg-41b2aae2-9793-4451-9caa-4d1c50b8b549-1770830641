@@ -566,6 +566,36 @@ export default function PlayerPage() {
     }
   };
 
+  // Initialize venue from query param or localStorage
+  useEffect(() => {
+    // CRITICAL: Wait for router.isReady before resolving venue
+    if (!router.isReady) {
+      console.log("[Player] ⏳ Router not ready yet, waiting...");
+      return;
+    }
+
+    // CRITICAL: Resolve venue from query (priority) or localStorage (fallback)
+    const venue = resolveVenue(router.query.venue);
+    
+    // DEBUG LOGGING
+    console.log("[Player] 🏢 Venue resolution:", {
+      queryVenue: router.query.venue,
+      storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
+      resolvedVenue: venue,
+      routerIsReady: router.isReady
+    });
+
+    if (venue) {
+      // CRITICAL: Store venue immediately after resolving (makes it new fallback)
+      storeVenue(venue);
+      setVenueSlug(venue);
+      console.log("[Player] 🎯 Set venue:", venue);
+    } else {
+      console.log("[Player] ⚠️ No venue resolved");
+      setVenueSlug(null);
+    }
+  }, [router.isReady, router.query.venue]); // Depend on isReady AND venue query param
+
   // Load tickets on mount
   useEffect(() => {
     if (router.isReady) {

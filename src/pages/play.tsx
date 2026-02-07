@@ -78,9 +78,11 @@ export default function PlayPage() {
 
   // Venue state
   const [venueSlug, setVenueSlug] = useState<string | null>(null);
+  const [venueResolutionAttempt, setVenueResolutionAttempt] = useState(0);
 
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
+  const MAX_VENUE_RESOLUTION_ATTEMPTS = 3;
 
   // CRITICAL: Check onboarding ONCE on mount, INDEPENDENT of event loading
   useEffect(() => {
@@ -125,24 +127,37 @@ export default function PlayPage() {
     try {
       console.log("[Play] 🔍 Loading active event", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
-      // Resolve venue from query or localStorage
-      const venue = resolveVenue(router.query.venue);
-      console.log("[Play] 🏢 Resolved venue:", venue);
+      // CRITICAL: Use venueSlug state directly (already resolved and stored)
+      const venue = venueSlug;
+      
+      // DEBUG LOGGING
+      console.log("[Play] 🏢 Using venue from state:", {
+        venueSlugState: venueSlug,
+        usingVenue: venue,
+        queryVenue: router.query.venue,
+        routerIsReady: router.isReady
+      });
       
       if (!venue) {
-        console.log("[Play] ⚠️ No venue resolved - user needs to scan QR code");
-        setVenueSlug(null);
+        console.log("[Play] ⚠️ No venue in state - user needs to scan QR code");
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
         return;
       }
       
-      // Store venue for future use
-      storeVenue(venue);
-      setVenueSlug(venue);
+      console.log("[Play] 🎯 Using venue for DB query:", venue);
       
       // CRITICAL: Fetch ACTIVE event ONLY for this venue
+      console.log("[Play] 📡 DB Query:", {
+        table: "events",
+        filters: {
+          status: "active",
+          venue_slug: venue
+        },
+        limit: 1
+      });
+      
       const { data: events, error } = await supabase
         .from("events")
         .select("*")
@@ -169,8 +184,42 @@ export default function PlayPage() {
         venue,
         id: event.id,
         name: event.name,
-        status: event.status
+        status: event.status,
+        event_venue_slug: event.venue_slug
       });
+      
+      // CRITICAL VALIDATION: Ensure loaded event matches URL query param
+      const queryVenue = router.query.venue;
+      if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
+        const normalizedQuery = queryVenue.trim().toLowerCase();
+        if (event.venue_slug !== normalizedQuery) {
+          console.error("[Play] 🚨 VENUE MISMATCH DETECTED!", {
+            urlQueryParam: normalizedQuery,
+            loadedEventVenue: event.venue_slug,
+            eventName: event.name,
+            eventId: event.id
+          });
+          
+          toast({
+            title: "⚠️ Greška u venue-u",
+            description: `URL traži "${normalizedQuery}", ali je učitan event za "${event.venue_slug}". Molimo osvježite stranicu.`,
+            variant: "destructive",
+            duration: 10000
+          });
+          
+          // BLOCK: Don't set activeEvent if there's a mismatch
+          setActiveEvent(null);
+          setLoading(false);
+          setHealingInProgress(false);
+          return;
+        } else {
+          console.log("[Play] ✅ Venue validation passed:", {
+            urlQueryParam: normalizedQuery,
+            loadedEventVenue: event.venue_slug,
+            match: true
+          });
+        }
+      }
       
       setActiveEvent(event);
 
@@ -228,8 +277,73 @@ export default function PlayPage() {
 
   // Load event on mount (SEPARATE from onboarding)
   useEffect(() => {
-    loadActiveEvent();
-  }, []);
+    // CRITICAL: Wait for router.isReady before resolving venue
+    if (!router.isReady) {
+      console.log("[Play] ⏳ Router not ready yet, waiting...");
+      return;
+    }
+    
+    console.log("[Play] ✅ Router ready, resolving venue...");
+    console.log("[Play] 🌐 Full router state:", {
+      isReady: router.isReady,
+      query: router.query,
+      pathname: router.pathname,
+      asPath: router.asPath
+    });
+    
+    // CRITICAL: Resolve venue from query (priority) or localStorage (fallback)
+    const venue = resolveVenue(router.query.venue);
+    
+    // DEBUG LOGGING
+    console.log("[Play] 🏢 Venue resolution result:", {
+      queryVenue: router.query.venue,
+      storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
+      resolvedVenue: venue,
+      routerIsReady: router.isReady,
+      attempt: venueResolutionAttempt + 1
+    });
+    
+    if (venue) {
+      // CRITICAL: Store venue immediately after resolving (makes it new fallback)
+      storeVenue(venue);
+      setVenueSlug(venue);
+      setVenueResolutionAttempt(0); // Reset retry counter
+      console.log("[Play] 🎯 Set venueSlug state to:", venue);
+    } else {
+      console.log("[Play] ⚠️ No venue resolved");
+      
+      // RETRY LOGIC: If venue is null but we have query param, retry
+      if (router.query.venue && venueResolutionAttempt < MAX_VENUE_RESOLUTION_ATTEMPTS) {
+        console.log(`[Play] 🔄 Retrying venue resolution (attempt ${venueResolutionAttempt + 1}/${MAX_VENUE_RESOLUTION_ATTEMPTS})`);
+        setVenueResolutionAttempt(prev => prev + 1);
+        
+        // Retry after short delay
+        setTimeout(() => {
+          const retryVenue = resolveVenue(router.query.venue);
+          if (retryVenue) {
+            storeVenue(retryVenue);
+            setVenueSlug(retryVenue);
+            console.log("[Play] ✅ Venue resolved on retry:", retryVenue);
+          }
+        }, 300);
+      } else {
+        setVenueSlug(null);
+        setVenueResolutionAttempt(0);
+      }
+    }
+  }, [router.isReady, router.query.venue, venueResolutionAttempt]); // Depend on isReady AND venue query param
+
+  // SEPARATE useEffect: Load event ONLY when venueSlug is set
+  useEffect(() => {
+    if (venueSlug) {
+      console.log("[Play] 🔄 venueSlug changed to:", venueSlug, "- loading active event");
+      loadActiveEvent();
+    } else {
+      console.log("[Play] ⏭️ venueSlug is null, skipping loadActiveEvent");
+      setActiveEvent(null);
+      setLoading(false);
+    }
+  }, [venueSlug]); // Trigger ONLY when venueSlug changes
 
   // Core logic to generate ticket
   const executeTicketCreation = async (playerId?: string) => {
