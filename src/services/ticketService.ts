@@ -327,6 +327,7 @@ export async function claimFreeTickets(
     const { data, error } = await supabase.rpc("claim_free_tickets", {
       p_email: normalizedEmail,
       p_nickname: nickname.trim(),
+      p_event_id: eventId,
       p_limit: limit,
     });
 
