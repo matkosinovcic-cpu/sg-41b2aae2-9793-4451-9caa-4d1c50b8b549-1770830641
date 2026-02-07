@@ -632,8 +632,8 @@ export default function TVScreen() {
                       <div className="text-lg text-indigo-300 tracking-wide uppercase">
                         Trenutno pitanje
                       </div>
-                      <div className="text-8xl font-black text-white drop-shadow-2xl">
-                        #{event.current_drawn_number}
+                      <div className="text-7xl font-black text-white drop-shadow-2xl">
+                        {event.current_drawn_number}
                       </div>
                       {timeRemaining > 0 && (
                         <div className="text-5xl font-bold text-yellow-300 animate-pulse">
