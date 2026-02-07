@@ -28,6 +28,7 @@ export default function TVScreen() {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
+  const [venueSlug, setVenueSlug] = useState<string>("");
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
   const [tickets, setTickets] = useState<TicketData[]>([]);
@@ -325,7 +326,7 @@ export default function TVScreen() {
       }
       
       console.log("[TV] ✅ Active event found for venue:", data.name);
-      setEvent(data);
+      setEvent(data as unknown as Event);
       setSelectedEventId(data.id);
       lastDrawnNumberRef.current = data.current_drawn_number;
       setDrawnNumbers(new Set(data.drawn_numbers || []));
