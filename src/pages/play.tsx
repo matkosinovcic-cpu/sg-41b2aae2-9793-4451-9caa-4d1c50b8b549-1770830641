@@ -725,6 +725,7 @@ export default function PlayPage() {
       {/* Registration Modal - Shows only if needed */}
       <RegistrationModal
         open={showRegistration}
+        eventId={activeEvent?.id || ""} 
         onSuccess={handleRegistrationSuccess}
         onCancel={() => setShowRegistration(false)}
       />
