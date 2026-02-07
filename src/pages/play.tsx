@@ -17,6 +17,7 @@ import {
 import { RegistrationModal } from "@/components/RegistrationModal";
 import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
 import { resolveVenue, storeVenue } from "@/lib/venueHelper";
+import { cn } from "@/lib/utils";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -79,6 +80,9 @@ export default function PlayPage() {
   // Venue state
   const [venueSlug, setVenueSlug] = useState<string | null>(null);
   const [venueResolutionAttempt, setVenueResolutionAttempt] = useState(0);
+  
+  // DEBUG: Show venue resolution state (TEMPORARY - remove after bug is fixed)
+  const [showDebug] = useState(true);
 
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
@@ -127,15 +131,15 @@ export default function PlayPage() {
     try {
       console.log("[Play] 🔍 Loading active event", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
-      // CRITICAL: Use venueSlug state directly (already resolved and stored)
+      // CRITICAL: Use venueSlug state directly (must be set before this function is called)
       const venue = venueSlug;
       
       // DEBUG LOGGING
-      console.log("[Play] 🏢 Using venue from state:", {
+      console.log("[Play] 🏢 Venue check:", {
         venueSlugState: venueSlug,
-        usingVenue: venue,
         queryVenue: router.query.venue,
-        routerIsReady: router.isReady
+        routerIsReady: router.isReady,
+        usingVenue: venue
       });
       
       if (!venue) {
@@ -146,9 +150,9 @@ export default function PlayPage() {
         return;
       }
       
-      console.log("[Play] 🎯 Using venue for DB query:", venue);
+      console.log("[Play] 🎯 Fetching ACTIVE event for venue:", venue);
       
-      // CRITICAL: Fetch ACTIVE event ONLY for this venue
+      // CRITICAL: STRICT filter by venue_slug - NO FALLBACK to other venues
       console.log("[Play] 📡 DB Query:", {
         table: "events",
         filters: {
@@ -188,12 +192,34 @@ export default function PlayPage() {
         event_venue_slug: event.venue_slug
       });
       
-      // CRITICAL VALIDATION: Ensure loaded event matches URL query param
+      // CRITICAL VALIDATION: Ensure loaded event matches venue slug
+      if (event.venue_slug !== venue) {
+        console.error("[Play] 🚨 VENUE MISMATCH!", {
+          expectedVenue: venue,
+          loadedEventVenue: event.venue_slug,
+          eventName: event.name,
+          eventId: event.id
+        });
+        
+        toast({
+          title: "⚠️ Greška u venue-u",
+          description: `Očekivan venue "${venue}", ali je učitan event za "${event.venue_slug}".`,
+          variant: "destructive",
+          duration: 10000
+        });
+        
+        setActiveEvent(null);
+        setLoading(false);
+        setHealingInProgress(false);
+        return;
+      }
+      
+      // ADDITIONAL VALIDATION: If URL has venue query param, it must match
       const queryVenue = router.query.venue;
       if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
         const normalizedQuery = queryVenue.trim().toLowerCase();
         if (event.venue_slug !== normalizedQuery) {
-          console.error("[Play] 🚨 VENUE MISMATCH DETECTED!", {
+          console.error("[Play] 🚨 URL VENUE MISMATCH!", {
             urlQueryParam: normalizedQuery,
             loadedEventVenue: event.venue_slug,
             eventName: event.name,
@@ -207,13 +233,12 @@ export default function PlayPage() {
             duration: 10000
           });
           
-          // BLOCK: Don't set activeEvent if there's a mismatch
           setActiveEvent(null);
           setLoading(false);
           setHealingInProgress(false);
           return;
         } else {
-          console.log("[Play] ✅ Venue validation passed:", {
+          console.log("[Play] ✅ URL venue validation passed:", {
             urlQueryParam: normalizedQuery,
             loadedEventVenue: event.venue_slug,
             match: true
@@ -223,7 +248,7 @@ export default function PlayPage() {
       
       setActiveEvent(event);
 
-      // Check ticket limit for this ACTIVE event
+      // Check ticket limit for this ACTIVE event ONLY
       const storedTickets = getStoredFreeTickets(event.id);
       setFreeTicketCount(storedTickets.length);
       setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
@@ -248,7 +273,6 @@ export default function PlayPage() {
         clearOldEventContext();
         setRetryAttempt(prev => prev + 1);
         
-        // Show healing toast
         toast({
           title: "🔄 Prebacivanje na aktivni event...",
           description: "Trenutak...",
@@ -259,7 +283,7 @@ export default function PlayPage() {
         return;
       }
       
-      // Final fallback: show user-friendly error but don't crash
+      // Final fallback
       console.error("[Play] ❌ Self-heal failed after retries");
       setHealingInProgress(false);
       toast({
@@ -291,47 +315,43 @@ export default function PlayPage() {
       asPath: router.asPath
     });
     
-    // CRITICAL: Resolve venue from query (priority) or localStorage (fallback)
-    const venue = resolveVenue(router.query.venue);
+    // CRITICAL: Query param MUST have absolute priority
+    const queryVenue = router.query.venue;
+    let resolved: string | null = null;
     
-    // DEBUG LOGGING
+    if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
+      // Query param exists and is not empty - USE IT (absolute priority)
+      resolved = queryVenue.trim().toLowerCase();
+      console.log("[Play] ✅ Using venue from QUERY (absolute priority):", resolved);
+      
+      // Store as new fallback
+      storeVenue(resolved);
+    } else {
+      // No query param - use localStorage fallback
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("ps_venue");
+        if (stored && stored.trim()) {
+          resolved = stored.trim().toLowerCase();
+          console.log("[Play] ✅ Using venue from LOCALSTORAGE (fallback):", resolved);
+        }
+      }
+    }
+    
     console.log("[Play] 🏢 Venue resolution result:", {
       queryVenue: router.query.venue,
       storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
-      resolvedVenue: venue,
-      routerIsReady: router.isReady,
-      attempt: venueResolutionAttempt + 1
+      resolvedVenue: resolved,
+      routerIsReady: router.isReady
     });
     
-    if (venue) {
-      // CRITICAL: Store venue immediately after resolving (makes it new fallback)
-      storeVenue(venue);
-      setVenueSlug(venue);
-      setVenueResolutionAttempt(0); // Reset retry counter
-      console.log("[Play] 🎯 Set venueSlug state to:", venue);
+    if (resolved) {
+      setVenueSlug(resolved);
+      console.log("[Play] 🎯 Set venueSlug state to:", resolved);
     } else {
       console.log("[Play] ⚠️ No venue resolved");
-      
-      // RETRY LOGIC: If venue is null but we have query param, retry
-      if (router.query.venue && venueResolutionAttempt < MAX_VENUE_RESOLUTION_ATTEMPTS) {
-        console.log(`[Play] 🔄 Retrying venue resolution (attempt ${venueResolutionAttempt + 1}/${MAX_VENUE_RESOLUTION_ATTEMPTS})`);
-        setVenueResolutionAttempt(prev => prev + 1);
-        
-        // Retry after short delay
-        setTimeout(() => {
-          const retryVenue = resolveVenue(router.query.venue);
-          if (retryVenue) {
-            storeVenue(retryVenue);
-            setVenueSlug(retryVenue);
-            console.log("[Play] ✅ Venue resolved on retry:", retryVenue);
-          }
-        }, 300);
-      } else {
-        setVenueSlug(null);
-        setVenueResolutionAttempt(0);
-      }
+      setVenueSlug(null);
     }
-  }, [router.isReady, router.query.venue, venueResolutionAttempt]); // Depend on isReady AND venue query param
+  }, [router.isReady, router.query.venue]); // Re-run when router becomes ready or venue changes
 
   // SEPARATE useEffect: Load event ONLY when venueSlug is set
   useEffect(() => {
@@ -490,15 +510,24 @@ export default function PlayPage() {
       return;
     }
     
+    // CRITICAL: Only show tickets for THIS event (prevents mixing venues)
     const storedTickets = getStoredFreeTickets(activeEvent.id);
     
+    console.log("[Play] 🎫 Opening my tickets:", {
+      eventId: activeEvent.id,
+      eventName: activeEvent.name,
+      venue: activeEvent.venue_slug,
+      ticketCount: storedTickets.length
+    });
+    
     if (storedTickets.length > 0) {
-      console.log("[Play] 🔄 Opening player with stored tickets for event:", activeEvent.id);
+      console.log("[Play] 🔄 Redirecting to player with event:", activeEvent.id);
       
       setRedirecting(true);
       
       setTimeout(() => {
-        router.push(`/player?event=${activeEvent.id}`);
+        // Pass both event and venue to ensure correct context
+        router.push(`/player?event=${activeEvent.id}&venue=${activeEvent.venue_slug}`);
       }, 200);
     } else {
       toast({
@@ -515,7 +544,32 @@ export default function PlayPage() {
         title="Preuzmi tiket - Pitalica Skitalica"
         description="Skeniraj QR i preuzmi besplatni tiket za aktivni event!"
       />
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+      
+      {/* DEBUG OVERLAY - TEMPORARY (remove after bug is fixed) */}
+      {showDebug && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 dark:bg-yellow-900 border-b-2 border-yellow-400 p-2 text-xs font-mono">
+          <div className="max-w-6xl mx-auto space-y-1">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold">🔍 DEBUG:</span>
+              <span>query={String(router.query.venue || "null")}</span>
+              <span>resolved={venueSlug || "null"}</span>
+              <span>stored={typeof window !== "undefined" ? localStorage.getItem("ps_venue") || "null" : "null"}</span>
+              <span>isReady={String(router.isReady)}</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold">📋 EVENT:</span>
+              <span>id={activeEvent?.id?.slice(0, 8) || "null"}</span>
+              <span>name={activeEvent?.name || "null"}</span>
+              <span>venue={activeEvent?.venue_slug || "null"}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className={cn(
+        "min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400",
+        showDebug && "pt-24" // Add padding when debug overlay is visible
+      )}>
         <Card className="w-full max-w-md shadow-2xl">
           <CardHeader className="text-center space-y-2">
             <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
