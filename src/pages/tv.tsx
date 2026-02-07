@@ -642,7 +642,7 @@ export default function TVScreen() {
                       )}
                       {questionText && (
                         <div className="mt-6 bg-white/10 rounded-2xl p-5 backdrop-blur max-h-[40vh] overflow-y-auto">
-                          <p className="text-xl text-white leading-relaxed">
+                          <p className="text-2xl text-white leading-relaxed">
                             {questionText}
                           </p>
                         </div>
