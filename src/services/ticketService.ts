@@ -323,6 +323,10 @@ export async function claimFreeTickets(
   // Normalize email (lowercase + trim) before sending to backend
   const normalizedEmail = email.trim().toLowerCase();
 
+  if (!eventId) {
+    throw new Error("Event ID is required to claim tickets");
+  }
+
   try {
     const { data, error } = await supabase.rpc("claim_free_tickets", {
       p_email: normalizedEmail,

@@ -560,25 +560,15 @@ export type Database = {
           ticket_serial: string
         }[]
       }
-      claim_free_tickets:
-        | {
-            Args: {
-              p_email: string
-              p_event_id: string
-              p_limit?: number
-              p_nickname: string
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_email: string
-              p_event_id: string
-              p_limit?: number
-              p_nickname: string
-            }
-            Returns: Json
-          }
+      claim_free_tickets: {
+        Args: {
+          p_email: string
+          p_event_id: string
+          p_limit?: number
+          p_nickname: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never
