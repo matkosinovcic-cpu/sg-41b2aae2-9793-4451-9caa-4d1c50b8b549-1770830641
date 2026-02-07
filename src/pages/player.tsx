@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Event } from "@/services/eventService";
 import { eventService } from "@/services/eventService";
+import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 
 // Interface definitions
 interface Question {
@@ -329,12 +330,34 @@ export default function PlayerPage() {
   const [healingInProgress, setHealingInProgress] = useState(false);
   const MAX_RETRY_ATTEMPTS = 2;
 
+  // Venue state
+  const [venueSlug, setVenueSlug] = useState<string | null>(null);
+  const [venueError, setVenueError] = useState<string | null>(null);
+
   // SELF-HEAL: Load tickets with automatic fallback to active event
   const loadTicketsWithSelfHeal = async (isRetry = false) => {
     console.log("[Player] 🎬 Starting ticket load with self-heal", isRetry ? `(retry ${retryAttempt + 1})` : "");
     setLoading(true);
+    setVenueError(null);
     
     try {
+      // STEP 0: Resolve venue
+      const venue = resolveVenue(router.query.venue);
+      console.log("[Player] 🏢 Resolved venue:", venue);
+      
+      if (!venue) {
+        console.log("[Player] ⚠️ No venue resolved - user needs to scan QR code");
+        setVenueSlug(null);
+        setVenueError("venue_required");
+        setLoading(false);
+        setHealingInProgress(false);
+        return;
+      }
+      
+      // Store venue for future use
+      storeVenue(venue);
+      setVenueSlug(venue);
+      
       const ticketSerial = router.query.ticket as string;
       const eventIdParam = router.query.event as string;
 
@@ -349,6 +372,20 @@ export default function PlayerPage() {
         if (ticket) {
           eventId = ticket.event_id;
           console.log("[Player] 🎫 Ticket found, event_id:", eventId);
+          
+          // VALIDATE: Check if this ticket's event belongs to this venue
+          const ticketEvent = await eventService.getEventById(eventId);
+          if (ticketEvent.venue_slug !== venue) {
+            console.log("[Player] ⚠️ Ticket belongs to different venue:", {
+              ticketVenue: ticketEvent.venue_slug,
+              currentVenue: venue
+            });
+            setVenueError("wrong_venue");
+            setLoading(false);
+            setHealingInProgress(false);
+            return;
+          }
+          
           const storedTickets = getStoredFreeTickets(eventId);
           ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
           console.log("[Player] 📚 Combined with stored tickets:", ticketsToLoad);
@@ -360,14 +397,15 @@ export default function PlayerPage() {
         console.log("[Player] 📚 Found stored tickets:", ticketsToLoad);
       }
 
-      // STEP 2: If no tickets or failed to load, try ACTIVE event (self-heal)
+      // STEP 2: If no tickets or failed to load, try ACTIVE event for this venue
       if (ticketsToLoad.length === 0 || !eventId) {
-        console.log("[Player] 🔄 No tickets found, checking for ACTIVE event...");
+        console.log("[Player] 🔄 No tickets found, checking for ACTIVE event in venue:", venue);
         
         const { data: events, error } = await supabase
           .from("events")
           .select("*")
           .eq("status", "active")
+          .eq("venue_slug", venue)
           .limit(1);
 
         if (error) {
@@ -378,7 +416,7 @@ export default function PlayerPage() {
         const activeEvent = events && events.length > 0 ? events[0] : null;
 
         if (activeEvent) {
-          console.log("[Player] ✅ Active event found:", activeEvent.id);
+          console.log("[Player] ✅ Active event found for venue:", activeEvent.id);
           eventId = activeEvent.id;
           ticketsToLoad = getStoredFreeTickets(eventId);
           console.log("[Player] 📚 Loading tickets for active event:", ticketsToLoad.length);
@@ -396,6 +434,7 @@ export default function PlayerPage() {
           .from("events")
           .select("*")
           .eq("status", "active")
+          .eq("venue_slug", venue)
           .limit(1);
         
         const activeEvent = events && events.length > 0 ? events[0] : null;
@@ -1038,6 +1077,56 @@ export default function PlayerPage() {
               Prebacivanje na aktivni event...
             </p>
           )}
+        </div>
+      </>
+    );
+  }
+
+  if (venueError === "venue_required") {
+    return (
+      <>
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">📱 Odaberi kafić</CardTitle>
+              <CardDescription>Skeniraj QR kod na svom stolu</CardDescription>
+            </CardHeader>
+            <CardContent className="text-center py-6">
+              <p className="text-muted-foreground">
+                Za igranje trebaš skenirati QR kod sa svog stola da bi odredio kafić u kojem se nalazi.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
+  if (venueError === "wrong_venue") {
+    return (
+      <>
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">⚠️ Ovaj tiket je za drugi kafić</CardTitle>
+              <CardDescription>Tiket ne pripada trenutnom kafiću</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-center text-muted-foreground">
+                Ovaj tiket je kreiran za drugi kafić. Molimo skeniraj QR kod sa svog stola ili preuzmi novi tiket za ovaj kafić.
+              </p>
+              <Button 
+                onClick={() => router.push(`/play?venue=${venueSlug}`)} 
+                className="w-full"
+                size="lg"
+              >
+                <TicketIcon className="mr-2 h-5 w-5" />
+                Preuzmi tiket za ovaj kafić
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </>
     );

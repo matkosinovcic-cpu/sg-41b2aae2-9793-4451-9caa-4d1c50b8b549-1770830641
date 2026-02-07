@@ -16,6 +16,7 @@ import {
 } from "@/lib/onboardingHelper";
 import { RegistrationModal } from "@/components/RegistrationModal";
 import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
+import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -75,6 +76,9 @@ export default function PlayPage() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const didCheckOnboarding = useRef(false); // Prevent multiple checks
 
+  // Venue state
+  const [venueSlug, setVenueSlug] = useState<string | null>(null);
+
   const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
   const MAX_RETRY_ATTEMPTS = 2;
 
@@ -121,29 +125,48 @@ export default function PlayPage() {
     try {
       console.log("[Play] 🔍 Loading active event", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
-      // CRITICAL: Always fetch ACTIVE event (no .single() crash)
+      // Resolve venue from query or localStorage
+      const venue = resolveVenue(router.query.venue);
+      console.log("[Play] 🏢 Resolved venue:", venue);
+      
+      if (!venue) {
+        console.log("[Play] ⚠️ No venue resolved - user needs to scan QR code");
+        setVenueSlug(null);
+        setActiveEvent(null);
+        setLoading(false);
+        setHealingInProgress(false);
+        return;
+      }
+      
+      // Store venue for future use
+      storeVenue(venue);
+      setVenueSlug(venue);
+      
+      // CRITICAL: Fetch ACTIVE event ONLY for this venue
       const { data: events, error } = await supabase
         .from("events")
         .select("*")
         .eq("status", "active")
+        .eq("venue_slug", venue)
         .limit(1);
 
       if (error) {
-        console.error("[Play] ❌ Error fetching active event:", error);
+        console.error("[Play] ❌ Error fetching active event for venue:", error);
         throw error;
       }
 
       const event = events && events.length > 0 ? (events[0] as unknown as Event) : null;
 
       if (!event) {
-        console.log("[Play] ℹ️ No active event found");
+        console.log("[Play] ℹ️ No active event found for venue:", venue);
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
         return;
       }
 
-      console.log("[Play] ✅ Active event found:", {
+      console.log("[Play] ✅ Active event found for venue:", {
+        venue,
         id: event.id,
         name: event.name,
         status: event.status
@@ -396,6 +419,17 @@ export default function PlayPage() {
                   {healingInProgress ? "Prebacivanje na aktivni event..." : "Učitavam..."}
                 </p>
               </div>
+            ) : !venueSlug ? (
+              <>
+                <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
+                  <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
+                    📱 Odaberi kafić
+                  </p>
+                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                    Skeniraj QR kod na svom stolu da bi preuzeo/la tiket.
+                  </p>
+                </div>
+              </>
             ) : activeEvent ? (
               <>
                 <div className="space-y-2 text-center">
@@ -488,7 +522,7 @@ export default function PlayPage() {
               <>
                 <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
                   <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
-                    ⏳ Trenutno nema aktivnog eventa.
+                    ⏳ Nema aktivnog eventa za ovaj kafić.
                   </p>
                   <p className="text-sm text-yellow-700 dark:text-yellow-300">
                     Molimo pričekajte da event započne.
