@@ -16,7 +16,7 @@ import {
 } from "@/lib/onboardingHelper";
 import { RegistrationModal } from "@/components/RegistrationModal";
 import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
-import { resolveVenue, storeVenue } from "@/lib/venueHelper";
+import { resolveVenue, storeVenue, getVenueId } from "@/lib/venueHelper";
 import { cn } from "@/lib/utils";
 import { MapPin } from "lucide-react";
 
@@ -80,6 +80,8 @@ export default function PlayPage() {
 
   // Venue state
   const [venueSlug, setVenueSlug] = useState<string | null>(null);
+  const [venueId, setVenueId] = useState<string | null>(null);
+  const [venueResolutionError, setVenueResolutionError] = useState<string | null>(null);
   const [venueResolutionAttempt, setVenueResolutionAttempt] = useState(0);
   
   // DEBUG: Show venue resolution state (TEMPORARY - remove after bug is fixed)
@@ -132,85 +134,48 @@ export default function PlayPage() {
     try {
       console.log("[Play] 🔍 STEP 5: loadActiveEvent called", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
-      // CRITICAL: Use venueSlug state directly (must be set before this function is called)
-      const venue = venueSlug;
+      // CRITICAL: Use venueId state (UUID) - must be set before this function is called
+      const venue = venueId;
       
-      // DEBUG LOGGING
-      console.log("[Play] 🏢 STEP 5.1: Venue check before SQL query:", {
-        venueSlugState: venueSlug,
+      console.log("[Play] 🏢 STEP 5.1: Venue check before fetching event:", {
+        venueId: venueId,
         queryVenue: router.query.venue,
-        routerIsReady: router.isReady,
-        usingVenue: venue
+        routerIsReady: router.isReady
       });
       
       if (!venue) {
-        console.log("[Play] ⚠️ STEP 5.2: ABORT - No venue in state, user needs to scan QR code");
+        console.log("[Play] ⚠️ STEP 5.2: ABORT - No venue ID in state, user needs to scan QR code");
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
         return;
       }
       
-      console.log("[Play] 🎯 STEP 6: Fetching ACTIVE event for venue:", venue);
+      console.log("[Play] 🎯 STEP 6: Fetching ACTIVE event for venue ID:", venue);
       
-      // CRITICAL: STRICT filter by venue_slug - NO FALLBACK to other venues
-      console.log("[Play] 📡 STEP 6.1: Executing SQL query:", {
-        table: "events",
-        filters: {
-          status: "active",
-          venue_slug: venue
-        },
-        limit: 1
-      });
-      
-      const { data: events, error } = await supabase
-        .from("events")
-        .select("*")
-        .eq("status", "active")
-        .eq("venue_slug", venue)
-        .limit(1);
+      // ✅ FIXED: Use eventService.getActiveEvent() instead of direct Supabase query
+      const event = await eventService.getActiveEvent(venue);
 
-      console.log("[Play] 📊 STEP 6.2: SQL query result:", {
-        eventsCount: events?.length || 0,
-        error: error,
-        rawEvents: events
-      });
-
-      if (error) {
-        console.error("[Play] ❌ STEP 6.3: Error fetching active event for venue:", error);
-        throw error;
-      }
-
-      const event = events && events.length > 0 ? (events[0] as unknown as Event) : null;
-
-      if (!event) {
-        console.log("[Play] ℹ️ STEP 7: No active event found for venue:", venue);
-        setActiveEvent(null);
-        setLoading(false);
-        setHealingInProgress(false);
-        return;
-      }
-
-      console.log("[Play] ✅ STEP 8: Active event FOUND:", {
-        venue,
+      console.log("[Play] ✅ STEP 7: Active event FOUND:", {
+        venueId: venue,
         id: event.id,
         name: event.name,
         status: event.status,
-        event_venue_slug: event.venue_slug
+        event_venue_id: event.venue_id
       });
       
-      // CRITICAL VALIDATION: Ensure loaded event matches venue slug
-      if (event.venue_slug !== venue) {
-        console.error("[Play] 🚨 STEP 8.1: VENUE MISMATCH!", {
-          expectedVenue: venue,
-          loadedEventVenue: event.venue_slug,
+      // ✅ CRITICAL VALIDATION: Ensure loaded event matches venue ID
+      if (event.venue_id !== venue) {
+        console.error("[Play] 🚨 VENUE MISMATCH!", {
+          expectedVenueId: venue,
+          loadedEventVenueId: event.venue_id,
           eventName: event.name,
           eventId: event.id
         });
         
         toast({
           title: "⚠️ Greška u venue-u",
-          description: `Očekivan venue "${venue}", ali je učitan event za "${event.venue_slug}".`,
+          description: `Event nije vezan za ovaj venue.`,
           variant: "destructive",
           duration: 10000
         });
@@ -221,22 +186,22 @@ export default function PlayPage() {
         return;
       }
       
-      console.log("[Play] 🔍 STEP 9: Setting activeEvent state to:", {
+      console.log("[Play] 🔍 STEP 8: Setting activeEvent state to:", {
         id: event.id,
         name: event.name,
-        venue_slug: event.venue_slug
+        venue_id: event.venue_id
       });
       
       setActiveEvent(event);
       
-      console.log("[Play] ✅ STEP 9.1: activeEvent state SUCCESSFULLY SET!");
+      console.log("[Play] ✅ STEP 8.1: activeEvent state SUCCESSFULLY SET!");
 
       // Check ticket limit for this ACTIVE event ONLY
       const storedTickets = getStoredFreeTickets(event.id);
       setFreeTicketCount(storedTickets.length);
       setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
 
-      console.log("[Play] 📊 STEP 10: Tickets for active event:", {
+      console.log("[Play] 📊 STEP 9: Tickets for active event:", {
         count: storedTickets.length,
         limit: MAX_FREE_TICKETS,
         eventId: event.id
@@ -248,6 +213,22 @@ export default function PlayPage() {
 
     } catch (error) {
       console.error("[Play] ❌ Failed to load active event:", error);
+      
+      // ✅ Handle "No active event found" error
+      if (error instanceof Error && error.message.includes("No active event found")) {
+        console.log("[Play] ℹ️ No active event for this venue");
+        setActiveEvent(null);
+        setLoading(false);
+        setHealingInProgress(false);
+        
+        toast({
+          title: "Nema aktivnog eventa",
+          description: "Trenutno nema aktivnog eventa za ovaj venue.",
+          variant: "destructive",
+          duration: 5000
+        });
+        return;
+      }
       
       // SELF-HEAL: Retry with context clear
       if (!isRetry && retryAttempt < MAX_RETRY_ATTEMPTS) {
@@ -298,7 +279,7 @@ export default function PlayPage() {
       asPath: router.asPath
     });
     
-    // 🔍 STEP 2: Resolve venue from URL or localStorage
+    // 🔍 STEP 2: Resolve venue slug from URL or localStorage
     console.log("[Play] 🔍 STEP 2: Calling resolveVenue with query.venue:", router.query.venue);
     const resolved = resolveVenue(router.query.venue);
     
@@ -309,32 +290,53 @@ export default function PlayPage() {
       routerIsReady: router.isReady
     });
     
-    // 🔍 STEP 3: Set venueSlug state
+    // 🔍 STEP 3: Set venueSlug state and fetch venueId from database
     if (resolved) {
       console.log("[Play] 🔍 STEP 3: Setting venueSlug state to:", resolved);
       setVenueSlug(resolved);
       storeVenue(resolved); // Store for future fallback
-      console.log("[Play] 🎯 STEP 3.1: venueSlug state SET to:", resolved);
-      console.log("[Play] 💾 STEP 3.2: Stored in localStorage: ps_venue =", resolved);
+      
+      // 🔍 STEP 3.1: Fetch venue UUID from database
+      console.log("[Play] 🔍 STEP 3.1: Fetching venue ID from database...");
+      getVenueId(resolved)
+        .then((id) => {
+          console.log("[Play] ✅ STEP 3.2: Venue ID fetched successfully:", id);
+          setVenueId(id);
+          setVenueResolutionError(null);
+        })
+        .catch((err) => {
+          console.error("[Play] ❌ STEP 3.2: Failed to fetch venue ID:", err);
+          setVenueResolutionError(err.message || "Failed to resolve venue");
+          setVenueId(null);
+          
+          toast({
+            title: "⚠️ Greška u venue-u",
+            description: `Nije moguće pronaći venue "${resolved}" u bazi. Molimo skenirajte validan QR kod.`,
+            variant: "destructive",
+            duration: 5000
+          });
+        });
     } else {
       console.log("[Play] ⚠️ STEP 3: No venue resolved - user needs to scan QR");
       setVenueSlug(null);
+      setVenueId(null);
+      setVenueResolutionError(null);
     }
   }, [router.isReady, router.query.venue]);
 
-  // SEPARATE useEffect: Load event ONLY when venueSlug is set
+  // SEPARATE useEffect: Load event ONLY when venueId is set
   useEffect(() => {
-    console.log("[Play] 🔍 STEP 4: venueSlug useEffect triggered, value:", venueSlug);
+    console.log("[Play] 🔍 STEP 4: venueId useEffect triggered, value:", venueId);
     
-    if (venueSlug) {
-      console.log("[Play] 🔄 STEP 4.1: venueSlug is SET to:", venueSlug, "- calling loadActiveEvent()");
+    if (venueId) {
+      console.log("[Play] 🔄 STEP 4.1: venueId is SET to:", venueId, "- calling loadActiveEvent()");
       loadActiveEvent();
     } else {
-      console.log("[Play] ⏭️ STEP 4.2: venueSlug is NULL, skipping loadActiveEvent");
+      console.log("[Play] ⏭️ STEP 4.2: venueId is NULL, skipping loadActiveEvent");
       setActiveEvent(null);
       setLoading(false);
     }
-  }, [venueSlug]);
+  }, [venueId]);
 
   // Core logic to generate ticket
   const executeTicketCreation = async (playerId?: string) => {
@@ -592,6 +594,17 @@ export default function PlayPage() {
                   </p>
                   <p className="text-sm text-yellow-700 dark:text-yellow-300">
                     Skeniraj QR kod na svom stolu da bi preuzeo/la tiket.
+                  </p>
+                </div>
+              </>
+            ) : !venueId ? (
+              <>
+                <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-6 text-center space-y-4">
+                  <p className="text-lg font-semibold text-red-900 dark:text-red-100">
+                    ⚠️ Greška u venue-u
+                  </p>
+                  <p className="text-sm text-red-700 dark:text-red-300">
+                    {venueResolutionError || `Venue "${venueSlug}" nije pronađen u bazi. Molimo skenirajte validan QR kod.`}
                   </p>
                 </div>
               </>

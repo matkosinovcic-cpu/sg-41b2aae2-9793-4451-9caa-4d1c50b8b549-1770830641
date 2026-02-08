@@ -5,6 +5,8 @@
  * Handles venue resolution from URL parameters and localStorage persistence.
  */
 
+import { supabase } from "@/integrations/supabase/client";
+
 const VENUE_STORAGE_KEY = "ps_venue";
 
 /**
@@ -98,4 +100,49 @@ export function getStoredVenue(): string | null {
     return stored && stored.trim() ? stored.trim().toLowerCase() : null;
   }
   return null;
+}
+
+/**
+ * Get venue UUID from database by slug
+ * @param slug - Venue slug ("boiler" or "ludababa")
+ * @returns Promise<string> - Venue UUID
+ * @throws Error if venue not found or database error
+ */
+export async function getVenueId(slug: string): Promise<string> {
+  console.log("[VenueHelper] 🔍 Getting venue ID for slug:", slug);
+  
+  if (!slug || typeof slug !== "string") {
+    throw new Error("Invalid venue slug provided");
+  }
+  
+  const normalizedSlug = slug.trim().toLowerCase();
+  
+  try {
+    const { data, error } = await supabase
+      .from("venues")
+      .select("id, name, slug")
+      .eq("slug", normalizedSlug)
+      .single();
+    
+    if (error) {
+      console.error("[VenueHelper] ❌ Database error fetching venue:", error);
+      throw new Error(`Failed to fetch venue: ${error.message}`);
+    }
+    
+    if (!data) {
+      console.error("[VenueHelper] ❌ Venue not found for slug:", normalizedSlug);
+      throw new Error(`Venue "${normalizedSlug}" not found in database`);
+    }
+    
+    console.log("[VenueHelper] ✅ Venue found:", {
+      id: data.id,
+      name: data.name,
+      slug: data.slug
+    });
+    
+    return data.id;
+  } catch (err) {
+    console.error("[VenueHelper] ❌ Error in getVenueId:", err);
+    throw err;
+  }
 }

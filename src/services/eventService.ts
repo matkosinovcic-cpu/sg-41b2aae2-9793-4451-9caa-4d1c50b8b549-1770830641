@@ -532,14 +532,43 @@ export const eventService = {
     return data as EventQuestion;
   },
 
-  async getActiveEvent() {
+  async getActiveEvent(venueId: string) {  // ✅ REQUIRED (removed ?)
+    console.log("[EventService] 🔍 getActiveEvent called with venueId:", venueId);
+    
+    if (!venueId) {
+      console.error("[EventService] ❌ No venueId provided to getActiveEvent!");
+      throw new Error("venueId is required to fetch active event");
+    }
+    
     const { data, error } = await supabase
       .from("events")
       .select("*")
       .eq("status", "active")
+      .eq("venue_id", venueId)  // ✅ ALWAYS filter by venue_id
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error("[EventService] ❌ Error fetching active event:", error);
+      
+      // ✅ Clear 404 if no event found for this venue
+      if (error.code === 'PGRST116') {
+        throw new Error(`No active event found for venue ${venueId}`);
+      }
+      
+      throw error;
+    }
+    
+    if (!data) {
+      console.error("[EventService] ❌ No active event found for venueId:", venueId);
+      throw new Error(`No active event found for venue ${venueId}`);
+    }
+    
+    console.log("[EventService] ✅ Active event found:", {
+      id: data.id,
+      name: data.name,
+      venue_id: data.venue_id
+    });
+    
     return data as Event;
   },
 
