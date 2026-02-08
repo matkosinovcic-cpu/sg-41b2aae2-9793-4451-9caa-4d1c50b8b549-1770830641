@@ -414,15 +414,18 @@ export const eventService = {
         full_array: updatedDrawnNumbers
       });
 
-      // ✅ Update DRAW_SESSION (shared state) with EXPLICIT error handling
+      // ✅ Update DRAW_SESSION (shared state) - Include current_index and draw_count
       const { data: sessionUpdateData, error: sessionError } = await supabase
         .from("draw_sessions")
         .update({
           drawn_numbers: updatedDrawnNumbers,
-          current_question_number: drawnNumber
+          current_question_number: drawnNumber,
+          current_index: updatedDrawnNumbers.length,  // ✅ NEW: Track current position
+          draw_count: updatedDrawnNumbers.length,     // ✅ NEW: Track total drawn
+          last_draw_at: new Date().toISOString()      // ✅ NEW: Track last draw time
         })
         .eq("id", drawSessionId!)
-        .select("drawn_numbers, current_question_number");
+        .select("drawn_numbers, current_question_number, current_index, draw_count");
 
       if (sessionError) {
         console.error("[drawNextQuestion] ❌ Failed to update draw_session:", {
@@ -439,13 +442,15 @@ export const eventService = {
         session_id: drawSessionId,
         returned_data: sessionUpdateData,
         drawn_numbers_count: sessionUpdateData?.[0]?.drawn_numbers?.length || 0,
-        current_question: sessionUpdateData?.[0]?.current_question_number
+        current_question: sessionUpdateData?.[0]?.current_question_number,
+        current_index: sessionUpdateData?.[0]?.current_index,
+        draw_count: sessionUpdateData?.[0]?.draw_count
       });
 
       // ✅ CRITICAL: Verify the update was persisted
       const { data: verifySession, error: verifyError } = await supabase
         .from("draw_sessions")
-        .select("drawn_numbers, current_question_number")
+        .select("drawn_numbers, current_question_number, current_index, draw_count")
         .eq("id", drawSessionId!)
         .single();
 
@@ -457,6 +462,8 @@ export const eventService = {
           drawn_numbers_count_in_db: verifySession.drawn_numbers?.length || 0,
           drawn_numbers_in_db: verifySession.drawn_numbers,
           current_question_in_db: verifySession.current_question_number,
+          current_index_in_db: verifySession.current_index,
+          draw_count_in_db: verifySession.draw_count,
           MATCH: verifySession.drawn_numbers?.length === updatedDrawnNumbers.length ? "✅ SUCCESS" : "❌ MISMATCH"
         });
 
@@ -466,10 +473,11 @@ export const eventService = {
         }
       }
 
-      // ✅ Update ALL EVENTS in this draw_session
+      // ✅ Update ALL EVENTS in this draw_session (sync drawn_numbers + current states)
       const { error: eventsError } = await supabase
         .from("events")
         .update({
+          drawn_numbers: updatedDrawnNumbers,           // ✅ NEW: Sync drawn_numbers array
           current_drawn_number: drawnNumber,
           current_question_number: drawnNumber,
           question_open_until: questionOpenUntil
@@ -506,9 +514,23 @@ export const eventService = {
     }
 
     // ✅ STEP 8: Mark question as drawn (for this specific event)
+    const eventQuestionUpdate: any = { 
+      drawn: true, 
+      drawn_at: new Date().toISOString() 
+    };
+
+    // ✅ CRITICAL: For GLOBAL mode, also set draw_session_id
+    if (isGlobalMode && drawSessionId) {
+      eventQuestionUpdate.draw_session_id = drawSessionId;
+      console.log("[drawNextQuestion] 📝 Setting draw_session_id for event_question:", {
+        question_id: questionData.id,
+        draw_session_id: drawSessionId
+      });
+    }
+
     await supabase
       .from("event_questions")
-      .update({ drawn: true, drawn_at: new Date().toISOString() })
+      .update(eventQuestionUpdate)
       .eq("id", questionData.id);
 
     console.log("[drawNextQuestion] ✅ Question marked as drawn");
