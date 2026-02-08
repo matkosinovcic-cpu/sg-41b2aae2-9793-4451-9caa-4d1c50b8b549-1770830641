@@ -1,601 +1,633 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
-import { eventService, Event } from "@/services/eventService";
-import ticketService from "@/services/ticketService";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, Ticket } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { OnboardingModal } from "@/components/OnboardingModal";
-import {
-  shouldShowOnboarding,
-  markOnboardingShown,
-  hideOnboardingPermanently,
-} from "@/lib/onboardingHelper";
+import { eventService, type Event } from "@/services/eventService";
+import ticketService from "@/services/ticketService";
+import { answerService } from "@/services/answerService";
+import { getVenueBySlug } from "@/services/venueService";
+import { Button } from "@/components/ui/button";
 import { RegistrationModal } from "@/components/RegistrationModal";
-import { hasPlayerProfile } from "@/lib/playerHelper";
-import { getVenueId } from "@/lib/venueHelper";
-import { cn } from "@/lib/utils";
-import { MapPin, Hash } from "lucide-react";
+import { OnboardingModal } from "@/components/OnboardingModal";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AlertCircle, CheckCircle2, XCircle, Clock, Trophy, Loader2 } from "lucide-react";
 
-// Get stored free tickets for a specific event
-function getStoredFreeTickets(eventId: string): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
+// Debug info interface
+interface DebugInfo {
+  timestamp: string;
+  url: string;
+  queryParams: Record<string, string>;
+  resolvedVenueSlug: string | null;
+  resolvedVenueId: string | null;
+  resolvedEventId: string | null;
+  eventData: any;
+  venueData: any;
+  sqlQuery: string;
+  sqlParams: any;
+  fallbackTriggered: string | null;
+  validationErrors: string[];
 }
 
-// Store free ticket for a specific event
-function storeFreeTicket(eventId: string, serial: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    const key = `ps_free_tickets_${eventId}`;
-    const tickets = getStoredFreeTickets(eventId);
-    if (!tickets.includes(serial)) {
-      tickets.push(serial);
-      localStorage.setItem(key, JSON.stringify(tickets));
-    }
-  } catch (err) {
-    console.error("[Play] Failed to store free ticket:", err);
-  }
-}
-
-export default function PlayPage() {
+export default function Play() {
   const router = useRouter();
-  const { toast } = useToast();
-  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
-  const [freeTicketCount, setFreeTicketCount] = useState(0);
-  const [limitReached, setLimitReached] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  
-  // Registration state
+  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
+  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [myTicket, setMyTicket] = useState<any>(null);
+  const [myAnswers, setMyAnswers] = useState<Map<number, boolean>>(new Map());
   const [showRegistration, setShowRegistration] = useState(false);
-  
-  // CRITICAL: Onboarding state must be SEPARATE from event loading
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const didCheckOnboarding = useRef(false);
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [hasOnboarded, setHasOnboarded] = useState(false);
+  const questionAudioRef = useRef<HTMLAudioElement | null>(null);
+  const lastThreeAudioRef = useRef<HTMLAudioElement | null>(null);
+  
+  // DEBUG STATE
+  const [debugMode, setDebugMode] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
 
-  const MAX_FREE_TICKETS = ticketService.getMaxFreeTickets();
-
-  // CRITICAL: Check onboarding ONCE on mount, INDEPENDENT of event loading
+  // Initialize debug mode from query
   useEffect(() => {
-    if (didCheckOnboarding.current) return;
-
-    console.log("[Play] 🔍 Checking if onboarding should show (first time only)");
-    didCheckOnboarding.current = true;
-
-    const shouldShow = shouldShowOnboarding();
-    console.log("[Play] 📋 Should show onboarding:", shouldShow);
-
-    if (shouldShow) {
-      console.log("[Play] ✅ Setting onboarding visible");
-      setShowOnboarding(true);
-      markOnboardingShown();
-    } else {
-      console.log("[Play] ⏭️ Onboarding skipped (hidden or shown recently)");
-    }
-  }, []);
-
-  // Handle onboarding dismiss
-  const handleOnboardingDismiss = (dontShowAgain: boolean) => {
-    console.log("[Play] 🎯 Onboarding dismissed by user. Don't show again:", dontShowAgain);
-    
-    if (dontShowAgain) {
-      hideOnboardingPermanently();
-      console.log("[Play] 🔒 Onboarding hidden permanently");
-    }
-    
-    setShowOnboarding(false);
-    console.log("[Play] ✅ Onboarding modal closed");
-  };
+    const debug = router.query.debug === "1" || router.query.debug === "true";
+    setDebugMode(debug);
+  }, [router.query.debug]);
 
   // Load event based on priority: eventId → venue → error
   const loadEvent = async () => {
-    setLoading(true);
-    setErrorMessage(null);
-    
     try {
+      const debug: DebugInfo = {
+        timestamp: new Date().toISOString(),
+        url: typeof window !== "undefined" ? window.location.href : "SSR",
+        queryParams: router.query as Record<string, string>,
+        resolvedVenueSlug: null,
+        resolvedVenueId: null,
+        resolvedEventId: null,
+        eventData: null,
+        venueData: null,
+        sqlQuery: "",
+        sqlParams: {},
+        fallbackTriggered: null,
+        validationErrors: []
+      };
+
       const { eventId: queryEventId, venue: queryVenue } = router.query;
-      
-      console.log("🔴🔴🔴 [Play] LOAD EVENT START 🔴🔴🔴");
-      console.log("[Play] Router query object:", router.query);
-      console.log("[Play] Query params extracted:", {
-        eventId: queryEventId,
-        venue: queryVenue,
-        isReady: router.isReady
-      });
 
-      // PRIORITY A: Direct eventId param
+      // PRIORITY A: Direct eventId
       if (queryEventId && typeof queryEventId === "string") {
-        console.log("🟢🟢🟢 [Play] PRIORITY A: Loading event by ID:", queryEventId);
+        debug.resolvedEventId = queryEventId;
+        debug.sqlQuery = "SELECT * FROM events WHERE id = $1";
+        debug.sqlParams = { id: queryEventId };
+
+        const event = await eventService.getEventById(queryEventId);
         
-        try {
-          const event = await eventService.getEvent(queryEventId);
-          
-          console.log("✅✅✅ [Play] Event loaded by ID:", {
-            id: event.id,
-            name: event.name,
-            venue_id: event.venue_id,
-            venue_slug: event.venue_slug,
-            status: event.status
-          });
-          
-          setActiveEvent(event);
-          
-          // Check ticket limit for this event
-          const storedTickets = getStoredFreeTickets(event.id);
-          setFreeTicketCount(storedTickets.length);
-          setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
-          
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.error("❌❌❌ [Play] Failed to load event by ID:", err);
-          setErrorMessage(`Event ${queryEventId} ne postoji ili nije dostupan.`);
+        if (!event) {
+          debug.validationErrors.push(`Event not found: ${queryEventId}`);
+          setDebugInfo(debug);
           setActiveEvent(null);
           setLoading(false);
           return;
         }
+
+        debug.eventData = event;
+        
+        // Validate venue match if venue param also provided
+        if (queryVenue && event.venue_slug !== queryVenue) {
+          debug.validationErrors.push(
+            `MISMATCH: URL has venue=${queryVenue} but event has venue_slug=${event.venue_slug}`
+          );
+        }
+
+        setDebugInfo(debug);
+        setActiveEvent(event);
+        setLoading(false);
+        return;
       }
 
-      // PRIORITY B: Venue param → find active event for that venue
+      // PRIORITY B: Venue slug
       if (queryVenue && typeof queryVenue === "string") {
-        const venueSlug = queryVenue.trim().toLowerCase();
-        console.log("🟡🟡🟡 [Play] PRIORITY B: Loading active event for venue:", venueSlug);
+        debug.resolvedVenueSlug = queryVenue;
+
+        // Get venue ID
+        const venue = await getVenueBySlug(queryVenue);
         
-        try {
-          // Get venue UUID from slug
-          const venueId = await getVenueId(venueSlug);
-          console.log("🏢🏢🏢 [Play] Venue ID resolved:", venueId);
-          
-          // Get active event for this venue
-          const event = await eventService.getActiveEvent(venueId);
-          
-          console.log("✅✅✅ [Play] Active event found for venue:", {
-            id: event.id,
-            name: event.name,
-            venue_slug: event.venue_slug,
-            venue_id: event.venue_id,
-            status: event.status
-          });
-          
-          // Validate venue match
-          if (event.venue_id !== venueId) {
-            console.error("🚨🚨🚨 [Play] VENUE MISMATCH!", {
-              expectedVenueId: venueId,
-              loadedEventVenueId: event.venue_id,
-              loadedEventName: event.name,
-              loadedEventVenueSlug: event.venue_slug
-            });
-            
-            toast({
-              title: "⚠️ Greška u venue-u",
-              description: `Event ${event.name} nije vezan za ${venueSlug}. Očekivani venue: ${event.venue_slug}`,
-              variant: "destructive",
-              duration: 10000
-            });
-            
-            setActiveEvent(null);
-            setLoading(false);
-            return;
-          }
-          
-          setActiveEvent(event);
-          
-          // Check ticket limit for this event
-          const storedTickets = getStoredFreeTickets(event.id);
-          setFreeTicketCount(storedTickets.length);
-          setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
-          
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.error("❌❌❌ [Play] Failed to load venue/event:", err);
-          
-          if (err instanceof Error && err.message.includes("No active event found")) {
-            setErrorMessage(`Trenutno nema aktivnog eventa za ${venueSlug}.`);
-          } else if (err instanceof Error && err.message.includes("not found in database")) {
-            setErrorMessage(`Venue "${venueSlug}" nije pronađen.`);
-          } else {
-            setErrorMessage("Greška pri učitavanju eventa.");
-          }
-          
+        if (!venue) {
+          debug.validationErrors.push(`Venue not found: ${queryVenue}`);
+          debug.fallbackTriggered = `Unknown venue: ${queryVenue}`;
+          setDebugInfo(debug);
           setActiveEvent(null);
           setLoading(false);
           return;
         }
+
+        debug.resolvedVenueId = venue.id;
+        debug.venueData = venue;
+        debug.sqlQuery = "SELECT * FROM events WHERE venue_id = $1 AND status ILIKE 'active' ORDER BY created_at DESC LIMIT 1";
+        debug.sqlParams = { venue_id: venue.id };
+
+        // Get active event for this venue
+        const event = await eventService.getActiveEvent(venue.id);
+
+        if (!event) {
+          debug.validationErrors.push(`No active event found for venue: ${queryVenue}`);
+          debug.fallbackTriggered = `No active event for venue: ${queryVenue}`;
+          setDebugInfo(debug);
+          setActiveEvent(null);
+          setLoading(false);
+          return;
+        }
+
+        debug.resolvedEventId = event.id;
+        debug.eventData = event;
+
+        // Validate venue match
+        if (event.venue_slug !== queryVenue) {
+          debug.validationErrors.push(
+            `BUG: getActiveEvent returned wrong venue! Expected: ${queryVenue}, Got: ${event.venue_slug}`
+          );
+        }
+
+        setDebugInfo(debug);
+        setActiveEvent(event);
+        setLoading(false);
+        return;
       }
 
-      // PRIORITY C: No params → show error
-      console.log("⚪⚪⚪ [Play] PRIORITY C: No eventId or venue param");
-      setErrorMessage(null); // Clear error - show QR scan message instead
+      // PRIORITY C: No params = error
+      debug.fallbackTriggered = "Missing both eventId and venue params";
+      debug.validationErrors.push("URL mora sadržavati ?eventId=... ili ?venue=...");
+      setDebugInfo(debug);
       setActiveEvent(null);
       setLoading(false);
 
-    } catch (error) {
-      console.error("❌❌❌ [Play] Unexpected error in loadEvent:", error);
-      setErrorMessage("Neočekivana greška. Pokušaj ponovno.");
+    } catch (err) {
+      console.error("Failed to load event:", err);
+      setDebugInfo(prev => prev ? {
+        ...prev,
+        validationErrors: [...prev.validationErrors, `Exception: ${err}`]
+      } : null);
       setActiveEvent(null);
       setLoading(false);
     }
   };
 
-  // Load event when router is ready
   useEffect(() => {
-    if (!router.isReady) {
-      console.log("[Play] ⏳ Router not ready yet, waiting...");
+    if (router.isReady) {
+      loadEvent();
+    }
+  }, [router.isReady, router.query]);
+
+  // Subscribe to current question
+  useEffect(() => {
+    if (!activeEvent?.id) return;
+
+    const channel = supabase
+      .channel(`event:${activeEvent.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "events",
+          filter: `id=eq.${activeEvent.id}`,
+        },
+        async (payload) => {
+          if (payload.new && typeof payload.new === "object") {
+            const updated = payload.new as any;
+            
+            setActiveEvent((prev) =>
+              prev ? { ...prev, ...updated } : null
+            );
+
+            if (updated.current_question_number) {
+              const question = await eventService.getQuestionForNumber(
+                activeEvent.id,
+                updated.current_question_number
+              );
+              setCurrentQuestion(question);
+
+              if (questionAudioRef.current) {
+                questionAudioRef.current.currentTime = 0;
+                questionAudioRef.current.play().catch(() => {});
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [activeEvent?.id]);
+
+  // Timer logic
+  useEffect(() => {
+    if (!activeEvent?.question_open_until) {
+      setTimeLeft(null);
       return;
     }
-    
-    console.log("[Play] ✅ Router ready, loading event...");
-    loadEvent();
-  }, [router.isReady, router.query.eventId, router.query.venue]);
 
-  // Core logic to generate ticket
-  const executeTicketCreation = async (playerId?: string) => {
-    if (!activeEvent) return;
+    const updateTimer = () => {
+      const now = new Date().getTime();
+      const deadline = new Date(activeEvent.question_open_until).getTime();
+      const diff = Math.max(0, Math.ceil((deadline - now) / 1000));
+      setTimeLeft(diff);
 
-    setCreating(true);
-    
-    try {
-      console.log("[Play] 🎫 Creating free ticket for event:", activeEvent.id, "PlayerID:", playerId);
-      console.log("[Play] 🏢 Event details:", {
-        id: activeEvent.id,
-        name: activeEvent.name,
-        venue_slug: activeEvent.venue_slug,
-        venue_id: activeEvent.venue_id,
-        status: activeEvent.status
-      });
-      
-      // Create ticket - pass playerId if from registration, or let service fetch it
-      const ticket = await ticketService.createFreeTicket(activeEvent.id, playerId);
-      
-      console.log("[Play] ✅ Ticket created successfully:", {
-        serial: ticket.serial_number,
-        ticket_id: ticket.id,
-        event_id: activeEvent.id,
-        player_id: ticket.player_id
-      });
-
-      // Store in localStorage for this event
-      storeFreeTicket(activeEvent.id, ticket.serial_number);
-
-      // Show success message
-      toast({
-        title: "✅ Tiket kreiran!",
-        description: `Tvoj tiket: ${ticket.serial_number}`,
-        duration: 2000
-      });
-
-      // Set redirecting state
-      setRedirecting(true);
-      setCreating(false);
-
-      // Delayed redirect (mobile-friendly)
-      setTimeout(() => {
-        console.log("[Play] 🔄 Redirecting to player with ticket:", ticket.serial_number);
-        router.push(`/player?ticket=${ticket.serial_number}`);
-      }, 300);
-
-    } catch (error) {
-      console.error("[Play] ❌ Failed to create free ticket:", error);
-      
-      setCreating(false);
-      setRedirecting(false);
-      
-      // Check if it's a limit error
-      if (error instanceof Error && error.message.includes("FREE_LIMIT_REACHED")) {
-        toast({
-          title: "Dosegnut limit",
-          description: `Imaš maksimalno ${MAX_FREE_TICKETS} besplatna tiketa u promo fazi.`,
-          variant: "destructive",
-          duration: 4000
-        });
-        setLimitReached(true);
-        loadEvent();
-      } else {
-        toast({
-          title: "Greška pri izradi tiketa",
-          description: error instanceof Error ? error.message : "Nepoznata greška",
-          variant: "destructive",
-          duration: 3000
-        });
+      if (diff <= 3 && diff > 0) {
+        if (lastThreeAudioRef.current) {
+          lastThreeAudioRef.current.currentTime = 0;
+          lastThreeAudioRef.current.play().catch(() => {});
+        }
       }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 100);
+
+    return () => clearInterval(interval);
+  }, [activeEvent?.question_open_until]);
+
+  // Load my ticket
+  useEffect(() => {
+    const loadMyTicket = async () => {
+      if (!activeEvent?.id) return;
+
+      const serialNumber = localStorage.getItem("my_ticket_serial");
+      if (!serialNumber) return;
+
+      const ticket = await ticketService.getTicketBySerial(serialNumber);
+      if (ticket && ticket.event_id === activeEvent.id) {
+        setMyTicket(ticket);
+
+        // Load answers from answerService - using session approach
+        const sessionId = localStorage.getItem("ps_session_id");
+        if (sessionId) {
+          const answers = await answerService.getSessionAnswers(sessionId);
+          const answerMap = new Map<number, boolean>();
+          answers.forEach((a) => {
+            if (a.ticket_id === serialNumber) {
+              answerMap.set(a.question_number, a.answer_yesno === "YES");
+            }
+          });
+          setMyAnswers(answerMap);
+        }
+      }
+    };
+
+    loadMyTicket();
+  }, [activeEvent?.id]);
+
+  // Check onboarding
+  useEffect(() => {
+    const onboarded = localStorage.getItem("has_onboarded") === "true";
+    setHasOnboarded(onboarded);
+    if (!onboarded && !loading && activeEvent) {
+      setShowOnboarding(true);
+    }
+  }, [loading, activeEvent]);
+
+  const handleAnswer = async (answer: boolean) => {
+    if (!myTicket || !currentQuestion || timeLeft === null || timeLeft <= 0) return;
+
+    try {
+      const sessionId = localStorage.getItem("ps_session_id");
+      if (!sessionId) {
+        console.error("No session ID found");
+        return;
+      }
+
+      await answerService.submitAnswer(
+        sessionId,
+        activeEvent!.id,
+        currentQuestion.question_number,
+        answer ? "YES" : "NO",
+        myTicket.serial_number
+      );
+
+      setMyAnswers((prev) => new Map(prev).set(currentQuestion.question_number, answer));
+    } catch (err) {
+      console.error("Failed to submit answer:", err);
     }
   };
 
-  // Handle "Get Ticket" click
-  const handleGetFreeTicket = () => {
-    if (!activeEvent) {
-      toast({
-        title: "Nema aktivnog eventa",
-        description: "Trenutno nema aktivnog eventa. Pokušaj kasnije.",
-        variant: "destructive"
-      });
-      return;
-    }
-    
-    if (limitReached) return;
-
-    // CHECK REGISTRATION FIRST
-    if (hasPlayerProfile()) {
-      console.log("[Play] 👤 User has profile, proceeding to ticket creation");
-      executeTicketCreation();
-    } else {
-      console.log("[Play] 👤 New user, showing registration modal");
-      setShowRegistration(true);
-    }
-  };
-
-  const handleRegistrationSuccess = (data: {
-    userId: string;
-    sessionId: string;
-    tickets: any[];
-    totalTickets: number;
-  }) => {
-    console.log("[Play] ✅ Registration successful & tickets claimed:", data);
+  const handleRegistrationSuccess = () => {
+    setRegistrationSuccess(true);
     setShowRegistration(false);
-    
-    // Store all claimed tickets in localStorage for this event
-    if (activeEvent && data.tickets && data.tickets.length > 0) {
-      console.log("[Play] 💾 Storing tickets for event:", activeEvent.id);
-      data.tickets.forEach((ticket: any) => {
-        console.log("[Play] 💾 Storing ticket:", {
-          serial: ticket.serial_number,
-          eventId: activeEvent.id,
-          venue: activeEvent.venue_slug
-        });
-        storeFreeTicket(activeEvent.id, ticket.serial_number);
-      });
-      
-      toast({
-        title: "✅ Tiketi uspješno preuzeti!",
-        description: `Preuzeto ${data.tickets.length} tiketa. Sretno!`,
-        duration: 3000
-      });
-      
-      // Redirect to player page with the first ticket
-      setRedirecting(true);
-      setTimeout(() => {
-        router.push(`/player?ticket=${data.tickets[0].serial_number}`);
-      }, 500);
-    } else {
-      toast({
-        title: "Registracija uspješna",
-        description: "Provjerite svoje tikete.",
-        duration: 2000
-      });
-      handleOpenMyTickets();
-    }
+    loadEvent();
   };
 
-  // Handle "Open my tickets" button
-  const handleOpenMyTickets = () => {
-    if (!activeEvent) {
-      toast({
-        title: "Nema aktivnog eventa",
-        description: "Trenutno nema aktivnog eventa.",
-        variant: "destructive"
-      });
-      return;
-    }
-    
-    const storedTickets = getStoredFreeTickets(activeEvent.id);
-    
-    console.log("[Play] 🎫 Opening my tickets:", {
-      eventId: activeEvent.id,
-      eventName: activeEvent.name,
-      venue: activeEvent.venue_slug,
-      ticketCount: storedTickets.length
-    });
-    
-    if (storedTickets.length > 0) {
-      console.log("[Play] 🔄 Redirecting to player with event:", activeEvent.id);
-      
-      setRedirecting(true);
-      
-      setTimeout(() => {
-        router.push(`/player?ticket=${storedTickets[0]}`);
-      }, 200);
-    } else {
-      toast({
-        title: "Nemaš tikete",
-        description: "Nisi kreirao ni jedan tiket za ovaj event.",
-        variant: "destructive"
-      });
-    }
+  const handleOnboardingComplete = () => {
+    localStorage.setItem("has_onboarded", "true");
+    setHasOnboarded(true);
+    setShowOnboarding(false);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900">
+        <Loader2 className="w-12 h-12 animate-spin text-white" />
+      </div>
+    );
+  }
+
+  // Error state - missing params
+  if (!activeEvent && debugInfo?.fallbackTriggered) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900 p-4">
+        <Card className="max-w-md w-full p-6 text-center space-y-4">
+          <AlertCircle className="w-16 h-16 mx-auto text-red-500" />
+          <h1 className="text-2xl font-bold">Neispravan Link</h1>
+          <p className="text-gray-600">
+            {debugInfo.validationErrors[0] || "Link mora sadržavati event ID ili venue parametar"}
+          </p>
+          <p className="text-sm text-gray-500">
+            Skeniraj QR kod sa eventa ili koristi link koji ti je poslan.
+          </p>
+          
+          {debugMode && debugInfo && (
+            <div className="mt-6 p-4 bg-gray-100 rounded text-left text-xs space-y-2">
+              <div className="font-bold text-red-600">🐛 DEBUG INFO</div>
+              <div><strong>URL:</strong> {debugInfo.url}</div>
+              <div><strong>Query params:</strong> {JSON.stringify(debugInfo.queryParams)}</div>
+              <div><strong>Fallback triggered:</strong> {debugInfo.fallbackTriggered}</div>
+              <div><strong>Errors:</strong> {debugInfo.validationErrors.join(", ")}</div>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
+  if (!activeEvent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900 p-4">
+        <Card className="max-w-md w-full p-6 text-center">
+          <AlertCircle className="w-16 h-16 mx-auto text-red-500 mb-4" />
+          <h1 className="text-2xl font-bold mb-2">Event Nije Pronađen</h1>
+          <p className="text-gray-600">Provjerite link ili kontaktirajte organizatora.</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const isQuestionOpen = timeLeft !== null && timeLeft > 0;
+  const hasAnswered = currentQuestion ? myAnswers.has(currentQuestion.question_number) : false;
 
   return (
     <>
       <SEO
-        title="Preuzmi tiket - Pitalica Skitalica"
-        description="Skeniraj QR i preuzmi besplatni tiket za aktivni event!"
+        title={`${activeEvent.name} - Igraj`}
+        description="Odgovori na pitanja i osvoji nagrade!"
       />
-      
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
-        <Card className="w-full max-w-md shadow-2xl">
-          <CardHeader className="text-center space-y-2">
-            <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
-              PITALICA SKITALICA
-            </CardTitle>
-            <CardDescription className="text-lg">
-              Preuzmi besplatni tiket
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
+
+      <audio ref={questionAudioRef} src="/sounds/question.mp3" preload="auto" />
+      <audio ref={lastThreeAudioRef} src="/sounds/tick.mp3" preload="auto" />
+
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-purple-800 to-indigo-900">
+        {/* DEBUG PANEL - only visible with ?debug=1 */}
+        {debugMode && debugInfo && (
+          <div className="bg-yellow-100 border-4 border-yellow-500 p-4 text-xs font-mono space-y-2 overflow-auto">
+            <div className="font-bold text-lg text-yellow-900">🐛 DEBUG PANEL</div>
             
-            {/* Debug Info - Show venue + event + eventId */}
-            {activeEvent && (
-              <div className="space-y-1 text-center pb-2 border-b border-border">
-                <div className="flex items-center justify-center gap-2 text-sm font-medium text-muted-foreground">
-                  <MapPin className="w-4 h-4" />
-                  Venue: <span className="text-foreground font-bold uppercase">{activeEvent.venue_slug}</span>
-                </div>
-                <div className="text-xs text-muted-foreground font-mono">
-                  <Hash className="w-3 h-3 inline mr-1" />
-                  {activeEvent.id.slice(0, 8)}...
-                </div>
+            {debugInfo.validationErrors.length > 0 && (
+              <div className="bg-red-100 border-2 border-red-500 p-3 rounded">
+                <div className="font-bold text-red-700 mb-2">⚠️ VALIDATION ERRORS:</div>
+                {debugInfo.validationErrors.map((err, i) => (
+                  <div key={i} className="text-red-600">• {err}</div>
+                ))}
               </div>
             )}
 
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-12 space-y-4">
-                <Loader2 className="h-12 w-12 animate-spin text-purple-600" />
-                <p className="text-muted-foreground">Učitavam...</p>
-              </div>
-            ) : errorMessage ? (
-              <>
-                <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-6 text-center space-y-4">
-                  <p className="text-lg font-semibold text-red-900 dark:text-red-100">
-                    ⚠️ Greška
-                  </p>
-                  <p className="text-sm text-red-700 dark:text-red-300">
-                    {errorMessage}
-                  </p>
-                </div>
-                <Button
-                  onClick={loadEvent}
-                  variant="outline"
-                  className="w-full"
-                  size="lg"
-                >
-                  <RefreshCw className="mr-2 h-5 w-5" />
-                  Pokušaj ponovno
-                </Button>
-              </>
-            ) : !activeEvent ? (
-              <>
-                <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center space-y-4">
-                  <p className="text-lg font-semibold text-yellow-900 dark:text-yellow-100">
-                    📱 Odaberi kafić
-                  </p>
-                  <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                    Skeniraj QR kod na svom stolu da bi preuzeo/la tiket.
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-2 text-center">
-                  <p className="text-sm text-muted-foreground">Aktivni event:</p>
-                  <p className="text-xl font-bold text-foreground">{activeEvent.name}</p>
-                </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><strong>Timestamp:</strong></div>
+              <div>{debugInfo.timestamp}</div>
 
-                {limitReached ? (
-                  <div className="space-y-4">
-                    <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-lg p-4 text-center">
-                      <Ticket className="h-8 w-8 mx-auto mb-2 text-orange-600" />
-                      <p className="font-semibold text-orange-900 dark:text-orange-100">
-                        Imaš maksimalno {MAX_FREE_TICKETS} tiketa za ovaj event.
-                      </p>
-                      <p className="text-sm text-orange-700 dark:text-orange-300 mt-1">
-                        ({freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa u promo fazi)
-                      </p>
-                    </div>
-                    <Button
-                      onClick={handleOpenMyTickets}
-                      disabled={redirecting}
-                      className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                      size="lg"
-                    >
-                      {redirecting ? (
-                        <>
-                          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                          Otvaranje...
-                        </>
-                      ) : (
-                        <>
-                          <Ticket className="mr-2 h-5 w-5" />
-                          Otvori moje tikete
-                        </>
-                      )}
-                    </Button>
+              <div><strong>URL:</strong></div>
+              <div className="break-all">{debugInfo.url}</div>
+
+              <div><strong>Query Params:</strong></div>
+              <div>{JSON.stringify(debugInfo.queryParams)}</div>
+
+              <div><strong>Resolved Venue Slug:</strong></div>
+              <div className="font-bold text-blue-600">{debugInfo.resolvedVenueSlug || "N/A"}</div>
+
+              <div><strong>Resolved Venue ID:</strong></div>
+              <div>{debugInfo.resolvedVenueId || "N/A"}</div>
+
+              <div><strong>Resolved Event ID:</strong></div>
+              <div className="font-bold text-green-600">{debugInfo.resolvedEventId || "N/A"}</div>
+
+              <div><strong>SQL Query:</strong></div>
+              <div className="break-all">{debugInfo.sqlQuery}</div>
+
+              <div><strong>SQL Params:</strong></div>
+              <div>{JSON.stringify(debugInfo.sqlParams)}</div>
+
+              <div><strong>Fallback Triggered:</strong></div>
+              <div className="text-red-600">{debugInfo.fallbackTriggered || "NO"}</div>
+            </div>
+
+            {debugInfo.venueData && (
+              <div className="bg-blue-50 p-2 rounded">
+                <div className="font-bold">Venue Data:</div>
+                <pre>{JSON.stringify(debugInfo.venueData, null, 2)}</pre>
+              </div>
+            )}
+
+            {debugInfo.eventData && (
+              <div className="bg-green-50 p-2 rounded">
+                <div className="font-bold">Event Data:</div>
+                <pre>{JSON.stringify(debugInfo.eventData, null, 2)}</pre>
+              </div>
+            )}
+
+            {/* SELF-TEST VALIDATION */}
+            {debugInfo.queryParams.venue && debugInfo.eventData && (
+              <div className="bg-purple-50 p-3 rounded border-2 border-purple-500">
+                <div className="font-bold text-purple-700 mb-2">🧪 SELF-TEST VALIDATION:</div>
+                <div className="space-y-1">
+                  <div>
+                    <strong>Expected venue:</strong> {debugInfo.queryParams.venue}
                   </div>
-                ) : (
-                  <div className="space-y-4">
-                    {freeTicketCount > 0 && (
-                      <p className="text-sm text-center text-muted-foreground">
-                        Imaš {freeTicketCount}/{MAX_FREE_TICKETS} besplatna tiketa
-                      </p>
+                  <div>
+                    <strong>Actual venue:</strong> {debugInfo.eventData.venue_slug}
+                  </div>
+                  <div>
+                    <strong>Match:</strong>{" "}
+                    {debugInfo.queryParams.venue === debugInfo.eventData.venue_slug ? (
+                      <span className="text-green-600 font-bold">✅ PASS</span>
+                    ) : (
+                      <span className="text-red-600 font-bold">❌ FAIL - BUG DETECTED!</span>
                     )}
-                    <Button
-                      onClick={handleGetFreeTicket}
-                      disabled={creating || redirecting}
-                      className="w-full h-16 text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg"
-                      size="lg"
-                    >
-                      {redirecting ? (
-                        <>
-                          <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-                          Preusmjeravanje...
-                        </>
-                      ) : creating ? (
-                        <>
-                          <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-                          Izrađujem tiket...
-                        </>
-                      ) : (
-                        <>
-                          <Ticket className="mr-2 h-6 w-6" />
-                          Preuzmi tiket (FREE)
-                        </>
-                      )}
-                    </Button>
-                    {freeTicketCount > 0 && (
-                      <Button
-                        onClick={handleOpenMyTickets}
-                        disabled={redirecting}
-                        variant="outline"
-                        className="w-full"
-                        size="lg"
-                      >
-                        {redirecting ? (
-                          <>
-                            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                            Otvaranje...
-                          </>
-                        ) : (
-                          `Vidi sve moje tikete (${freeTicketCount})`
-                        )}
-                      </Button>
-                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* BUG BANNER - show if venue mismatch detected */}
+        {debugInfo?.validationErrors.some(e => e.includes("BUG") || e.includes("MISMATCH")) && (
+          <div className="bg-red-600 text-white p-4 text-center font-bold text-lg">
+            🚨 BUG DETECTED: Venue Mismatch! Check debug panel above.
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="bg-black/20 backdrop-blur-sm border-b border-white/10 p-4">
+          <div className="max-w-4xl mx-auto">
+            <h1 className="text-2xl font-bold text-white mb-1">
+              {activeEvent.venue_name || "Unknown Venue"}
+            </h1>
+            <p className="text-lg text-white/80">{activeEvent.name}</p>
+            <p className="text-xs text-white/50 mt-1">
+              Event: {activeEvent.id} | Venue: {activeEvent.venue_id}
+            </p>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="max-w-4xl mx-auto p-4 space-y-6">
+          {/* Registration prompt */}
+          {!myTicket && (
+            <Card className="p-6 text-center space-y-4">
+              <h2 className="text-2xl font-bold">Dobrodošli!</h2>
+              <p className="text-gray-600">
+                Registrirajte se kako biste dobili svoju karticu i mogli igrati.
+              </p>
+              <Button
+                size="lg"
+                onClick={() => setShowRegistration(true)}
+                className="w-full max-w-xs"
+              >
+                Registriraj se
+              </Button>
+            </Card>
+          )}
+
+          {/* Current Question */}
+          {myTicket && currentQuestion && (
+            <Card className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <Badge variant="outline" className="text-lg px-4 py-2">
+                  Pitanje #{currentQuestion.question_number}
+                </Badge>
+                {timeLeft !== null && (
+                  <div className={`text-3xl font-bold ${timeLeft <= 3 ? "text-red-500 animate-pulse" : "text-blue-600"}`}>
+                    <Clock className="inline w-8 h-8 mr-2" />
+                    {timeLeft}s
                   </div>
                 )}
-              </>
-            )}
-          </CardContent>
-        </Card>
+              </div>
+
+              <h2 className="text-2xl font-bold text-center py-4">
+                {currentQuestion.question_text}
+              </h2>
+
+              {hasAnswered ? (
+                <Alert>
+                  <CheckCircle2 className="h-5 w-5" />
+                  <AlertDescription>
+                    Odgovorili ste:{" "}
+                    <strong>
+                      {myAnswers.get(currentQuestion.question_number) ? "DA" : "NE"}
+                    </strong>
+                  </AlertDescription>
+                </Alert>
+              ) : isQuestionOpen ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <Button
+                    size="lg"
+                    className="h-24 text-2xl bg-green-600 hover:bg-green-700"
+                    onClick={() => handleAnswer(true)}
+                  >
+                    DA
+                  </Button>
+                  <Button
+                    size="lg"
+                    className="h-24 text-2xl bg-red-600 hover:bg-red-700"
+                    onClick={() => handleAnswer(false)}
+                  >
+                    NE
+                  </Button>
+                </div>
+              ) : (
+                <Alert variant="destructive">
+                  <XCircle className="h-5 w-5" />
+                  <AlertDescription>Vrijeme za odgovor je isteklo</AlertDescription>
+                </Alert>
+              )}
+            </Card>
+          )}
+
+          {/* My Ticket */}
+          {myTicket && (
+            <Card className="p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold">Moja Kartica</h3>
+                <Badge variant="outline">#{myTicket.serial_number}</Badge>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {myTicket.ticket_questions?.map((tq: any, idx: number) => {
+                  const num = tq.question_number;
+                  const isDrawn = activeEvent.drawn_numbers?.includes(num) || false;
+                  return (
+                    <div
+                      key={idx}
+                      className={`aspect-square flex items-center justify-center rounded-lg text-xl font-bold border-2 ${
+                        isDrawn
+                          ? "bg-green-100 border-green-500 text-green-700"
+                          : "bg-white border-gray-300"
+                      }`}
+                    >
+                      {num}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {myTicket.is_winner && (
+                <Alert className="bg-yellow-100 border-yellow-500">
+                  <Trophy className="h-5 w-5 text-yellow-600" />
+                  <AlertDescription className="text-yellow-800 font-bold">
+                    🎉 Čestitamo! Vaša kartica je pobjednička!
+                  </AlertDescription>
+                </Alert>
+              )}
+            </Card>
+          )}
+
+          {/* Event Status */}
+          {!currentQuestion && myTicket && (
+            <Card className="p-6 text-center text-gray-600">
+              <p>Čeka se sljedeće pitanje...</p>
+            </Card>
+          )}
+        </div>
       </div>
 
-      {/* Onboarding Modal - Separate from registration */}
-      <OnboardingModal
-        open={showOnboarding}
-        onOpenChange={(open) => {
-          if (!open) {
-            console.log("[Play] ⚠️ Unexpected modal close attempt blocked");
-          }
-        }}
-        onDismiss={handleOnboardingDismiss}
-      />
-
-      {/* Registration Modal - Shows only if needed */}
       <RegistrationModal
         open={showRegistration}
-        eventId={activeEvent?.id || ""} 
+        eventId={activeEvent?.id || ""}
         venueId={activeEvent?.venue_id || ""}
         onSuccess={handleRegistrationSuccess}
         onCancel={() => setShowRegistration(false)}
+      />
+
+      <OnboardingModal
+        open={showOnboarding}
+        onOpenChange={setShowOnboarding}
+        onDismiss={(dontShowAgain) => {
+          if (dontShowAgain) {
+            localStorage.setItem("has_onboarded", "true");
+          }
+          setShowOnboarding(false);
+          setHasOnboarded(true);
+        }}
       />
     </>
   );
