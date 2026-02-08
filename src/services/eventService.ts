@@ -11,7 +11,7 @@ export interface Event {
   name: string;
   status: "draft" | "active" | "paused" | "finished";
   venue_slug: string;
-  venue_id: string; // ✅ Added venue_id
+  venue_id: string;
   current_question_number: number | null;
   current_drawn_number: number | null;
   drawn_numbers: number[];
@@ -20,6 +20,7 @@ export interface Event {
   created_at: string;
   draw_mode?: "standalone" | "global";
   draw_session_id?: string | null;
+  venue_name?: string; // Added for UI display
 }
 
 export interface EventQuestion {
@@ -532,44 +533,57 @@ export const eventService = {
     return data as EventQuestion;
   },
 
-  async getActiveEvent(venueId: string) {  // ✅ REQUIRED (removed ?)
-    console.log("[EventService] 🔍 getActiveEvent called with venueId:", venueId);
-    
-    if (!venueId) {
-      console.error("[EventService] ❌ No venueId provided to getActiveEvent!");
-      throw new Error("venueId is required to fetch active event");
-    }
-    
-    const { data, error } = await supabase
-      .from("events")
-      .select("*")
-      .eq("status", "active")
-      .eq("venue_id", venueId)  // ✅ ALWAYS filter by venue_id
-      .single();
-    
-    if (error) {
-      console.error("[EventService] ❌ Error fetching active event:", error);
-      
-      // ✅ Clear 404 if no event found for this venue
-      if (error.code === 'PGRST116') {
+  async getActiveEvent(venueId: string): Promise<Event> {
+    try {
+      console.log(`[EventService] 🔍 Getting active event for venue: ${venueId}`);
+
+      const { data, error } = await supabase
+        .from("events")
+        .select(`
+          *,
+          venues!inner (
+            id,
+            name,
+            slug
+          )
+        `)
+        .eq("venue_id", venueId)
+        .ilike("status", "active")  // ✅ FIX: Use ILIKE for case-insensitive match
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (error) {
+        console.error("[EventService] ❌ Error fetching active event:", error);
         throw new Error(`No active event found for venue ${venueId}`);
       }
-      
-      throw error;
+
+      if (!data) {
+        console.error("[EventService] ❌ No active event found for venue:", venueId);
+        throw new Error(`No active event found for venue ${venueId}`);
+      }
+
+      console.log("[EventService] ✅ Active event found:", {
+        id: data.id,
+        name: data.name,
+        venue_id: data.venue_id,
+        status: data.status
+      });
+
+      // Flatten venue data
+      const venue = Array.isArray(data.venues) ? data.venues[0] : data.venues;
+
+      return {
+        ...data,
+        venue_id: data.venue_id,
+        venue_slug: venue?.slug || "",
+        venue_name: venue?.name || "",
+        status: data.status as "draft" | "active" | "paused" | "finished"
+      };
+    } catch (err) {
+      console.error("[EventService] ❌ Failed to get active event:", err);
+      throw err;
     }
-    
-    if (!data) {
-      console.error("[EventService] ❌ No active event found for venueId:", venueId);
-      throw new Error(`No active event found for venue ${venueId}`);
-    }
-    
-    console.log("[EventService] ✅ Active event found:", {
-      id: data.id,
-      name: data.name,
-      venue_id: data.venue_id
-    });
-    
-    return data as Event;
   },
 
   async getActiveOrLastFinished() {

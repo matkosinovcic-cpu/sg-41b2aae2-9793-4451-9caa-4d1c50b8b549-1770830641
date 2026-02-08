@@ -107,7 +107,9 @@ export default function PlayPage() {
     try {
       const { eventId: queryEventId, venue: queryVenue } = router.query;
       
-      console.log("[Play] 🔍 Loading event with params:", {
+      console.log("🔴🔴🔴 [Play] LOAD EVENT START 🔴🔴🔴");
+      console.log("[Play] Router query object:", router.query);
+      console.log("[Play] Query params extracted:", {
         eventId: queryEventId,
         venue: queryVenue,
         isReady: router.isReady
@@ -115,15 +117,16 @@ export default function PlayPage() {
 
       // PRIORITY A: Direct eventId param
       if (queryEventId && typeof queryEventId === "string") {
-        console.log("[Play] 🎯 PRIORITY A: Loading event by ID:", queryEventId);
+        console.log("🟢🟢🟢 [Play] PRIORITY A: Loading event by ID:", queryEventId);
         
         try {
           const event = await eventService.getEvent(queryEventId);
           
-          console.log("[Play] ✅ Event loaded by ID:", {
+          console.log("✅✅✅ [Play] Event loaded by ID:", {
             id: event.id,
             name: event.name,
             venue_id: event.venue_id,
+            venue_slug: event.venue_slug,
             status: event.status
           });
           
@@ -137,7 +140,7 @@ export default function PlayPage() {
           setLoading(false);
           return;
         } catch (err) {
-          console.error("[Play] ❌ Failed to load event by ID:", err);
+          console.error("❌❌❌ [Play] Failed to load event by ID:", err);
           setErrorMessage(`Event ${queryEventId} ne postoji ili nije dostupan.`);
           setActiveEvent(null);
           setLoading(false);
@@ -148,17 +151,17 @@ export default function PlayPage() {
       // PRIORITY B: Venue param → find active event for that venue
       if (queryVenue && typeof queryVenue === "string") {
         const venueSlug = queryVenue.trim().toLowerCase();
-        console.log("[Play] 🏢 PRIORITY B: Loading active event for venue:", venueSlug);
+        console.log("🟡🟡🟡 [Play] PRIORITY B: Loading active event for venue:", venueSlug);
         
         try {
           // Get venue UUID from slug
           const venueId = await getVenueId(venueSlug);
-          console.log("[Play] 🏢 Venue ID resolved:", venueId);
+          console.log("🏢🏢🏢 [Play] Venue ID resolved:", venueId);
           
           // Get active event for this venue
           const event = await eventService.getActiveEvent(venueId);
           
-          console.log("[Play] ✅ Active event found for venue:", {
+          console.log("✅✅✅ [Play] Active event found for venue:", {
             id: event.id,
             name: event.name,
             venue_slug: event.venue_slug,
@@ -168,14 +171,16 @@ export default function PlayPage() {
           
           // Validate venue match
           if (event.venue_id !== venueId) {
-            console.error("[Play] 🚨 VENUE MISMATCH!", {
+            console.error("🚨🚨🚨 [Play] VENUE MISMATCH!", {
               expectedVenueId: venueId,
-              loadedEventVenueId: event.venue_id
+              loadedEventVenueId: event.venue_id,
+              loadedEventName: event.name,
+              loadedEventVenueSlug: event.venue_slug
             });
             
             toast({
               title: "⚠️ Greška u venue-u",
-              description: "Event nije vezan za ovaj venue.",
+              description: `Event ${event.name} nije vezan za ${venueSlug}. Očekivani venue: ${event.venue_slug}`,
               variant: "destructive",
               duration: 10000
             });
@@ -195,7 +200,7 @@ export default function PlayPage() {
           setLoading(false);
           return;
         } catch (err) {
-          console.error("[Play] ❌ Failed to load venue/event:", err);
+          console.error("❌❌❌ [Play] Failed to load venue/event:", err);
           
           if (err instanceof Error && err.message.includes("No active event found")) {
             setErrorMessage(`Trenutno nema aktivnog eventa za ${venueSlug}.`);
@@ -212,13 +217,13 @@ export default function PlayPage() {
       }
 
       // PRIORITY C: No params → show error
-      console.log("[Play] ⚠️ PRIORITY C: No eventId or venue param");
+      console.log("⚪⚪⚪ [Play] PRIORITY C: No eventId or venue param");
       setErrorMessage(null); // Clear error - show QR scan message instead
       setActiveEvent(null);
       setLoading(false);
 
     } catch (error) {
-      console.error("[Play] ❌ Unexpected error in loadEvent:", error);
+      console.error("❌❌❌ [Play] Unexpected error in loadEvent:", error);
       setErrorMessage("Neočekivana greška. Pokušaj ponovno.");
       setActiveEvent(null);
       setLoading(false);
