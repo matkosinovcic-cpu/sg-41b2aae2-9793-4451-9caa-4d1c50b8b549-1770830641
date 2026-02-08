@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-empty-object-type */
+ 
 export type Json =
   | string
   | number
@@ -477,7 +477,7 @@ export type Database = {
           player_id: string | null
           serial_number: string
           session_id: string | null
-          venue_id: string | null
+          venue_id: string
         }
         Insert: {
           created_at?: string | null
@@ -487,7 +487,7 @@ export type Database = {
           player_id?: string | null
           serial_number: string
           session_id?: string | null
-          venue_id?: string | null
+          venue_id: string
         }
         Update: {
           created_at?: string | null
@@ -497,7 +497,7 @@ export type Database = {
           player_id?: string | null
           serial_number?: string
           session_id?: string | null
-          venue_id?: string | null
+          venue_id?: string
         }
         Relationships: [
           {
@@ -574,6 +574,7 @@ export type Database = {
               p_event_id: string
               p_limit?: number
               p_nickname: string
+              p_venue_id: string
             }
             Returns: Json
           }

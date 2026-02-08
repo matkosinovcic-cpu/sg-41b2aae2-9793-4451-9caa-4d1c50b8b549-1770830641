@@ -116,10 +116,14 @@ const ticketService = {
   /**
    * Create a FREE ticket for a player
    * Handles session creation automatically to prevent FK errors.
+   * 
+   * @param eventId - The event ID
+   * @param venueId - The venue ID (REQUIRED for venue-specific tickets)
+   * @param playerId - Optional player ID
    */
-  async createFreeTicket(eventId: string, playerId?: string): Promise<Ticket> {
+  async createFreeTicket(eventId: string, venueId: string, playerId?: string): Promise<Ticket> {
     try {
-      console.log("[TicketService] Creating free ticket for event:", eventId);
+      console.log("[TicketService] Creating free ticket for event:", eventId, "venue:", venueId);
       
       // CRITICAL: Ensure we have a valid DB session first
       const sessionId = await ensureValidSession(eventId, playerId);
@@ -133,6 +137,7 @@ const ticketService = {
         .from("tickets")
         .insert({
           event_id: eventId,
+          venue_id: venueId,  // ✅ CRITICAL: Always set venue_id
           serial_number: serialNumber,
           session_id: sessionId,
           player_id: playerId || null,
@@ -153,6 +158,7 @@ const ticketService = {
             .from("tickets")
             .insert({
               event_id: eventId,
+              venue_id: venueId,  // ✅ CRITICAL: Always set venue_id
               serial_number: serialNumber,
               session_id: newSessionId,
               player_id: playerId || null,
@@ -298,9 +304,16 @@ const ticketService = {
 /**
  * Atomically claim free tickets for a player (max 4)
  * Uses RPC function to ensure transaction safety and idempotency
+ * 
+ * @param eventId - The event ID
+ * @param venueId - The venue ID (REQUIRED for venue-specific tickets)
+ * @param email - Player email
+ * @param nickname - Player nickname
+ * @param limit - Maximum tickets to create (default 4)
  */
 export async function claimFreeTickets(
   eventId: string,
+  venueId: string,
   email: string,
   nickname: string,
   limit: number = 4
@@ -322,7 +335,7 @@ export async function claimFreeTickets(
   event_name?: string;
   venue_name?: string;
 }> {
-  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (event: ${eventId}, limit: ${limit})`);
+  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (event: ${eventId}, venue: ${venueId}, limit: ${limit})`);
 
   // Normalize email (lowercase + trim) before sending to backend
   const normalizedEmail = email.trim().toLowerCase();
@@ -331,11 +344,16 @@ export async function claimFreeTickets(
     throw new Error("Event ID is required to claim tickets");
   }
 
+  if (!venueId) {
+    throw new Error("Venue ID is required to claim tickets");
+  }
+
   try {
     const { data, error } = await supabase.rpc("claim_free_tickets", {
       p_email: normalizedEmail,
       p_nickname: nickname.trim(),
       p_event_id: eventId,
+      p_venue_id: venueId,  // ✅ CRITICAL: Pass venue_id to RPC
       p_limit: limit,
     });
 
