@@ -405,24 +405,41 @@ export const eventService = {
     if (isGlobalMode) {
       console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Updating draw_session + ALL events");
 
-      // ✅ Update DRAW_SESSION (shared state)
-      const { error: sessionError } = await supabase
+      // ✅ CRITICAL FIX: Force update draw_session.drawn_numbers with explicit error handling
+      console.log("[drawNextQuestion] 📝 FORCE UPDATE draw_session:", {
+        session_id: drawSessionId,
+        old_count: drawnNumbers.length,
+        new_count: updatedDrawnNumbers.length,
+        adding_number: drawnNumber,
+        full_array: updatedDrawnNumbers
+      });
+
+      // ✅ Update DRAW_SESSION (shared state) with EXPLICIT error handling
+      const { data: sessionUpdateData, error: sessionError } = await supabase
         .from("draw_sessions")
         .update({
           drawn_numbers: updatedDrawnNumbers,
           current_question_number: drawnNumber
         })
-        .eq("id", drawSessionId!);
+        .eq("id", drawSessionId!)
+        .select("drawn_numbers, current_question_number");
 
       if (sessionError) {
-        console.error("[drawNextQuestion] ❌ Failed to update draw_session:", sessionError);
+        console.error("[drawNextQuestion] ❌ Failed to update draw_session:", {
+          error: sessionError,
+          code: sessionError.code,
+          message: sessionError.message,
+          details: sessionError.details,
+          hint: sessionError.hint
+        });
         throw sessionError;
       }
 
-      console.log("[drawNextQuestion] ✅ Draw_session updated:", {
+      console.log("[drawNextQuestion] ✅ Draw_session updated successfully:", {
         session_id: drawSessionId,
-        drawn_numbers_count: updatedDrawnNumbers.length,
-        current_question: drawnNumber
+        returned_data: sessionUpdateData,
+        drawn_numbers_count: sessionUpdateData?.[0]?.drawn_numbers?.length || 0,
+        current_question: sessionUpdateData?.[0]?.current_question_number
       });
 
       // ✅ CRITICAL: Verify the update was persisted
@@ -439,8 +456,14 @@ export const eventService = {
           session_id: drawSessionId,
           drawn_numbers_count_in_db: verifySession.drawn_numbers?.length || 0,
           drawn_numbers_in_db: verifySession.drawn_numbers,
-          current_question_in_db: verifySession.current_question_number
+          current_question_in_db: verifySession.current_question_number,
+          MATCH: verifySession.drawn_numbers?.length === updatedDrawnNumbers.length ? "✅ SUCCESS" : "❌ MISMATCH"
         });
+
+        // ✅ CRITICAL: If verification fails, throw error to prevent inconsistent state
+        if (verifySession.drawn_numbers?.length !== updatedDrawnNumbers.length) {
+          throw new Error(`draw_session.drawn_numbers verification failed! Expected ${updatedDrawnNumbers.length}, got ${verifySession.drawn_numbers?.length}`);
+        }
       }
 
       // ✅ Update ALL EVENTS in this draw_session
