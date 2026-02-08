@@ -392,11 +392,10 @@ export const eventService = {
     });
 
     const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
-    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
     console.log("[drawNextQuestion] 📦 STEP 7.0: Prepared data for update:", {
-      updatedDrawnNumbers,
-      updatedDrawnNumbers_length: updatedDrawnNumbers.length,
+      updatedDrawnNumbers: null,
+      updatedDrawnNumbers_length: null,
       questionOpenUntil,
       isGlobalMode
     });
@@ -405,81 +404,45 @@ export const eventService = {
     if (isGlobalMode) {
       console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Updating draw_session + ALL events");
 
-      // ✅ CRITICAL FIX: Force update draw_session.drawn_numbers with explicit error handling
-      console.log("[drawNextQuestion] 📝 FORCE UPDATE draw_session:", {
-        session_id: drawSessionId,
-        old_count: drawnNumbers.length,
-        new_count: updatedDrawnNumbers.length,
-        adding_number: drawnNumber,
-        full_array: updatedDrawnNumbers
-      });
+      // ✅ CRITICAL: Use ATOMIC PostgreSQL function to prevent race conditions
+      console.log("[drawNextQuestion] 🔐 Calling atomic draw_next_number function");
 
-      // ✅ Update DRAW_SESSION (shared state) - Include current_index and draw_count
-      const { data: sessionUpdateData, error: sessionError } = await supabase
-        .from("draw_sessions")
-        .update({
-          drawn_numbers: updatedDrawnNumbers,
-          current_question_number: drawnNumber,
-          current_index: updatedDrawnNumbers.length,  // ✅ NEW: Track current position
-          draw_count: updatedDrawnNumbers.length,     // ✅ NEW: Track total drawn
-          last_draw_at: new Date().toISOString()      // ✅ NEW: Track last draw time
-        })
-        .eq("id", drawSessionId!)
-        .select("drawn_numbers, current_question_number, current_index, draw_count");
+      const { data: atomicResult, error: atomicError } = await supabase
+        .rpc('draw_next_number', { p_event_id: eventId });
 
-      if (sessionError) {
-        console.error("[drawNextQuestion] ❌ Failed to update draw_session:", {
-          error: sessionError,
-          code: sessionError.code,
-          message: sessionError.message,
-          details: sessionError.details,
-          hint: sessionError.hint
+      if (atomicError) {
+        console.error("[drawNextQuestion] ❌ Atomic draw function failed:", {
+          error: atomicError,
+          code: atomicError.code,
+          message: atomicError.message,
+          details: atomicError.details
         });
-        throw sessionError;
+        throw atomicError;
       }
 
-      console.log("[drawNextQuestion] ✅ Draw_session updated successfully:", {
-        session_id: drawSessionId,
-        returned_data: sessionUpdateData,
-        drawn_numbers_count: sessionUpdateData?.[0]?.drawn_numbers?.length || 0,
-        current_question: sessionUpdateData?.[0]?.current_question_number,
-        current_index: sessionUpdateData?.[0]?.current_index,
-        draw_count: sessionUpdateData?.[0]?.draw_count
-      });
+      console.log("[drawNextQuestion] ✅ Atomic draw function returned:", atomicResult);
 
-      // ✅ CRITICAL: Verify the update was persisted
-      const { data: verifySession, error: verifyError } = await supabase
-        .from("draw_sessions")
-        .select("drawn_numbers, current_question_number, current_index, draw_count")
-        .eq("id", drawSessionId!)
-        .single();
-
-      if (verifyError) {
-        console.error("[drawNextQuestion] ❌ Failed to verify draw_session update:", verifyError);
-      } else {
-        console.log("[drawNextQuestion] 🔍 VERIFICATION - draw_session after update:", {
-          session_id: drawSessionId,
-          drawn_numbers_count_in_db: verifySession.drawn_numbers?.length || 0,
-          drawn_numbers_in_db: verifySession.drawn_numbers,
-          current_question_in_db: verifySession.current_question_number,
-          current_index_in_db: verifySession.current_index,
-          draw_count_in_db: verifySession.draw_count,
-          MATCH: verifySession.drawn_numbers?.length === updatedDrawnNumbers.length ? "✅ SUCCESS" : "❌ MISMATCH"
-        });
-
-        // ✅ CRITICAL: If verification fails, throw error to prevent inconsistent state
-        if (verifySession.drawn_numbers?.length !== updatedDrawnNumbers.length) {
-          throw new Error(`draw_session.drawn_numbers verification failed! Expected ${updatedDrawnNumbers.length}, got ${verifySession.drawn_numbers?.length}`);
-        }
+      // ✅ CRITICAL: Verify the atomic operation succeeded
+      if (!atomicResult || atomicResult.length === 0) {
+        throw new Error("Atomic draw function returned no data");
       }
 
-      // ✅ Update ALL EVENTS in this draw_session (sync drawn_numbers + current states)
+      const result = atomicResult[0];
+      
+      if (!result.success) {
+        throw new Error(result.message || "Draw failed");
+      }
+
+      console.log("[drawNextQuestion] ✅ Draw successful:", {
+        new_number: result.new_number,
+        draw_count: result.draw_count,
+        drawn_numbers_count: result.drawn_numbers?.length || 0
+      });
+
+      // ✅ Update question_open_until for ALL events in this session
       const { error: eventsError } = await supabase
         .from("events")
         .update({
-          drawn_numbers: updatedDrawnNumbers,           // ✅ NEW: Sync drawn_numbers array
-          current_drawn_number: drawnNumber,
-          current_question_number: drawnNumber,
           question_open_until: questionOpenUntil
         })
         .eq("draw_session_id", drawSessionId!);
@@ -494,11 +457,10 @@ export const eventService = {
     } else {
       console.log("[drawNextQuestion] 📍 STANDALONE MODE - Updating single event");
 
-      // ✅ STANDALONE MODE: Update only this event
+      // ✅ STANDALONE MODE: Update only this event (legacy behavior)
       const { error: eventUpdateError } = await supabase
         .from("events")
         .update({
-          drawn_numbers: updatedDrawnNumbers,
           current_drawn_number: drawnNumber,
           current_question_number: drawnNumber,
           question_open_until: questionOpenUntil
@@ -541,7 +503,7 @@ export const eventService = {
 
     console.log("[drawNextQuestion] ✅ Draw complete:", {
       drawn_number: drawnNumber,
-      total_drawn: updatedDrawnNumbers.length,
+      total_drawn: null,
       mode: isGlobalMode ? "GLOBAL" : "STANDALONE"
     });
 
