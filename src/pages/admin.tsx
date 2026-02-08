@@ -218,6 +218,7 @@ export default function AdminPanel() {
   const loadEvents = async () => {
     try {
       const data = await eventService.getEvents();
+      console.log("[Admin] Loaded events:", data.length, data.map(e => ({ id: e.id, name: e.name, status: e.status })));
       setEvents(data);
     } catch (error) {
       console.error("Failed to load events:", error);
