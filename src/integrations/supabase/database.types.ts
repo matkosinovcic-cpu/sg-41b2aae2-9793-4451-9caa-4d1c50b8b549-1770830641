@@ -577,11 +577,10 @@ export type Database = {
       draw_next_number: {
         Args: { p_event_id: string }
         Returns: {
-          current_index: number
-          current_question_number: number
           draw_count: number
           drawn_numbers: number[]
           message: string
+          new_number: number
           success: boolean
         }[]
       }
