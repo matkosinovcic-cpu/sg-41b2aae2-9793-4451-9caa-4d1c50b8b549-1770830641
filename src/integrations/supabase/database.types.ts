@@ -1,4 +1,4 @@
- 
+/* eslint-disable @typescript-eslint/no-empty-object-type */
 export type Json =
   | string
   | number
@@ -574,6 +574,17 @@ export type Database = {
             }
             Returns: Json
           }
+      draw_next_number: {
+        Args: { p_event_id: string }
+        Returns: {
+          current_index: number
+          current_question_number: number
+          draw_count: number
+          drawn_numbers: number[]
+          message: string
+          success: boolean
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
