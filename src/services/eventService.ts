@@ -680,13 +680,13 @@ export const eventService = {
 
   async getEventQuestions(eventId: string) {
     const { data, error } = await supabase
-      .from("events")
+      .from("event_questions")
       .select("*, questions(*)")
       .eq("event_id", eventId)
       .order("question_number", { ascending: true });
     
     if (error) throw error;
-    return data as EventQuestion[];
+    return data as unknown as EventQuestion[];
   },
 
   async getQuestionForNumber(eventId: string, questionNumber: number) {
