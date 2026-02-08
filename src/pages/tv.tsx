@@ -26,6 +26,16 @@ export default function TVScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [questionText, setQuestionText] = useState<string | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
+
+  // DEBUG: Log drawnNumbers changes
+  useEffect(() => {
+    console.log("[TV] 📊 drawnNumbers state changed:", {
+      size: drawnNumbers.size,
+      numbers: Array.from(drawnNumbers).sort((a, b) => a - b),
+      timestamp: new Date().toISOString()
+    });
+  }, [drawnNumbers]);
+
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
@@ -136,7 +146,11 @@ export default function TVScreen() {
         
         if (!error && session) {
           console.log("[TV] ✅ Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
-          setDrawnNumbers(new Set(session.drawn_numbers || []));
+          console.log("[TV] 📋 Draw session numbers array:", session.drawn_numbers);
+          const newDrawnSet = new Set(session.drawn_numbers || []);
+          console.log("[TV] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
+          setDrawnNumbers(newDrawnSet);
+          console.log("[TV] ✅ drawnNumbers state updated");
         } else {
           console.error("[TV] ❌ Failed to fetch draw_session drawn_numbers:", error);
         }
@@ -265,7 +279,10 @@ export default function TVScreen() {
           
           if (!error && session) {
             console.log("[TV-POLL] ✅ Updating drawn numbers from draw_session:", session.drawn_numbers?.length || 0);
-            setDrawnNumbers(new Set(session.drawn_numbers || []));
+            console.log("[TV-POLL] 📋 Draw session numbers array:", session.drawn_numbers);
+            const newDrawnSet = new Set(session.drawn_numbers || []);
+            console.log("[TV-POLL] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
+            setDrawnNumbers(newDrawnSet);
           }
         } else {
           // Standalone mode
@@ -417,7 +434,10 @@ export default function TVScreen() {
         
         if (!error && session) {
           console.log("[TV] ✅ Step 6: Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
-          setDrawnNumbers(new Set(session.drawn_numbers || []));
+          console.log("[TV] 📋 Draw session numbers array:", session.drawn_numbers);
+          const newDrawnSet = new Set(session.drawn_numbers || []);
+          console.log("[TV] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
+          setDrawnNumbers(newDrawnSet);
         } else {
           console.error("[TV] ❌ Failed to load draw_session drawn_numbers:", error);
           setDrawnNumbers(new Set());
