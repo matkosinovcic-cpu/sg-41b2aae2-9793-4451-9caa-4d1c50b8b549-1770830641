@@ -9,7 +9,7 @@
  * - Accept rules checkbox (required)
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -59,6 +59,11 @@ export function RegistrationModal({
     checkboxes?: string;
     general?: string;
   }>({});
+
+  // DEBUG: Log eventId prop on mount and when it changes
+  useEffect(() => {
+    console.log("[RegistrationModal] 🎯 Received eventId prop:", eventId);
+  }, [eventId]);
 
   // Real-time validation
   const validateFields = () => {
@@ -110,6 +115,12 @@ export function RegistrationModal({
 
     try {
       console.log("[RegistrationModal] 🎟️ Claiming free tickets atomically...");
+      console.log("[RegistrationModal] 📋 Parameters:", {
+        eventId,
+        email: normalizedEmail,
+        nickname: trimmedNickname,
+        limit: 4
+      });
 
       // Normalize email before sending to backend
       const normalizedEmail = email.trim().toLowerCase();
@@ -124,6 +135,16 @@ export function RegistrationModal({
       );
 
       console.log("[RegistrationModal] ✅ Tickets claimed:", result);
+      console.log("[RegistrationModal] 🎫 Claimed tickets details:", {
+        count: result.tickets.length,
+        eventId: result.event_id,
+        eventName: result.event_name,
+        venueName: result.venue_name,
+        tickets: result.tickets.map((t: any) => ({
+          id: t.id,
+          serial: t.serial_number
+        }))
+      });
 
       // Store session info in localStorage
       if (typeof window !== "undefined") {

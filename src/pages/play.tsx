@@ -373,6 +373,12 @@ export default function PlayPage() {
     
     try {
       console.log("[Play] 🎫 Creating free ticket for event:", activeEvent.id, "PlayerID:", playerId);
+      console.log("[Play] 🏢 Event details:", {
+        id: activeEvent.id,
+        name: activeEvent.name,
+        venue_slug: activeEvent.venue_slug,
+        status: activeEvent.status
+      });
       
       // STEP 1: Create ticket in database and WAIT for response
       // playerId will be passed if coming from registration, or fetched inside helper if already exists
@@ -469,11 +475,22 @@ export default function PlayPage() {
     totalTickets: number;
   }) => {
     console.log("[Play] ✅ Registration successful & tickets claimed:", data);
+    console.log("[Play] 🏢 Current activeEvent context:", {
+      id: activeEvent?.id,
+      name: activeEvent?.name,
+      venue_slug: activeEvent?.venue_slug
+    });
     setShowRegistration(false);
     
     // Store all claimed tickets in localStorage for this event
     if (activeEvent && data.tickets && data.tickets.length > 0) {
+      console.log("[Play] 💾 Storing tickets for event:", activeEvent.id);
       data.tickets.forEach((ticket: any) => {
+        console.log("[Play] 💾 Storing ticket:", {
+          serial: ticket.serial_number,
+          eventId: activeEvent.id,
+          venue: activeEvent.venue_slug
+        });
         storeFreeTicket(activeEvent.id, ticket.serial_number);
       });
       
