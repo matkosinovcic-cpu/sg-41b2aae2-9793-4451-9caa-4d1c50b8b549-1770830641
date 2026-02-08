@@ -394,6 +394,13 @@ export const eventService = {
     const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
     const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
+    console.log("[drawNextQuestion] 📦 STEP 7.0: Prepared data for update:", {
+      updatedDrawnNumbers,
+      updatedDrawnNumbers_length: updatedDrawnNumbers.length,
+      questionOpenUntil,
+      isGlobalMode
+    });
+
     // ✅ STEP 7: Update database based on mode
     if (isGlobalMode) {
       console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Updating draw_session + ALL events");
@@ -417,6 +424,24 @@ export const eventService = {
         drawn_numbers_count: updatedDrawnNumbers.length,
         current_question: drawnNumber
       });
+
+      // ✅ CRITICAL: Verify the update was persisted
+      const { data: verifySession, error: verifyError } = await supabase
+        .from("draw_sessions")
+        .select("drawn_numbers, current_question_number")
+        .eq("id", drawSessionId!)
+        .single();
+
+      if (verifyError) {
+        console.error("[drawNextQuestion] ❌ Failed to verify draw_session update:", verifyError);
+      } else {
+        console.log("[drawNextQuestion] 🔍 VERIFICATION - draw_session after update:", {
+          session_id: drawSessionId,
+          drawn_numbers_count_in_db: verifySession.drawn_numbers?.length || 0,
+          drawn_numbers_in_db: verifySession.drawn_numbers,
+          current_question_in_db: verifySession.current_question_number
+        });
+      }
 
       // ✅ Update ALL EVENTS in this draw_session
       const { error: eventsError } = await supabase
