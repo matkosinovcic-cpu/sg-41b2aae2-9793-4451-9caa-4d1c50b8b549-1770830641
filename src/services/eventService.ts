@@ -18,7 +18,7 @@ export interface Event {
   question_open_until: string | null;
   winner_ticket_id: string | null;
   created_at: string;
-  draw_mode?: "standalone" | "global";
+  draw_mode?: "standalone" | "global" | "manual" | "auto" | "scheduled";
   draw_session_id?: string | null;
   venue_name?: string; // Added for UI display
 }
@@ -571,7 +571,7 @@ export const eventService = {
       return {
         ...data,
         status: data.status as "draft" | "active" | "paused" | "finished",
-        draw_mode: data.draw_mode as "manual" | "auto" | "scheduled",
+        draw_mode: data.draw_mode as "standalone" | "global" | "manual" | "auto" | "scheduled",
         venue_name: venue?.name,
         venue_slug: venue?.slug,
       };
