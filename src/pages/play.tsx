@@ -129,13 +129,13 @@ export default function PlayPage() {
     setLoading(true);
     
     try {
-      console.log("[Play] 🔍 STEP 4: loadActiveEvent called", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
+      console.log("[Play] 🔍 STEP 5: loadActiveEvent called", isRetry ? `(retry ${retryAttempt + 1}/${MAX_RETRY_ATTEMPTS})` : "");
       
       // CRITICAL: Use venueSlug state directly (must be set before this function is called)
       const venue = venueSlug;
       
       // DEBUG LOGGING
-      console.log("[Play] 🏢 STEP 5: Venue check before SQL query:", {
+      console.log("[Play] 🏢 STEP 5.1: Venue check before SQL query:", {
         venueSlugState: venueSlug,
         queryVenue: router.query.venue,
         routerIsReady: router.isReady,
@@ -143,7 +143,7 @@ export default function PlayPage() {
       });
       
       if (!venue) {
-        console.log("[Play] ⚠️ ABORT: No venue in state - user needs to scan QR code");
+        console.log("[Play] ⚠️ STEP 5.2: ABORT - No venue in state, user needs to scan QR code");
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
@@ -153,7 +153,7 @@ export default function PlayPage() {
       console.log("[Play] 🎯 STEP 6: Fetching ACTIVE event for venue:", venue);
       
       // CRITICAL: STRICT filter by venue_slug - NO FALLBACK to other venues
-      console.log("[Play] 📡 STEP 7: Executing SQL query:", {
+      console.log("[Play] 📡 STEP 6.1: Executing SQL query:", {
         table: "events",
         filters: {
           status: "active",
@@ -169,28 +169,28 @@ export default function PlayPage() {
         .eq("venue_slug", venue)
         .limit(1);
 
-      console.log("[Play] 📊 STEP 8: SQL query result:", {
+      console.log("[Play] 📊 STEP 6.2: SQL query result:", {
         eventsCount: events?.length || 0,
         error: error,
         rawEvents: events
       });
 
       if (error) {
-        console.error("[Play] ❌ Error fetching active event for venue:", error);
+        console.error("[Play] ❌ STEP 6.3: Error fetching active event for venue:", error);
         throw error;
       }
 
       const event = events && events.length > 0 ? (events[0] as unknown as Event) : null;
 
       if (!event) {
-        console.log("[Play] ℹ️ STEP 9: No active event found for venue:", venue);
+        console.log("[Play] ℹ️ STEP 7: No active event found for venue:", venue);
         setActiveEvent(null);
         setLoading(false);
         setHealingInProgress(false);
         return;
       }
 
-      console.log("[Play] ✅ STEP 10: Active event FOUND:", {
+      console.log("[Play] ✅ STEP 8: Active event FOUND:", {
         venue,
         id: event.id,
         name: event.name,
@@ -200,7 +200,7 @@ export default function PlayPage() {
       
       // CRITICAL VALIDATION: Ensure loaded event matches venue slug
       if (event.venue_slug !== venue) {
-        console.error("[Play] 🚨 VENUE MISMATCH!", {
+        console.error("[Play] 🚨 STEP 8.1: VENUE MISMATCH!", {
           expectedVenue: venue,
           loadedEventVenue: event.venue_slug,
           eventName: event.name,
@@ -220,20 +220,22 @@ export default function PlayPage() {
         return;
       }
       
-      console.log("[Play] 🔍 STEP 11: Setting activeEvent state to:", {
+      console.log("[Play] 🔍 STEP 9: Setting activeEvent state to:", {
         id: event.id,
         name: event.name,
         venue_slug: event.venue_slug
       });
       
       setActiveEvent(event);
+      
+      console.log("[Play] ✅ STEP 9.1: activeEvent state SUCCESSFULLY SET!");
 
       // Check ticket limit for this ACTIVE event ONLY
       const storedTickets = getStoredFreeTickets(event.id);
       setFreeTicketCount(storedTickets.length);
       setLimitReached(storedTickets.length >= MAX_FREE_TICKETS);
 
-      console.log("[Play] 📊 STEP 12: Tickets for active event:", {
+      console.log("[Play] 📊 STEP 10: Tickets for active event:", {
         count: storedTickets.length,
         limit: MAX_FREE_TICKETS,
         eventId: event.id
@@ -283,55 +285,55 @@ export default function PlayPage() {
   useEffect(() => {
     // CRITICAL: Wait for router.isReady before resolving venue
     if (!router.isReady) {
-      console.log("[Play] ⏳ Router not ready yet, waiting...");
+      console.log("[Play] ⏳ STEP 0: Router not ready yet, waiting...");
       return;
     }
     
-    console.log("[Play] ✅ Router ready, resolving venue...");
-    console.log("[Play] 🌐 Full router state:", {
+    console.log("[Play] ✅ STEP 1: Router ready, resolving venue...");
+    console.log("[Play] 🌐 STEP 1.1: Full router state:", {
       isReady: router.isReady,
       query: router.query,
       pathname: router.pathname,
       asPath: router.asPath
     });
     
-    // 🔍 STEP 1: Resolve venue from URL or localStorage
-    console.log("[Play] 🔍 STEP 1: Calling resolveVenue with:", router.query.venue);
+    // 🔍 STEP 2: Resolve venue from URL or localStorage
+    console.log("[Play] 🔍 STEP 2: Calling resolveVenue with query.venue:", router.query.venue);
     const resolved = resolveVenue(router.query.venue);
     
-    console.log("[Play] 🏢 Venue resolution result:", {
+    console.log("[Play] 🏢 STEP 2.1: Venue resolution result:", {
       queryVenue: router.query.venue,
       storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
       resolvedVenue: resolved,
       routerIsReady: router.isReady
     });
     
-    // 🔍 STEP 2: Set venueSlug state
+    // 🔍 STEP 3: Set venueSlug state
     if (resolved) {
-      console.log("[Play] 🔍 STEP 2: Setting venueSlug state to:", resolved);
+      console.log("[Play] 🔍 STEP 3: Setting venueSlug state to:", resolved);
       setVenueSlug(resolved);
       storeVenue(resolved); // Store for future fallback
-      console.log("[Play] 🎯 venueSlug state SET to:", resolved);
-      console.log("[Play] 💾 Stored in localStorage: ps_venue =", resolved);
+      console.log("[Play] 🎯 STEP 3.1: venueSlug state SET to:", resolved);
+      console.log("[Play] 💾 STEP 3.2: Stored in localStorage: ps_venue =", resolved);
     } else {
-      console.log("[Play] ⚠️ No venue resolved - user needs to scan QR");
+      console.log("[Play] ⚠️ STEP 3: No venue resolved - user needs to scan QR");
       setVenueSlug(null);
     }
-  }, [router.isReady, router.query.venue]); // Re-run when router becomes ready or venue changes
+  }, [router.isReady, router.query.venue]);
 
   // SEPARATE useEffect: Load event ONLY when venueSlug is set
   useEffect(() => {
-    console.log("[Play] 🔍 STEP 3: venueSlug changed, value:", venueSlug);
+    console.log("[Play] 🔍 STEP 4: venueSlug useEffect triggered, value:", venueSlug);
     
     if (venueSlug) {
-      console.log("[Play] 🔄 venueSlug is SET to:", venueSlug, "- calling loadActiveEvent()");
+      console.log("[Play] 🔄 STEP 4.1: venueSlug is SET to:", venueSlug, "- calling loadActiveEvent()");
       loadActiveEvent();
     } else {
-      console.log("[Play] ⏭️ venueSlug is NULL, skipping loadActiveEvent");
+      console.log("[Play] ⏭️ STEP 4.2: venueSlug is NULL, skipping loadActiveEvent");
       setActiveEvent(null);
       setLoading(false);
     }
-  }, [venueSlug]); // Trigger ONLY when venueSlug changes
+  }, [venueSlug]);
 
   // Core logic to generate ticket
   const executeTicketCreation = async (playerId?: string) => {
@@ -708,12 +710,15 @@ export default function PlayPage() {
       />
 
       {/* Registration Modal - Shows only if needed */}
-      {/* DEBUG: Log eventId before rendering modal */}
-      {showRegistration && activeEvent && console.log("[Play] 🔍 STEP 13: Rendering RegistrationModal with eventId:", {
-        eventId: activeEvent.id,
-        eventName: activeEvent.name,
-        eventVenue: activeEvent.venue_slug
-      })}
+      {showRegistration && activeEvent && (() => {
+        console.log("[Play] 🔍 STEP 11: Rendering RegistrationModal with:", {
+          showRegistration,
+          activeEventId: activeEvent?.id,
+          activeEventName: activeEvent?.name,
+          activeEventVenue: activeEvent?.venue_slug
+        });
+        return null;
+      })()}
       <RegistrationModal
         open={showRegistration}
         eventId={activeEvent?.id || ""} 

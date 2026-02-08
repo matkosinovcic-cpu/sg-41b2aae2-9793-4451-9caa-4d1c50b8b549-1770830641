@@ -62,7 +62,9 @@ export function RegistrationModal({
 
   // DEBUG: Log eventId prop on mount and when it changes
   useEffect(() => {
-    console.log("[RegistrationModal] 🎯 Received eventId prop:", eventId);
+    console.log("[RegistrationModal] 🎯 STEP 12: Received eventId prop:", eventId);
+    console.log("[RegistrationModal] 🎯 STEP 12.1: eventId type:", typeof eventId);
+    console.log("[RegistrationModal] 🎯 STEP 12.2: eventId length:", eventId?.length);
   }, [eventId]);
 
   // Real-time validation
@@ -118,8 +120,8 @@ export function RegistrationModal({
     const trimmedNickname = nickname.trim();
 
     try {
-      console.log("[RegistrationModal] 🎟️ Claiming free tickets atomically...");
-      console.log("[RegistrationModal] 📋 Parameters:", {
+      console.log("[RegistrationModal] 🎟️ STEP 13: Claiming free tickets atomically...");
+      console.log("[RegistrationModal] 📋 STEP 13.1: Parameters:", {
         eventId,
         email: normalizedEmail,
         nickname: trimmedNickname,
@@ -134,15 +136,16 @@ export function RegistrationModal({
         4 // Max 4 free tickets
       );
 
-      console.log("[RegistrationModal] ✅ Tickets claimed:", result);
-      console.log("[RegistrationModal] 🎫 Claimed tickets details:", {
+      console.log("[RegistrationModal] ✅ STEP 14: Tickets claimed successfully!");
+      console.log("[RegistrationModal] 🎫 STEP 14.1: Claimed tickets details:", {
         count: result.tickets.length,
         eventId: result.event_id,
         eventName: result.event_name,
         venueName: result.venue_name,
         tickets: result.tickets.map((t: any) => ({
           id: t.id,
-          serial: t.serial_number
+          serial: t.serial_number,
+          event_id: t.event_id
         }))
       });
 
@@ -165,7 +168,7 @@ export function RegistrationModal({
       });
 
     } catch (err) {
-      console.error("[RegistrationModal] ❌ Registration failed:", err);
+      console.error("[RegistrationModal] ❌ STEP 15: Registration failed:", err);
       
       // User-friendly error messages
       let errorMessage = "Greška pri registraciji. Pokušajte ponovno.";
