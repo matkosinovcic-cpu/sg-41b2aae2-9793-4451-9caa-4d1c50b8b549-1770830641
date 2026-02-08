@@ -17,6 +17,8 @@ export interface Event {
   question_open_until: string | null;
   winner_ticket_id: string | null;
   created_at: string;
+  draw_mode?: "standalone" | "global";
+  draw_session_id?: string | null;
 }
 
 export interface EventQuestion {
@@ -271,15 +273,35 @@ export const eventService = {
     if (error) throw error;
   },
 
+  /**
+   * ✅ GLOBAL MODE: Draw next question from SHARED draw_session
+   * This function works for BOTH standalone and global events:
+   * - Standalone: Uses event.drawn_numbers (legacy)
+   * - Global: Uses draw_session.drawn_numbers (shared across venues)
+   */
   async drawNextQuestion(eventId: string) {
-    // ✅ CRITICAL: Re-fetch event from DB (SOURCE OF TRUTH)
-    const { data: event } = await supabase
+    console.log("[drawNextQuestion] 🎯 Starting draw for event:", eventId);
+
+    // ✅ STEP 1: Load event WITH draw_session data
+    const { data: event, error: eventError } = await supabase
       .from("events")
-      .select("*")
+      .select("*, draw_sessions(*)")
       .eq("id", eventId)
       .single();
 
-    if (!event) throw new Error("Event not found");
+    if (eventError || !event) {
+      console.error("[drawNextQuestion] ❌ Event not found:", eventError);
+      throw new Error("Event not found");
+    }
+
+    console.log("[drawNextQuestion] 📊 Event loaded:", {
+      id: event.id,
+      name: event.name,
+      status: event.status,
+      draw_mode: event.draw_mode,
+      draw_session_id: event.draw_session_id,
+      has_draw_session: !!event.draw_sessions
+    });
 
     // ✅ STATE MACHINE: Enforce strict status rules
     if (event.status === "finished") {
@@ -294,14 +316,42 @@ export const eventService = {
       throw new Error(`Event mora biti aktivan za izvlačenje (trenutni status: ${event.status})`);
     }
 
-    const drawnNumbers = event.drawn_numbers || [];
-    
-    // Check if all 90 numbers are drawn
+    // ✅ STEP 2: Determine if GLOBAL or STANDALONE mode
+    const isGlobalMode = event.draw_mode === "global" && event.draw_session_id && event.draw_sessions;
+
+    console.log("[drawNextQuestion] 🔍 Mode detection:", {
+      draw_mode: event.draw_mode,
+      has_session_id: !!event.draw_session_id,
+      has_session_data: !!event.draw_sessions,
+      isGlobalMode
+    });
+
+    let drawnNumbers: number[] = [];
+    let drawSessionId: string | null = null;
+
+    if (isGlobalMode) {
+      // ✅ GLOBAL MODE: Use draw_session.drawn_numbers (shared across all events)
+      drawnNumbers = event.draw_sessions.drawn_numbers || [];
+      drawSessionId = event.draw_session_id!;
+      console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Using draw_session:", {
+        session_id: drawSessionId,
+        drawn_count: drawnNumbers.length
+      });
+    } else {
+      // ✅ STANDALONE MODE: Use event.drawn_numbers (legacy)
+      drawnNumbers = event.drawn_numbers || [];
+      console.log("[drawNextQuestion] 📍 STANDALONE MODE - Using event.drawn_numbers:", {
+        drawn_count: drawnNumbers.length
+      });
+    }
+
+    // ✅ STEP 3: Check if all 90 numbers are drawn
     if (drawnNumbers.length >= 90) {
+      console.log("[drawNextQuestion] ⛔ All 90 numbers drawn");
       throw new Error("Svih 90 brojeva je izvučeno");
     }
 
-    // Find all numbers from 1-90 that haven't been drawn yet
+    // ✅ STEP 4: Find available numbers (1-90 that haven't been drawn)
     const availableNumbers = [];
     for (let i = 1; i <= 90; i++) {
       if (!drawnNumbers.includes(i)) {
@@ -313,47 +363,117 @@ export const eventService = {
       throw new Error("Nema više dostupnih brojeva");
     }
 
-    // Randomly select one number from available numbers
+    // ✅ STEP 5: Randomly select one number
     const randomIndex = Math.floor(Math.random() * availableNumbers.length);
     const drawnNumber = availableNumbers[randomIndex];
 
-    // Get the question for this number
-    const { data: questionData } = await supabase
+    console.log("[drawNextQuestion] 🎲 Random selection:", {
+      available_count: availableNumbers.length,
+      drawn_number: drawnNumber
+    });
+
+    // ✅ STEP 6: Get the question for this number (from ANY event in session)
+    const { data: questionData, error: questionError } = await supabase
       .from("event_questions")
       .select("*, questions(*)")
       .eq("event_id", eventId)
       .eq("question_number", drawnNumber)
-      .single();
+      .maybeSingle();
 
-    if (!questionData) {
+    if (questionError || !questionData) {
+      console.error("[drawNextQuestion] ❌ Question not found:", questionError);
       throw new Error("Pitanje nije pronađeno za izvučeni broj");
     }
 
-    const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
+    console.log("[drawNextQuestion] 📝 Question loaded:", {
+      question_number: drawnNumber,
+      question_id: questionData.question_id,
+      question_text: questionData.questions?.text
+    });
 
-    // Mark question as drawn
+    const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
+    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+
+    // ✅ STEP 7: Update database based on mode
+    if (isGlobalMode) {
+      console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Updating draw_session + ALL events");
+
+      // ✅ Update DRAW_SESSION (shared state)
+      const { error: sessionError } = await supabase
+        .from("draw_sessions")
+        .update({
+          drawn_numbers: updatedDrawnNumbers,
+          current_question_number: drawnNumber
+        })
+        .eq("id", drawSessionId!);
+
+      if (sessionError) {
+        console.error("[drawNextQuestion] ❌ Failed to update draw_session:", sessionError);
+        throw sessionError;
+      }
+
+      console.log("[drawNextQuestion] ✅ Draw_session updated:", {
+        session_id: drawSessionId,
+        drawn_numbers_count: updatedDrawnNumbers.length,
+        current_question: drawnNumber
+      });
+
+      // ✅ Update ALL EVENTS in this draw_session
+      const { error: eventsError } = await supabase
+        .from("events")
+        .update({
+          current_drawn_number: drawnNumber,
+          current_question_number: drawnNumber,
+          question_open_until: questionOpenUntil
+        })
+        .eq("draw_session_id", drawSessionId!);
+
+      if (eventsError) {
+        console.error("[drawNextQuestion] ❌ Failed to update events:", eventsError);
+        throw eventsError;
+      }
+
+      console.log("[drawNextQuestion] ✅ All events updated for session:", drawSessionId);
+
+    } else {
+      console.log("[drawNextQuestion] 📍 STANDALONE MODE - Updating single event");
+
+      // ✅ STANDALONE MODE: Update only this event
+      const { error: eventUpdateError } = await supabase
+        .from("events")
+        .update({
+          drawn_numbers: updatedDrawnNumbers,
+          current_drawn_number: drawnNumber,
+          current_question_number: drawnNumber,
+          question_open_until: questionOpenUntil
+        })
+        .eq("id", eventId);
+
+      if (eventUpdateError) {
+        console.error("[drawNextQuestion] ❌ Failed to update event:", eventUpdateError);
+        throw eventUpdateError;
+      }
+
+      console.log("[drawNextQuestion] ✅ Event updated (standalone)");
+    }
+
+    // ✅ STEP 8: Mark question as drawn (for this specific event)
     await supabase
       .from("event_questions")
       .update({ drawn: true, drawn_at: new Date().toISOString() })
       .eq("id", questionData.id);
 
-    // Update drawn numbers list and current drawn number
-    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+    console.log("[drawNextQuestion] ✅ Question marked as drawn");
 
-    await supabase
-      .from("events")
-      .update({
-        drawn_numbers: updatedDrawnNumbers,
-        current_drawn_number: drawnNumber,
-        current_question_number: drawnNumber,
-        question_open_until: questionOpenUntil
-      })
-      .eq("id", eventId);
-
-    console.log("[drawNextQuestion] ✅ Drew number:", drawnNumber, "Total drawn:", updatedDrawnNumbers.length);
-
-    // ✅ CRITICAL: Check for winner after drawing (auto-sets FINISHED if winner found)
+    // ✅ STEP 9: Check for winner (only for this specific event)
+    console.log("[drawNextQuestion] 🏆 Checking for winner...");
     await this.checkForWinner(eventId);
+
+    console.log("[drawNextQuestion] ✅ Draw complete:", {
+      drawn_number: drawnNumber,
+      total_drawn: updatedDrawnNumbers.length,
+      mode: isGlobalMode ? "GLOBAL" : "STANDALONE"
+    });
 
     return { question: questionData, questionOpenUntil, drawnNumber };
   },
@@ -431,7 +551,7 @@ export const eventService = {
 
     const { data: event } = await supabase
       .from("events")
-      .select("*")
+      .select("*, draw_sessions(*)")
       .eq("id", eventId)
       .single();
 
@@ -443,8 +563,17 @@ export const eventService = {
       return { winnerFound: true, winnerSerial: undefined };
     }
 
-    const drawnNumbers = event.drawn_numbers || [];
-    console.log("[checkForWinner] Drawn numbers:", drawnNumbers.length);
+    // ✅ GLOBAL MODE: Use draw_session.drawn_numbers
+    const isGlobalMode = event.draw_mode === "global" && event.draw_session_id && event.draw_sessions;
+    const drawnNumbers = isGlobalMode 
+      ? (event.draw_sessions.drawn_numbers || [])
+      : (event.drawn_numbers || []);
+
+    console.log("[checkForWinner] Drawn numbers:", {
+      mode: isGlobalMode ? "GLOBAL" : "STANDALONE",
+      count: drawnNumbers.length,
+      numbers: drawnNumbers
+    });
 
     // Get all tickets with their questions
     const { data: tickets } = await supabase
@@ -551,7 +680,7 @@ export const eventService = {
 
   async getEventQuestions(eventId: string) {
     const { data, error } = await supabase
-      .from("event_questions")
+      .from("events")
       .select("*, questions(*)")
       .eq("event_id", eventId)
       .order("question_number", { ascending: true });
