@@ -83,3 +83,20 @@ export async function getAllVenues(): Promise<Venue[]> {
   console.log("[VENUE SERVICE] Venues fetched:", data?.length || 0);
   return data || [];
 }
+
+/**
+ * Get venue by ID
+ */
+export async function getVenueById(id: string): Promise<Venue | null> {
+  const { data, error } = await supabase
+    .from("venues")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[VENUE SERVICE] Error fetching venue by ID:", error);
+    return null;
+  }
+  return data;
+}

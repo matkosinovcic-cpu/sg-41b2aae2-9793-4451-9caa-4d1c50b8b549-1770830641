@@ -547,39 +547,33 @@ export const eventService = {
             slug
           )
         `)
-        .eq("venue_id", venueId)
-        .ilike("status", "active")  // ✅ FIX: Use ILIKE for case-insensitive match
+        .eq("venue_id", venueId)  // ← CRITICAL: Filter by venue_id
+        .ilike("status", "active")
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
 
       if (error) {
-        console.error("[EventService] ❌ Error fetching active event:", error);
-        throw new Error(`No active event found for venue ${venueId}`);
+        console.error("[EventService] ❌ Error getting active event:", error);
+        throw error;
       }
 
       if (!data) {
-        console.error("[EventService] ❌ No active event found for venue:", venueId);
-        throw new Error(`No active event found for venue ${venueId}`);
+        console.log("[EventService] ⚠️ No active event found for venue:", venueId);
+        throw new Error("No active event found for this venue");
       }
 
-      console.log("[EventService] ✅ Active event found:", {
-        id: data.id,
-        name: data.name,
-        venue_id: data.venue_id,
-        status: data.status
-      });
+      console.log("[EventService] ✅ Active event found:", data);
 
       // Flatten venue data
       const venue = Array.isArray(data.venues) ? data.venues[0] : data.venues;
 
       return {
         ...data,
-        venue_id: data.venue_id,
-        venue_slug: venue?.slug || "",
-        venue_name: venue?.name || "",
         status: data.status as "draft" | "active" | "paused" | "finished",
-        draw_mode: data.draw_mode as "standalone" | "global" | undefined
+        draw_mode: data.draw_mode as "manual" | "auto" | "scheduled",
+        venue_name: venue?.name,
+        venue_slug: venue?.slug,
       };
     } catch (err) {
       console.error("[EventService] ❌ Failed to get active event:", err);
