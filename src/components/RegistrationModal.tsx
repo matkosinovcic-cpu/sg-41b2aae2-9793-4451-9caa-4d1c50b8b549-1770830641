@@ -36,6 +36,7 @@ interface RegistrationSuccessData {
 interface RegistrationModalProps {
   open: boolean;
   eventId: string; // CRITICAL: Event ID for ticket creation
+  venueId: string; // ✅ Added venueId
   onSuccess: (data: RegistrationSuccessData) => void;
   onCancel: () => void;
 }
@@ -43,6 +44,7 @@ interface RegistrationModalProps {
 export function RegistrationModal({
   open,
   eventId,
+  venueId, // ✅ Destructure venueId
   onSuccess,
   onCancel,
 }: RegistrationModalProps) {
@@ -123,17 +125,19 @@ export function RegistrationModal({
       console.log("[RegistrationModal] 🎟️ STEP 13: Claiming free tickets atomically...");
       console.log("[RegistrationModal] 📋 STEP 13.1: Parameters:", {
         eventId,
+        venueId,
         email: normalizedEmail,
         nickname: trimmedNickname,
         limit: 4
       });
 
-      // ATOMIC: Call RPC to claim all 4 tickets in one transaction
+      // ATOMIC: Call RPC to claim tickets
       const result = await claimFreeTickets(
         eventId,
+        venueId, // ✅ Pass venueId from props
         normalizedEmail,
         trimmedNickname,
-        4 // Max 4 free tickets
+        4
       );
 
       console.log("[RegistrationModal] ✅ STEP 14: Tickets claimed successfully!");

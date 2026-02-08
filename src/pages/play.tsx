@@ -18,6 +18,7 @@ import { RegistrationModal } from "@/components/RegistrationModal";
 import { hasPlayerProfile, getPlayerId } from "@/lib/playerHelper";
 import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 import { cn } from "@/lib/utils";
+import { MapPin } from "lucide-react";
 
 // Get stored free tickets for a specific event
 function getStoredFreeTickets(eventId: string): string[] {
@@ -567,6 +568,15 @@ export default function PlayPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
+            
+            {/* ✅ Venue Indicator */}
+            {activeEvent?.venue_slug && (
+              <div className="flex items-center justify-center gap-2 text-sm font-medium text-muted-foreground bg-secondary/20 py-1 px-3 rounded-full mx-auto w-fit">
+                <MapPin className="w-4 h-4" />
+                Venue: <span className="text-foreground font-bold uppercase">{activeEvent.venue_slug}</span>
+              </div>
+            )}
+
             {loading || healingInProgress ? (
               <div className="flex flex-col items-center justify-center py-12 space-y-4">
                 <Loader2 className="h-12 w-12 animate-spin text-purple-600" />
@@ -722,6 +732,7 @@ export default function PlayPage() {
       <RegistrationModal
         open={showRegistration}
         eventId={activeEvent?.id || ""} 
+        venueId={activeEvent?.venue_id || ""} // ✅ Pass venue_id
         onSuccess={handleRegistrationSuccess}
         onCancel={() => setShowRegistration(false)}
       />

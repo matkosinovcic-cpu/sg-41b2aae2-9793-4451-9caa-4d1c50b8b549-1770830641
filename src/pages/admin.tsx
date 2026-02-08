@@ -304,17 +304,18 @@ export default function AdminPanel() {
     }
   };
 
-  const handleGenerateTickets = async (eventId: string) => {
-    setLoading(true);
+  const handleGenerateTickets = async (eventId: string, venueId: string) => {
     try {
-      await eventService.generateTickets(eventId, ticketCount);
+      setLoading(true);
+      await eventService.generateTickets(eventId, 10, venueId);
+      toast({
+        title: "Tickets generated",
+        description: "Successfully generated 10 tickets",
+      });
+      await loadEvents();
       if (selectedEvent?.id === eventId) {
         await loadEventDetails(eventId);
       }
-      toast({
-        title: "Success",
-        description: `${ticketCount} tickets generated successfully`,
-      });
     } catch (error) {
       toast({
         title: "Error",
@@ -690,7 +691,7 @@ export default function AdminPanel() {
                                     className="w-20"
                                   />
                                   <Button
-                                    onClick={() => handleGenerateTickets(event.id)}
+                                    onClick={() => handleGenerateTickets(event.id, event.venue_id)} // ✅ Pass venue_id
                                     disabled={loading}
                                     size="sm"
                                   >

@@ -328,9 +328,9 @@ export async function claimFreeTickets(
     serial_number: string;
     source: string;
     created_at: string;
+    venue_id: string;
   }>;
   error?: string;
-  // New fields from SQL function
   event_id?: string;
   event_name?: string;
   venue_name?: string;
@@ -340,20 +340,16 @@ export async function claimFreeTickets(
   // Normalize email (lowercase + trim) before sending to backend
   const normalizedEmail = email.trim().toLowerCase();
 
-  if (!eventId) {
-    throw new Error("Event ID is required to claim tickets");
-  }
-
-  if (!venueId) {
-    throw new Error("Venue ID is required to claim tickets");
-  }
+  if (!eventId) throw new Error("Event ID is required");
+  if (!venueId) throw new Error("Venue ID is required");
 
   try {
+    // Call the MAIN RPC function (Version 2) with 5 parameters
     const { data, error } = await supabase.rpc("claim_free_tickets", {
       p_email: normalizedEmail,
       p_nickname: nickname.trim(),
       p_event_id: eventId,
-      p_venue_id: venueId,  // ✅ CRITICAL: Pass venue_id to RPC
+      p_venue_id: venueId,
       p_limit: limit,
     });
 
@@ -366,7 +362,7 @@ export async function claimFreeTickets(
       throw new Error("No data returned from RPC");
     }
 
-    // Parse RPC response
+    // Parse RPC response (handle both string and object return types just in case)
     const result = typeof data === "string" ? JSON.parse(data) : data;
 
     if (!result.success) {
@@ -375,7 +371,7 @@ export async function claimFreeTickets(
     }
 
     console.log(
-      `[TicketService] ✅ Successfully claimed ${result.tickets_created} tickets (total: ${result.total_tickets})`
+      `[TicketService] ✅ Successfully claimed ${result.tickets_created} tickets`
     );
 
     return result;

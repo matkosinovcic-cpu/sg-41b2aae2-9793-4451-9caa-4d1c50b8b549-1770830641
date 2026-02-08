@@ -11,6 +11,7 @@ export interface Event {
   name: string;
   status: "draft" | "active" | "paused" | "finished";
   venue_slug: string;
+  venue_id: string; // ✅ Added venue_id
   current_question_number: number | null;
   current_drawn_number: number | null;
   drawn_numbers: number[];
@@ -157,7 +158,8 @@ export const eventService = {
     return { count: questionCount, total: availableCount };
   },
 
-  async generateTickets(eventId: string, count: number) {
+  async generateTickets(eventId: string, count: number, venueId: string) {
+    console.log(`[EventService] Generating ${count} tickets for event ${eventId} (venue: ${venueId})`);
     const tickets = [];
     
     for (let i = 0; i < count; i++) {
@@ -173,7 +175,7 @@ export const eventService = {
 
       const { data: ticket, error: ticketError } = await supabase
         .from("tickets")
-        .insert({ serial_number: serialNumber, event_id: eventId })
+        .insert({ serial_number: serialNumber, event_id: eventId, venue_id: venueId })
         .select()
         .single();
       
@@ -274,240 +276,37 @@ export const eventService = {
   },
 
   /**
-   * ✅ GLOBAL MODE: Draw next question from SHARED draw_session
-   * This function works for BOTH standalone and global events:
-   * - Standalone: Uses event.drawn_numbers (legacy)
-   * - Global: Uses draw_session.drawn_numbers (shared across venues)
+   * ✅ ATOMIC DRAW: Calls Postgres function to handle everything safely
    */
   async drawNextQuestion(eventId: string) {
-    console.log("[drawNextQuestion] 🎯 Starting draw for event:", eventId);
+    console.log("[drawNextQuestion] 🎯 CALLING ATOMIC RPC for event:", eventId);
 
-    // ✅ STEP 1: Load event WITH draw_session data
-    const { data: event, error: eventError } = await supabase
-      .from("events")
-      .select("*, draw_sessions(*)")
-      .eq("id", eventId)
-      .single();
+    // Call atomic function
+    const { data: atomicResult, error: atomicError } = await supabase
+      .rpc('draw_next_number', { p_event_id: eventId });
 
-    if (eventError || !event) {
-      console.error("[drawNextQuestion] ❌ Event not found:", eventError);
-      throw new Error("Event not found");
+    if (atomicError) {
+      console.error("[drawNextQuestion] ❌ RPC Failed:", atomicError);
+      throw atomicError;
     }
 
-    console.log("[drawNextQuestion] 📊 Event loaded:", {
-      id: event.id,
-      name: event.name,
-      status: event.status,
-      draw_mode: event.draw_mode,
-      draw_session_id: event.draw_session_id,
-      has_draw_session: !!event.draw_sessions
+    // Handle array response (function returns table)
+    const result = Array.isArray(atomicResult) ? atomicResult[0] : atomicResult;
+
+    if (!result || !result.success) {
+      throw new Error(result?.message || "Draw failed (unknown error)");
+    }
+
+    console.log("[drawNextQuestion] ✅ Atomic draw successful:", {
+      new_number: result.new_number,
+      draw_count: result.draw_count,
+      is_duplicate: false
     });
 
-    // ✅ STATE MACHINE: Enforce strict status rules
-    if (event.status === "finished") {
-      throw new Error("Event je završen. Za novo izvlačenje koristi 'Reset Event' u admin panelu.");
-    }
-
-    if (event.status === "paused") {
-      throw new Error("Event je pauziran. Klikni 'Nastavi' za nastavak.");
-    }
-
-    if (event.status !== "active") {
-      throw new Error(`Event mora biti aktivan za izvlačenje (trenutni status: ${event.status})`);
-    }
-
-    // ✅ STEP 2: Determine if GLOBAL or STANDALONE mode
-    const isGlobalMode = event.draw_mode === "global" && event.draw_session_id && event.draw_sessions;
-
-    console.log("[drawNextQuestion] 🔍 Mode detection:", {
-      draw_mode: event.draw_mode,
-      has_session_id: !!event.draw_session_id,
-      has_session_data: !!event.draw_sessions,
-      isGlobalMode
-    });
-
-    let drawnNumbers: number[] = [];
-    let drawSessionId: string | null = null;
-
-    if (isGlobalMode) {
-      // ✅ GLOBAL MODE: Use draw_session.drawn_numbers (shared across all events)
-      drawnNumbers = event.draw_sessions.drawn_numbers || [];
-      drawSessionId = event.draw_session_id!;
-      console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Using draw_session:", {
-        session_id: drawSessionId,
-        drawn_count: drawnNumbers.length
-      });
-    } else {
-      // ✅ STANDALONE MODE: Use event.drawn_numbers (legacy)
-      drawnNumbers = event.drawn_numbers || [];
-      console.log("[drawNextQuestion] 📍 STANDALONE MODE - Using event.drawn_numbers:", {
-        drawn_count: drawnNumbers.length
-      });
-    }
-
-    // ✅ STEP 3: Check if all 90 numbers are drawn
-    if (drawnNumbers.length >= 90) {
-      console.log("[drawNextQuestion] ⛔ All 90 numbers drawn");
-      throw new Error("Svih 90 brojeva je izvučeno");
-    }
-
-    // ✅ STEP 4: Find available numbers (1-90 that haven't been drawn)
-    const availableNumbers = [];
-    for (let i = 1; i <= 90; i++) {
-      if (!drawnNumbers.includes(i)) {
-        availableNumbers.push(i);
-      }
-    }
-
-    if (availableNumbers.length === 0) {
-      throw new Error("Nema više dostupnih brojeva");
-    }
-
-    // ✅ STEP 5: Randomly select one number
-    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
-    const drawnNumber = availableNumbers[randomIndex];
-
-    console.log("[drawNextQuestion] 🎲 Random selection:", {
-      available_count: availableNumbers.length,
-      drawn_number: drawnNumber
-    });
-
-    // ✅ STEP 6: Get the question for this number (from ANY event in session)
-    const { data: questionData, error: questionError } = await supabase
-      .from("event_questions")
-      .select("*, questions(*)")
-      .eq("event_id", eventId)
-      .eq("question_number", drawnNumber)
-      .maybeSingle();
-
-    if (questionError || !questionData) {
-      console.error("[drawNextQuestion] ❌ Question not found:", questionError);
-      throw new Error("Pitanje nije pronađeno za izvučeni broj");
-    }
-
-    console.log("[drawNextQuestion] 📝 Question loaded:", {
-      question_number: drawnNumber,
-      question_id: questionData.question_id,
-      question_text: questionData.questions?.text
-    });
-
-    const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
-
-    console.log("[drawNextQuestion] 📦 STEP 7.0: Prepared data for update:", {
-      updatedDrawnNumbers: null,
-      updatedDrawnNumbers_length: null,
-      questionOpenUntil,
-      isGlobalMode
-    });
-
-    // ✅ STEP 7: Update database based on mode
-    if (isGlobalMode) {
-      console.log("[drawNextQuestion] 🌍 GLOBAL MODE - Updating draw_session + ALL events");
-
-      // ✅ CRITICAL: Use ATOMIC PostgreSQL function to prevent race conditions
-      console.log("[drawNextQuestion] 🔐 Calling atomic draw_next_number function");
-
-      const { data: atomicResult, error: atomicError } = await supabase
-        .rpc('draw_next_number', { p_event_id: eventId });
-
-      if (atomicError) {
-        console.error("[drawNextQuestion] ❌ Atomic draw function failed:", {
-          error: atomicError,
-          code: atomicError.code,
-          message: atomicError.message,
-          details: atomicError.details
-        });
-        throw atomicError;
-      }
-
-      console.log("[drawNextQuestion] ✅ Atomic draw function returned:", atomicResult);
-
-      // ✅ CRITICAL: Verify the atomic operation succeeded
-      if (!atomicResult || atomicResult.length === 0) {
-        throw new Error("Atomic draw function returned no data");
-      }
-
-      const result = atomicResult[0];
-      
-      if (!result.success) {
-        throw new Error(result.message || "Draw failed");
-      }
-
-      console.log("[drawNextQuestion] ✅ Draw successful:", {
-        new_number: result.new_number,
-        draw_count: result.draw_count,
-        drawn_numbers_count: result.drawn_numbers?.length || 0
-      });
-
-      // ✅ Update question_open_until for ALL events in this session
-      const { error: eventsError } = await supabase
-        .from("events")
-        .update({
-          question_open_until: questionOpenUntil
-        })
-        .eq("draw_session_id", drawSessionId!);
-
-      if (eventsError) {
-        console.error("[drawNextQuestion] ❌ Failed to update events:", eventsError);
-        throw eventsError;
-      }
-
-      console.log("[drawNextQuestion] ✅ All events updated for session:", drawSessionId);
-
-    } else {
-      console.log("[drawNextQuestion] 📍 STANDALONE MODE - Updating single event");
-
-      // ✅ STANDALONE MODE: Update only this event (legacy behavior)
-      const { error: eventUpdateError } = await supabase
-        .from("events")
-        .update({
-          current_drawn_number: drawnNumber,
-          current_question_number: drawnNumber,
-          question_open_until: questionOpenUntil
-        })
-        .eq("id", eventId);
-
-      if (eventUpdateError) {
-        console.error("[drawNextQuestion] ❌ Failed to update event:", eventUpdateError);
-        throw eventUpdateError;
-      }
-
-      console.log("[drawNextQuestion] ✅ Event updated (standalone)");
-    }
-
-    // ✅ STEP 8: Mark question as drawn (for this specific event)
-    const eventQuestionUpdate: any = { 
-      drawn: true, 
-      drawn_at: new Date().toISOString() 
+    return { 
+      drawnNumber: result.new_number,
+      questionOpenUntil: null // Handled by subscription/event update
     };
-
-    // ✅ CRITICAL: For GLOBAL mode, also set draw_session_id
-    if (isGlobalMode && drawSessionId) {
-      eventQuestionUpdate.draw_session_id = drawSessionId;
-      console.log("[drawNextQuestion] 📝 Setting draw_session_id for event_question:", {
-        question_id: questionData.id,
-        draw_session_id: drawSessionId
-      });
-    }
-
-    await supabase
-      .from("event_questions")
-      .update(eventQuestionUpdate)
-      .eq("id", questionData.id);
-
-    console.log("[drawNextQuestion] ✅ Question marked as drawn");
-
-    // ✅ STEP 9: Check for winner (only for this specific event)
-    console.log("[drawNextQuestion] 🏆 Checking for winner...");
-    await this.checkForWinner(eventId);
-
-    console.log("[drawNextQuestion] ✅ Draw complete:", {
-      drawn_number: drawnNumber,
-      total_drawn: null,
-      mode: isGlobalMode ? "GLOBAL" : "STANDALONE"
-    });
-
-    return { question: questionData, questionOpenUntil, drawnNumber };
   },
 
   async pauseEvent(eventId: string) {
