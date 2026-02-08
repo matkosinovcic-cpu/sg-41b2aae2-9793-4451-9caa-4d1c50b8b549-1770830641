@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Event } from "@/services/eventService";
 import { eventService } from "@/services/eventService";
+import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 
 // Interface definitions
 interface Question {
@@ -329,12 +330,33 @@ export default function PlayerPage() {
   const [healingInProgress, setHealingInProgress] = useState(false);
   const MAX_RETRY_ATTEMPTS = 2;
 
+  // Venue state
+  const [venueSlug, setVenueSlug] = useState<string | null>(null);
+  const [venueError, setVenueError] = useState<string | null>(null);
+  
+  // DEBUG: Show venue resolution state (TEMPORARY - remove after bug is fixed)
+  const [showDebug] = useState(true);
+
   // SELF-HEAL: Load tickets with automatic fallback to active event
   const loadTicketsWithSelfHeal = async (isRetry = false) => {
     console.log("[Player] 🎬 Starting ticket load with self-heal", isRetry ? `(retry ${retryAttempt + 1})` : "");
     setLoading(true);
+    setVenueError(null);
     
     try {
+      // STEP 0: Resolve venue - must be set before proceeding
+      const venue = venueSlug;
+      console.log("[Player] 🏢 Using venue:", venue);
+      
+      if (!venue) {
+        console.log("[Player] ⚠️ No venue resolved - user needs to scan QR code");
+        setVenueSlug(null);
+        setVenueError("venue_required");
+        setLoading(false);
+        setHealingInProgress(false);
+        return;
+      }
+      
       const ticketSerial = router.query.ticket as string;
       const eventIdParam = router.query.event as string;
 
@@ -349,6 +371,23 @@ export default function PlayerPage() {
         if (ticket) {
           eventId = ticket.event_id;
           console.log("[Player] 🎫 Ticket found, event_id:", eventId);
+          
+          // VALIDATE: Check if this ticket's event belongs to this venue
+          const ticketEvent = await eventService.getEventById(eventId);
+          if (ticketEvent.venue_slug !== venue) {
+            console.log("[Player] ⚠️ Ticket belongs to different venue:", {
+              ticketVenue: ticketEvent.venue_slug,
+              currentVenue: venue,
+              ticketSerial: ticketSerial,
+              ticketEvent: ticketEvent.name
+            });
+            setVenueError("wrong_venue");
+            setLoading(false);
+            setHealingInProgress(false);
+            return;
+          }
+          
+          // Load other tickets for SAME event
           const storedTickets = getStoredFreeTickets(eventId);
           ticketsToLoad = [...new Set([ticketSerial, ...storedTickets])];
           console.log("[Player] 📚 Combined with stored tickets:", ticketsToLoad);
@@ -356,18 +395,36 @@ export default function PlayerPage() {
       } else if (eventIdParam) {
         console.log("[Player] 🎯 Loading tickets for event:", eventIdParam);
         eventId = eventIdParam;
+        
+        // VALIDATE: Check if this event belongs to this venue
+        const event = await eventService.getEventById(eventId);
+        if (event.venue_slug !== venue) {
+          console.log("[Player] ⚠️ Event belongs to different venue:", {
+            eventVenue: event.venue_slug,
+            currentVenue: venue,
+            eventId: eventIdParam,
+            eventName: event.name
+          });
+          setVenueError("wrong_venue");
+          setLoading(false);
+          setHealingInProgress(false);
+          return;
+        }
+        
         ticketsToLoad = getStoredFreeTickets(eventId);
         console.log("[Player] 📚 Found stored tickets:", ticketsToLoad);
       }
 
-      // STEP 2: If no tickets or failed to load, try ACTIVE event (self-heal)
+      // STEP 2: If no tickets or failed to load, try ACTIVE event for this venue
       if (ticketsToLoad.length === 0 || !eventId) {
-        console.log("[Player] 🔄 No tickets found, checking for ACTIVE event...");
+        console.log("[Player] 🔄 No tickets found, checking for ACTIVE event in venue:", venue);
         
+        // CRITICAL: STRICT filter by venue_slug
         const { data: events, error } = await supabase
           .from("events")
           .select("*")
           .eq("status", "active")
+          .eq("venue_slug", venue)
           .limit(1);
 
         if (error) {
@@ -378,16 +435,20 @@ export default function PlayerPage() {
         const activeEvent = events && events.length > 0 ? events[0] : null;
 
         if (activeEvent) {
-          console.log("[Player] ✅ Active event found:", activeEvent.id);
+          console.log("[Player] ✅ Active event found for venue:", {
+            venue,
+            eventId: activeEvent.id,
+            eventName: activeEvent.name
+          });
           eventId = activeEvent.id;
           ticketsToLoad = getStoredFreeTickets(eventId);
           console.log("[Player] 📚 Loading tickets for active event:", ticketsToLoad.length);
         }
       }
 
-      // STEP 3: If still no tickets, show friendly UI (not a crash)
+      // STEP 3: If still no tickets, show friendly UI
       if (ticketsToLoad.length === 0) {
-        console.log("[Player] ℹ️ No tickets to load");
+        console.log("[Player] ℹ️ No tickets to load for venue:", venue);
         setLoading(false);
         setHealingInProgress(false);
         
@@ -396,6 +457,7 @@ export default function PlayerPage() {
           .from("events")
           .select("*")
           .eq("status", "active")
+          .eq("venue_slug", venue)
           .limit(1);
         
         const activeEvent = events && events.length > 0 ? events[0] : null;
@@ -412,21 +474,40 @@ export default function PlayerPage() {
         return;
       }
 
-      // STEP 4: Fetch all tickets
+      // STEP 4: Fetch all tickets and VALIDATE they belong to correct venue
       console.log("[Player] 🔄 Fetching ticket details...");
       const ticketPromises = ticketsToLoad.map(serial => ticketService.getTicketBySerial(serial));
       const rawTickets = (await Promise.all(ticketPromises)).filter(t => t !== null);
       
-      const loadedTickets: TicketData[] = rawTickets.map(t => ({
-        id: t!.id,
-        serial_number: t!.serial_number,
-        event_id: t!.event_id,
-        ticket_questions: t!.ticket_questions || [], // Ensure array exists
-        is_winner: t!.is_winner
-      }));
+      // CRITICAL: Filter out tickets from wrong venue
+      const validTickets: TicketData[] = [];
+      for (const t of rawTickets) {
+        if (t) {
+          const ticketEvent = await eventService.getEventById(t.event_id);
+          if (ticketEvent.venue_slug === venue) {
+            validTickets.push({
+              id: t.id,
+              serial_number: t.serial_number,
+              event_id: t.event_id,
+              ticket_questions: t.ticket_questions || [],
+              is_winner: t.is_winner
+            });
+            console.log("[Player] ✅ Ticket valid for venue:", {
+              serial: t.serial_number,
+              venue: ticketEvent.venue_slug
+            });
+          } else {
+            console.warn("[Player] ⚠️ FILTERED OUT ticket from wrong venue:", {
+              serial: t.serial_number,
+              ticketVenue: ticketEvent.venue_slug,
+              currentVenue: venue
+            });
+          }
+        }
+      }
       
-      if (loadedTickets.length === 0) {
-        console.log("[Player] ⚠️ No valid tickets loaded");
+      if (validTickets.length === 0) {
+        console.log("[Player] ⚠️ No valid tickets for this venue after filtering");
         
         // SELF-HEAL: Retry with context clear
         if (!isRetry && retryAttempt < MAX_RETRY_ATTEMPTS) {
@@ -445,19 +526,19 @@ export default function PlayerPage() {
           return;
         }
         
-        // Final fallback: show friendly error
+        // Final fallback
         setLoading(false);
         setHealingInProgress(false);
         toast({
-          title: "Nemaš tikete",
+          title: "Nemaš tikete za ovaj kafić",
           description: "Preuzmi besplatni tiket za aktivni event.",
           duration: 5000
         });
         return;
       }
 
-      setTickets(loadedTickets);
-      console.log("[Player] ✅ Loaded tickets:", loadedTickets.map(t => ({
+      setTickets(validTickets);
+      console.log("[Player] ✅ Loaded valid tickets:", validTickets.map(t => ({
         id: t.id,
         serial: t.serial_number,
         event_id: t.event_id
@@ -465,16 +546,16 @@ export default function PlayerPage() {
 
       // Set focused ticket
       if (ticketSerial) {
-        const focused = loadedTickets.find(t => t.serial_number === ticketSerial);
-        setFocusedTicketId(focused?.id || loadedTickets[0]?.id || null);
+        const focused = validTickets.find(t => t.serial_number === ticketSerial);
+        setFocusedTicketId(focused?.id || validTickets[0]?.id || null);
       } else {
-        setFocusedTicketId(loadedTickets[0]?.id || null);
+        setFocusedTicketId(validTickets[0]?.id || null);
       }
 
       // Load event data
-      const currentEventId = eventId || loadedTickets[0].event_id;
+      const currentEventId = eventId || validTickets[0].event_id;
       console.log("[Player] 🎪 Loading event data for:", currentEventId);
-      await refetchEventData(currentEventId, loadedTickets);
+      await refetchEventData(currentEventId, validTickets);
       
       // Subscribe to realtime only if event is active
       const event = await eventService.getEventById(currentEventId);
@@ -511,7 +592,7 @@ export default function PlayerPage() {
         return;
       }
       
-      // Final fallback: show user-friendly error but don't crash
+      // Final fallback
       console.error("[Player] ❌ Self-heal failed after retries");
       setHealingInProgress(false);
       toast({
@@ -526,6 +607,55 @@ export default function PlayerPage() {
       }
     }
   };
+
+  // Initialize venue from query param or localStorage
+  useEffect(() => {
+    // CRITICAL: Wait for router.isReady before resolving venue
+    if (!router.isReady) {
+      console.log("[Player] ⏳ Router not ready yet, waiting...");
+      return;
+    }
+
+    console.log("[Player] ✅ Router ready, resolving venue...");
+    
+    // CRITICAL: Query param MUST have absolute priority
+    const queryVenue = router.query.venue;
+    let resolved: string | null = null;
+    
+    if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
+      // Query param exists and is not empty - USE IT (absolute priority)
+      resolved = queryVenue.trim().toLowerCase();
+      console.log("[Player] ✅ Using venue from QUERY (absolute priority):", resolved);
+      
+      // Store as new fallback
+      storeVenue(resolved);
+    } else {
+      // No query param - use localStorage fallback
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("ps_venue");
+        if (stored && stored.trim()) {
+          resolved = stored.trim().toLowerCase();
+          console.log("[Player] ✅ Using venue from LOCALSTORAGE (fallback):", resolved);
+        }
+      }
+    }
+    
+    console.log("[Player] 🏢 Venue resolution:", {
+      queryVenue: router.query.venue,
+      storedVenue: typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null,
+      resolvedVenue: resolved,
+      routerIsReady: router.isReady
+    });
+
+    if (resolved) {
+      storeVenue(resolved);
+      setVenueSlug(resolved);
+      console.log("[Player] 🎯 Set venue:", resolved);
+    } else {
+      console.log("[Player] ⚠️ No venue resolved");
+      setVenueSlug(null);
+    }
+  }, [router.isReady, router.query.venue]); // Re-run when router becomes ready or venue changes
 
   // Load tickets on mount
   useEffect(() => {
@@ -581,7 +711,7 @@ export default function PlayerPage() {
           setCurrentQuestion({
             id: questionData.question_id,
             text: questionData.questions.text,
-            correct_answer: questionData.questions.correct_answer
+            correct_answer: questionData.questions!.correct_answer
           });
           const expiresAt = event.question_open_until ? new Date(event.question_open_until).getTime() : 0;
           const now = Date.now();
@@ -1043,6 +1173,56 @@ export default function PlayerPage() {
     );
   }
 
+  if (venueError === "venue_required") {
+    return (
+      <>
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">📱 Odaberi kafić</CardTitle>
+              <CardDescription>Skeniraj QR kod na svom stolu</CardDescription>
+            </CardHeader>
+            <CardContent className="text-center py-6">
+              <p className="text-muted-foreground">
+                Za igranje trebaš skenirati QR kod sa svog stola da bi odredio kafić u kojem se nalazi.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
+  if (venueError === "wrong_venue") {
+    return (
+      <>
+        <SEO title="Igrač - Pitalica Skitalica" />
+        <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">⚠️ Ovaj tiket je za drugi kafić</CardTitle>
+              <CardDescription>Tiket ne pripada trenutnom kafiću</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-center text-muted-foreground">
+                Ovaj tiket je kreiran za drugi kafić. Molimo skeniraj QR kod sa svog stola ili preuzmi novi tiket za ovaj kafić.
+              </p>
+              <Button 
+                onClick={() => router.push(`/play?venue=${venueSlug}`)} 
+                className="w-full"
+                size="lg"
+              >
+                <TicketIcon className="mr-2 h-5 w-5" />
+                Preuzmi tiket za ovaj kafić
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
   if (tickets.length === 0) {
     console.log("[Player] ℹ️ No tickets found, showing empty state");
     return (
@@ -1372,7 +1552,37 @@ export default function PlayerPage() {
   return (
     <>
       <SEO title={eventMode === "finished" ? "Rezultati - Pitalica Skitalica" : "Igrač - Pitalica Skitalica"} />
-      <div className="min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4">
+      
+      {/* DEBUG OVERLAY - TEMPORARY (remove after bug is fixed) */}
+      {showDebug && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 dark:bg-yellow-900 border-b-2 border-yellow-400 p-2 text-xs font-mono">
+          <div className="max-w-6xl mx-auto space-y-1">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold">🔍 DEBUG:</span>
+              <span>query={String(router.query.venue || "null")}</span>
+              <span>resolved={venueSlug || "null"}</span>
+              <span>stored={typeof window !== "undefined" ? localStorage.getItem("ps_venue") || "null" : "null"}</span>
+              <span>isReady={String(router.isReady)}</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold">📋 EVENT:</span>
+              <span>id={activeEvent?.id?.slice(0, 8) || "null"}</span>
+              <span>name={activeEvent?.name || "null"}</span>
+              <span>venue={activeEvent?.venue_slug || "null"}</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className="font-bold">🎫 TICKETS:</span>
+              <span>count={tickets.length}</span>
+              <span>events={[...new Set(tickets.map(t => t.event_id.slice(0, 8)))].join(", ") || "none"}</span>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      <div className={cn(
+        "min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-2 sm:p-4",
+        showDebug && "pt-24" // Add padding when debug overlay is visible
+      )}>
         <div className="max-w-6xl mx-auto space-y-3">
           
           {/* EVENT STATUS BANNER (FINISHED MODE) */}

@@ -29,7 +29,7 @@ export default function TVScreen() {
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
-  const [venueSlug, setVenueSlug] = useState<string>("");
+  const [venueSlug, setVenueSlug] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
   const [tickets, setTickets] = useState<TicketData[]>([]);
@@ -74,7 +74,7 @@ export default function TVScreen() {
     };
 
     initializeTV();
-  }, [router.query.venue]);
+  }, [router.isReady, router.query.venue]);
 
   // Validate event exists in database
   const validateEventExists = async (eventId: string): Promise<boolean> => {

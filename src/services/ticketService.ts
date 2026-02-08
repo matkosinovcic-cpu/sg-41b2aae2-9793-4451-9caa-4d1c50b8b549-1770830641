@@ -300,6 +300,7 @@ const ticketService = {
  * Uses RPC function to ensure transaction safety and idempotency
  */
 export async function claimFreeTickets(
+  eventId: string,
   email: string,
   nickname: string,
   limit: number = 4
@@ -317,15 +318,20 @@ export async function claimFreeTickets(
   }>;
   error?: string;
 }> {
-  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (limit: ${limit})`);
+  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (event: ${eventId}, limit: ${limit})`);
 
   // Normalize email (lowercase + trim) before sending to backend
   const normalizedEmail = email.trim().toLowerCase();
+
+  if (!eventId) {
+    throw new Error("Event ID is required to claim tickets");
+  }
 
   try {
     const { data, error } = await supabase.rpc("claim_free_tickets", {
       p_email: normalizedEmail,
       p_nickname: nickname.trim(),
+      p_event_id: eventId,
       p_limit: limit,
     });
 
