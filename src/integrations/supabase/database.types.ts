@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-empty-object-type */
+ 
 export type Json =
   | string
   | number
@@ -566,21 +566,16 @@ export type Database = {
           ticket_serial: string
         }[]
       }
-      claim_free_tickets:
-        | {
-            Args: { p_email: string; p_limit: number; p_nickname: string }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_email: string
-              p_event_id: string
-              p_limit?: number
-              p_nickname: string
-              p_venue_id: string
-            }
-            Returns: Json
-          }
+      claim_free_tickets: {
+        Args: {
+          p_email: string
+          p_event_id: string
+          p_limit?: number
+          p_nickname: string
+          p_venue_id: string
+        }
+        Returns: Json
+      }
       draw_next_number: {
         Args: { p_event_id: string }
         Returns: {
