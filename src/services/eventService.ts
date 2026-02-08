@@ -578,7 +578,8 @@ export const eventService = {
         venue_id: data.venue_id,
         venue_slug: venue?.slug || "",
         venue_name: venue?.name || "",
-        status: data.status as "draft" | "active" | "paused" | "finished"
+        status: data.status as "draft" | "active" | "paused" | "finished",
+        draw_mode: data.draw_mode as "standalone" | "global" | undefined
       };
     } catch (err) {
       console.error("[EventService] ❌ Failed to get active event:", err);
