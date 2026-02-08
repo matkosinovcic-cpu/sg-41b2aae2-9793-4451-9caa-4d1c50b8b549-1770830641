@@ -1,4 +1,4 @@
- 
+/* eslint-disable @typescript-eslint/no-empty-object-type */
 export type Json =
   | string
   | number
@@ -316,13 +316,6 @@ export type Database = {
             referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "player_answers_ticket_fkey"
-            columns: ["ticket_id"]
-            isOneToOne: false
-            referencedRelation: "tickets"
-            referencedColumns: ["serial_number"]
-          },
         ]
       }
       player_sessions: {
@@ -484,6 +477,7 @@ export type Database = {
           player_id: string | null
           serial_number: string
           session_id: string | null
+          venue_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -493,6 +487,7 @@ export type Database = {
           player_id?: string | null
           serial_number: string
           session_id?: string | null
+          venue_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -502,6 +497,7 @@ export type Database = {
           player_id?: string | null
           serial_number?: string
           session_id?: string | null
+          venue_id?: string | null
         }
         Relationships: [
           {
@@ -523,6 +519,13 @@ export type Database = {
             columns: ["session_id"]
             isOneToOne: false
             referencedRelation: "player_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tickets_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
             referencedColumns: ["id"]
           },
         ]
