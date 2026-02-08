@@ -113,6 +113,10 @@ export function RegistrationModal({
 
     setLoading(true);
 
+    // Normalize email before sending to backend - MOVED UP
+    const normalizedEmail = email.trim().toLowerCase();
+    const trimmedNickname = nickname.trim();
+
     try {
       console.log("[RegistrationModal] 🎟️ Claiming free tickets atomically...");
       console.log("[RegistrationModal] 📋 Parameters:", {
@@ -121,10 +125,6 @@ export function RegistrationModal({
         nickname: trimmedNickname,
         limit: 4
       });
-
-      // Normalize email before sending to backend
-      const normalizedEmail = email.trim().toLowerCase();
-      const trimmedNickname = nickname.trim();
 
       // ATOMIC: Call RPC to claim all 4 tickets in one transaction
       const result = await claimFreeTickets(

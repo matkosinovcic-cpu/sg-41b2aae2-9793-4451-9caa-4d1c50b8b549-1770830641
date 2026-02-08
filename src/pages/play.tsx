@@ -315,27 +315,8 @@ export default function PlayPage() {
       asPath: router.asPath
     });
     
-    // CRITICAL: Query param MUST have absolute priority
-    const queryVenue = router.query.venue;
-    let resolved: string | null = null;
-    
-    if (queryVenue && typeof queryVenue === "string" && queryVenue.trim()) {
-      // Query param exists and is not empty - USE IT (absolute priority)
-      resolved = queryVenue.trim().toLowerCase();
-      console.log("[Play] ✅ Using venue from QUERY (absolute priority):", resolved);
-      
-      // Store as new fallback
-      storeVenue(resolved);
-    } else {
-      // No query param - use localStorage fallback
-      if (typeof window !== "undefined") {
-        const stored = localStorage.getItem("ps_venue");
-        if (stored && stored.trim()) {
-          resolved = stored.trim().toLowerCase();
-          console.log("[Play] ✅ Using venue from LOCALSTORAGE (fallback):", resolved);
-        }
-      }
-    }
+    // ✅ USE SAME LOGIC AS TV PAGE - resolveVenue helper
+    const resolved = resolveVenue(router.query.venue);
     
     console.log("[Play] 🏢 Venue resolution result:", {
       queryVenue: router.query.venue,
@@ -346,6 +327,7 @@ export default function PlayPage() {
     
     if (resolved) {
       setVenueSlug(resolved);
+      storeVenue(resolved); // Store for future fallback
       console.log("[Play] 🎯 Set venueSlug state to:", resolved);
     } else {
       console.log("[Play] ⚠️ No venue resolved");

@@ -317,6 +317,10 @@ export async function claimFreeTickets(
     created_at: string;
   }>;
   error?: string;
+  // New fields from SQL function
+  event_id?: string;
+  event_name?: string;
+  venue_name?: string;
 }> {
   console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (event: ${eventId}, limit: ${limit})`);
 
