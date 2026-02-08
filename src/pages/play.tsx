@@ -157,7 +157,7 @@ export default function PlayPage() {
       const event = await eventService.getActiveEvent(venue);
 
       console.log("[Play] ✅ STEP 7: Active event FOUND:", {
-        venueId: venue,
+        venue,
         id: event.id,
         name: event.name,
         status: event.status,
