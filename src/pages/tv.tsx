@@ -124,9 +124,27 @@ export default function TVScreen() {
       console.log("[TV] Real-time event update received:", payload);
       const updatedEvent = payload.new;
       
-      // ✅ CRITICAL: Always update drawn numbers set from event
-      console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
-      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+      // ✅ CRITICAL: For GLOBAL mode, we need to fetch draw_session.drawn_numbers
+      // Event's drawn_numbers is not used in global mode
+      if (updatedEvent.draw_mode === 'global' && updatedEvent.draw_session_id) {
+        console.log("[TV] 🌍 GLOBAL MODE - Fetching draw_session drawn_numbers");
+        const { data: session, error } = await supabase
+          .from('draw_sessions')
+          .select('drawn_numbers')
+          .eq('id', updatedEvent.draw_session_id)
+          .single();
+        
+        if (!error && session) {
+          console.log("[TV] ✅ Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
+          setDrawnNumbers(new Set(session.drawn_numbers || []));
+        } else {
+          console.error("[TV] ❌ Failed to fetch draw_session drawn_numbers:", error);
+        }
+      } else {
+        // Standalone mode - use event.drawn_numbers
+        console.log("[TV] 📍 STANDALONE MODE - Using event drawn_numbers:", updatedEvent.drawn_numbers?.length || 0);
+        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+      }
       
       // ✅ CRITICAL: Log winner detection
       if (updatedEvent.winner_ticket_id) {
@@ -153,7 +171,7 @@ export default function TVScreen() {
       console.log("[TV] Event state updated:", {
         status: updatedEvent.status,
         current_number: updatedEvent.current_drawn_number,
-        drawn_count: updatedEvent.drawn_numbers?.length || 0,
+        drawn_count: drawnNumbers.size,
         winner: updatedEvent.winner_ticket_id || "none"
       });
     });
@@ -236,9 +254,24 @@ export default function TVScreen() {
           clearInterval(pollInterval);
         }
         
-        // ✅ CRITICAL: Always update drawn numbers (fixes refresh bug)
-        console.log("[TV-POLL] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
-        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+        // ✅ CRITICAL: For GLOBAL mode, fetch draw_session.drawn_numbers
+        if (updatedEvent.draw_mode === 'global' && updatedEvent.draw_session_id) {
+          console.log("[TV-POLL] 🌍 GLOBAL MODE - Fetching draw_session drawn_numbers");
+          const { data: session, error } = await supabase
+            .from('draw_sessions')
+            .select('drawn_numbers')
+            .eq('id', updatedEvent.draw_session_id)
+            .single();
+          
+          if (!error && session) {
+            console.log("[TV-POLL] ✅ Updating drawn numbers from draw_session:", session.drawn_numbers?.length || 0);
+            setDrawnNumbers(new Set(session.drawn_numbers || []));
+          }
+        } else {
+          // Standalone mode
+          console.log("[TV-POLL] 📍 STANDALONE MODE - Updating drawn numbers from event:", updatedEvent.drawn_numbers?.length || 0);
+          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
+        }
         
         // Check if drawn number changed
         const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
@@ -255,7 +288,7 @@ export default function TVScreen() {
         console.log("[TV-POLL] Event refreshed:", {
           status: updatedEvent.status,
           current_number: updatedEvent.current_drawn_number,
-          drawn_count: updatedEvent.drawn_numbers?.length || 0
+          drawn_count: drawnNumbers.size
         });
         
       } catch (error) {
@@ -362,7 +395,7 @@ export default function TVScreen() {
       console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
       console.log("[TV] ✅ Step 3: Event name:", data.name);
       console.log("[TV] ✅ Step 4: Event status:", data.status);
-      console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
+      console.log("[TV] ✅ Step 5: Draw mode:", data.draw_mode);
       
       // ✅ CRITICAL: Respect FINISHED status - stop polling
       if (data.status === "finished") {
@@ -373,9 +406,26 @@ export default function TVScreen() {
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
       
-      // Load drawn numbers from event
-      setDrawnNumbers(new Set(data.drawn_numbers || []));
-      console.log("[TV] ✅ Step 6: Drawn numbers set loaded");
+      // ✅ CRITICAL: Load drawn numbers based on mode
+      if (data.draw_mode === 'global' && data.draw_session_id) {
+        console.log("[TV] 🌍 GLOBAL MODE - Loading draw_session drawn_numbers");
+        const { data: session, error } = await supabase
+          .from('draw_sessions')
+          .select('drawn_numbers')
+          .eq('id', data.draw_session_id)
+          .single();
+        
+        if (!error && session) {
+          console.log("[TV] ✅ Step 6: Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
+          setDrawnNumbers(new Set(session.drawn_numbers || []));
+        } else {
+          console.error("[TV] ❌ Failed to load draw_session drawn_numbers:", error);
+          setDrawnNumbers(new Set());
+        }
+      } else {
+        console.log("[TV] 📍 STANDALONE MODE - Loading event drawn_numbers:", data.drawn_numbers?.length || 0);
+        setDrawnNumbers(new Set(data.drawn_numbers || []));
+      }
       
       // Load current question if one exists
       if (data.current_drawn_number) {
@@ -747,8 +797,8 @@ export default function TVScreen() {
               <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
                 
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
-                  <div className="text-3xl font-bold text-yellow-300">90</div>
-                  <div className="text-sm text-gray-300 mt-1">pitanja</div>
+                  <div className="text-3xl font-bold text-yellow-300">{drawnNumbers.size}/90</div>
+                  <div className="text-sm text-gray-300 mt-1">izvučeno</div>
                 </div>
                 
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
