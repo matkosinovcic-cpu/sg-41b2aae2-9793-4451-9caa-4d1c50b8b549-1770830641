@@ -47,98 +47,8 @@ export type Database = {
           },
         ]
       }
-      draw_sessions: {
-        Row: {
-          created_at: string
-          current_index: number | null
-          current_number: number | null
-          current_question_id: string | null
-          current_question_number: number | null
-          draw_count: number
-          drawn_numbers: number[]
-          finished_at: string | null
-          id: string
-          interval_seconds: number | null
-          jackpot_amount: number | null
-          jackpot_rollover: boolean | null
-          last_draw_at: string | null
-          mode: string
-          name: string
-          question_open_until: string | null
-          question_order: Json | null
-          round_number: number | null
-          seed: number | null
-          started_at: string | null
-          status: string
-          total_questions: number
-          updated_at: string
-          win_threshold: number | null
-        }
-        Insert: {
-          created_at?: string
-          current_index?: number | null
-          current_number?: number | null
-          current_question_id?: string | null
-          current_question_number?: number | null
-          draw_count?: number
-          drawn_numbers?: number[]
-          finished_at?: string | null
-          id?: string
-          interval_seconds?: number | null
-          jackpot_amount?: number | null
-          jackpot_rollover?: boolean | null
-          last_draw_at?: string | null
-          mode?: string
-          name: string
-          question_open_until?: string | null
-          question_order?: Json | null
-          round_number?: number | null
-          seed?: number | null
-          started_at?: string | null
-          status?: string
-          total_questions?: number
-          updated_at?: string
-          win_threshold?: number | null
-        }
-        Update: {
-          created_at?: string
-          current_index?: number | null
-          current_number?: number | null
-          current_question_id?: string | null
-          current_question_number?: number | null
-          draw_count?: number
-          drawn_numbers?: number[]
-          finished_at?: string | null
-          id?: string
-          interval_seconds?: number | null
-          jackpot_amount?: number | null
-          jackpot_rollover?: boolean | null
-          last_draw_at?: string | null
-          mode?: string
-          name?: string
-          question_open_until?: string | null
-          question_order?: Json | null
-          round_number?: number | null
-          seed?: number | null
-          started_at?: string | null
-          status?: string
-          total_questions?: number
-          updated_at?: string
-          win_threshold?: number | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "draw_sessions_current_question_id_fkey"
-            columns: ["current_question_id"]
-            isOneToOne: false
-            referencedRelation: "questions"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       event_questions: {
         Row: {
-          draw_session_id: string | null
           drawn: boolean | null
           drawn_at: string | null
           event_id: string
@@ -147,7 +57,6 @@ export type Database = {
           question_number: number
         }
         Insert: {
-          draw_session_id?: string | null
           drawn?: boolean | null
           drawn_at?: string | null
           event_id: string
@@ -156,7 +65,6 @@ export type Database = {
           question_number: number
         }
         Update: {
-          draw_session_id?: string | null
           drawn?: boolean | null
           drawn_at?: string | null
           event_id?: string
@@ -165,13 +73,6 @@ export type Database = {
           question_number?: number
         }
         Relationships: [
-          {
-            foreignKeyName: "event_questions_draw_session_id_fkey"
-            columns: ["draw_session_id"]
-            isOneToOne: false
-            referencedRelation: "draw_sessions"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "event_questions_event_id_fkey"
             columns: ["event_id"]
@@ -194,17 +95,12 @@ export type Database = {
           created_at: string | null
           current_drawn_number: number | null
           current_question_number: number | null
-          draw_mode: string
-          draw_session_id: string | null
           drawn_numbers: number[] | null
           id: string
-          local_prize_fund: number | null
           name: string
           question_open_until: string | null
           status: string
           updated_at: string | null
-          venue_id: string | null
-          venue_slug: string | null
           winner_ticket_id: string | null
         }
         Insert: {
@@ -212,17 +108,12 @@ export type Database = {
           created_at?: string | null
           current_drawn_number?: number | null
           current_question_number?: number | null
-          draw_mode?: string
-          draw_session_id?: string | null
           drawn_numbers?: number[] | null
           id?: string
-          local_prize_fund?: number | null
           name: string
           question_open_until?: string | null
           status?: string
           updated_at?: string | null
-          venue_id?: string | null
-          venue_slug?: string | null
           winner_ticket_id?: string | null
         }
         Update: {
@@ -230,35 +121,15 @@ export type Database = {
           created_at?: string | null
           current_drawn_number?: number | null
           current_question_number?: number | null
-          draw_mode?: string
-          draw_session_id?: string | null
           drawn_numbers?: number[] | null
           id?: string
-          local_prize_fund?: number | null
           name?: string
           question_open_until?: string | null
           status?: string
           updated_at?: string | null
-          venue_id?: string | null
-          venue_slug?: string | null
           winner_ticket_id?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "events_draw_session_id_fkey"
-            columns: ["draw_session_id"]
-            isOneToOne: false
-            referencedRelation: "draw_sessions"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "events_venue_id_fkey"
-            columns: ["venue_id"]
-            isOneToOne: false
-            referencedRelation: "venues"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       player_answers: {
         Row: {
@@ -316,6 +187,13 @@ export type Database = {
             referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "player_answers_ticket_fkey"
+            columns: ["ticket_id"]
+            isOneToOne: false
+            referencedRelation: "tickets"
+            referencedColumns: ["serial_number"]
+          },
         ]
       }
       player_sessions: {
@@ -325,7 +203,6 @@ export type Database = {
           id: string
           player_id: string | null
           session_token: string
-          venue_id: string | null
         }
         Insert: {
           created_at?: string | null
@@ -333,7 +210,6 @@ export type Database = {
           id?: string
           player_id?: string | null
           session_token: string
-          venue_id?: string | null
         }
         Update: {
           created_at?: string | null
@@ -341,7 +217,6 @@ export type Database = {
           id?: string
           player_id?: string | null
           session_token?: string
-          venue_id?: string | null
         }
         Relationships: [
           {
@@ -358,13 +233,6 @@ export type Database = {
             referencedRelation: "players"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "player_sessions_venue_id_fkey"
-            columns: ["venue_id"]
-            isOneToOne: false
-            referencedRelation: "venues"
-            referencedColumns: ["id"]
-          },
         ]
       }
       players: {
@@ -372,7 +240,6 @@ export type Database = {
           created_at: string | null
           email: string
           id: string
-          last_seen_at: string | null
           nickname: string
           updated_at: string | null
         }
@@ -380,7 +247,6 @@ export type Database = {
           created_at?: string | null
           email: string
           id?: string
-          last_seen_at?: string | null
           nickname: string
           updated_at?: string | null
         }
@@ -388,7 +254,6 @@ export type Database = {
           created_at?: string | null
           email?: string
           id?: string
-          last_seen_at?: string | null
           nickname?: string
           updated_at?: string | null
         }
@@ -473,7 +338,6 @@ export type Database = {
       }
       tickets: {
         Row: {
-          claimed_at: string | null
           created_at: string | null
           event_id: string
           id: string
@@ -481,11 +345,8 @@ export type Database = {
           player_id: string | null
           serial_number: string
           session_id: string | null
-          ticket_numbers: number[] | null
-          venue_id: string
         }
         Insert: {
-          claimed_at?: string | null
           created_at?: string | null
           event_id: string
           id?: string
@@ -493,11 +354,8 @@ export type Database = {
           player_id?: string | null
           serial_number: string
           session_id?: string | null
-          ticket_numbers?: number[] | null
-          venue_id: string
         }
         Update: {
-          claimed_at?: string | null
           created_at?: string | null
           event_id?: string
           id?: string
@@ -505,8 +363,6 @@ export type Database = {
           player_id?: string | null
           serial_number?: string
           session_id?: string | null
-          ticket_numbers?: number[] | null
-          venue_id?: string
         }
         Relationships: [
           {
@@ -530,35 +386,7 @@ export type Database = {
             referencedRelation: "player_sessions"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "tickets_venue_id_fkey"
-            columns: ["venue_id"]
-            isOneToOne: false
-            referencedRelation: "venues"
-            referencedColumns: ["id"]
-          },
         ]
-      }
-      venues: {
-        Row: {
-          created_at: string | null
-          id: string
-          name: string
-          slug: string
-        }
-        Insert: {
-          created_at?: string | null
-          id?: string
-          name: string
-          slug: string
-        }
-        Update: {
-          created_at?: string | null
-          id?: string
-          name?: string
-          slug?: string
-        }
-        Relationships: []
       }
     }
     Views: {
@@ -572,49 +400,9 @@ export type Database = {
           ticket_serial: string
         }[]
       }
-      claim_free_tickets:
-        | {
-            Args: { p_email: string; p_limit: number; p_nickname: string }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_email: string
-              p_event_id: string
-              p_limit?: number
-              p_nickname: string
-              p_venue_id: string
-            }
-            Returns: Json
-          }
-      claim_free_tickets_v2: {
-        Args: {
-          p_email: string
-          p_limit?: number
-          p_nickname: string
-          p_venue_id: string
-        }
+      claim_free_tickets: {
+        Args: { p_email: string; p_limit?: number; p_nickname: string }
         Returns: Json
-      }
-      claim_free_tickets_v3: {
-        Args: {
-          p_email: string
-          p_event_id: string
-          p_limit?: number
-          p_nickname: string
-          p_venue_id: string
-        }
-        Returns: Json
-      }
-      draw_next_number: {
-        Args: { p_event_id: string }
-        Returns: {
-          draw_count: number
-          drawn_numbers: number[]
-          message: string
-          new_number: number
-          success: boolean
-        }[]
       }
     }
     Enums: {

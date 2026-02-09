@@ -101,24 +101,6 @@ export async function checkEmailExists(email: string): Promise<boolean> {
   return data !== null;
 }
 
-export function getPlayer() {
-  if (typeof window === "undefined") return null;
-  const playerJson = localStorage.getItem("player_data");
-  return playerJson ? JSON.parse(playerJson) : null;
-}
-
-export async function updatePlayerNickname(playerId: string, nickname: string) {
-  const { data, error } = await supabase
-    .from("players")
-    .update({ nickname })
-    .eq("id", playerId)
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
-}
-
 const playerService = {
   createPlayer,
   getPlayerById,

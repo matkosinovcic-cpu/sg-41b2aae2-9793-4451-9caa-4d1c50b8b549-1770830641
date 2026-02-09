@@ -2,6 +2,7 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
+import { answerService, TicketStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,8 +22,7 @@ export default function AdminPanel() {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  // Use 'any' for stats until service is implemented
-  const [ticketStats, setTicketStats] = useState<any[]>([]);
+  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
 
   const [legacyAnswersCount, setLegacyAnswersCount] = useState<number>(0);
   const [isDeletingLegacy, setIsDeletingLegacy] = useState(false);
@@ -188,6 +188,22 @@ export default function AdminPanel() {
     }
   }, [selectedEvent?.id, selectedEvent?.status]);
 
+  // Real-time subscription for answers (only when finished)
+  useEffect(() => {
+    if (!selectedEvent || selectedEvent.status !== "finished") return;
+
+    console.log("[Admin] Setting up answer subscription for finished event:", selectedEvent.id);
+
+    const subscription = answerService.subscribeToEventAnswers(selectedEvent.id, () => {
+      console.log("[Admin] Answer update detected, reloading stats");
+      loadTicketStats(selectedEvent.id);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [selectedEvent?.id, selectedEvent?.status]);
+
   // CRITICAL: Only poll stats when event is finished
   useEffect(() => {
     if (!selectedEvent || selectedEvent.status !== "finished") return;
@@ -202,7 +218,6 @@ export default function AdminPanel() {
   const loadEvents = async () => {
     try {
       const data = await eventService.getEvents();
-      console.log("[Admin] Loaded events:", data.length, data.map(e => ({ id: e.id, name: e.name, status: e.status })));
       setEvents(data);
     } catch (error) {
       console.error("Failed to load events:", error);
@@ -224,14 +239,9 @@ export default function AdminPanel() {
 
   const loadTicketStats = async (eventId: string) => {
     try {
-      // Mock stats for now to unblock build
-      console.log("[Admin] Stats not implemented yet");
-      setTicketStats([]);
-      /*
       const result = await answerService.getEventTicketStats(eventId);
       console.log("[Admin] ✅ Loaded ticket stats:", result.length, "tickets");
       setTicketStats(result);
-      */
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
     }
@@ -294,18 +304,17 @@ export default function AdminPanel() {
     }
   };
 
-  const handleGenerateTickets = async (eventId: string, venueId: string) => {
+  const handleGenerateTickets = async (eventId: string) => {
+    setLoading(true);
     try {
-      setLoading(true);
-      await eventService.generateTickets(eventId, 10, venueId);
-      toast({
-        title: "Tickets generated",
-        description: "Successfully generated 10 tickets",
-      });
-      await loadEvents();
+      await eventService.generateTickets(eventId, ticketCount);
       if (selectedEvent?.id === eventId) {
         await loadEventDetails(eventId);
       }
+      toast({
+        title: "Success",
+        description: `${ticketCount} tickets generated successfully`,
+      });
     } catch (error) {
       toast({
         title: "Error",
@@ -681,7 +690,7 @@ export default function AdminPanel() {
                                     className="w-20"
                                   />
                                   <Button
-                                    onClick={() => handleGenerateTickets(event.id, event.venue_id)} // ✅ Pass venue_id
+                                    onClick={() => handleGenerateTickets(event.id)}
                                     disabled={loading}
                                     size="sm"
                                   >

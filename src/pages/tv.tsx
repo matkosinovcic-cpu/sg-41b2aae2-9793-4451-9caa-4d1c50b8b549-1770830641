@@ -2,12 +2,12 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
+import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
-import { resolveVenue, storeVenue } from "@/lib/venueHelper";
 
 interface TicketData {
   id: string;
@@ -25,25 +25,14 @@ export default function TVScreen() {
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [questionText, setQuestionText] = useState<string | null>(null);
   const [drawnNumbers, setDrawnNumbers] = useState<Set<number>>(new Set());
-
-  // DEBUG: Log drawnNumbers changes
-  useEffect(() => {
-    console.log("[TV] 📊 drawnNumbers state changed:", {
-      size: drawnNumbers.size,
-      numbers: Array.from(drawnNumbers).sort((a, b) => a - b),
-      timestamp: new Date().toISOString()
-    });
-  }, [drawnNumbers]);
-
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [pollingActive, setPollingActive] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
-  const [venueSlug, setVenueSlug] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
   const [tickets, setTickets] = useState<TicketData[]>([]);
-  const [detailedResults, setDetailedResults] = useState<Map<string, any>>(new Map());
-  const [ticketStats, setTicketStats] = useState<any[]>([]);
+  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
+  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -58,24 +47,32 @@ export default function TVScreen() {
     const initializeTV = async () => {
       try {
         console.log("[TV] 🚀 Initializing TV display...");
+        await loadEvents();
+        console.log("[TV] ✅ Events loaded successfully");
         
-        // Use venue helper to resolve venue (priority: URL → localStorage)
-        const resolvedVenue = resolveVenue(router.query.venue);
+        // Priority 1: URL query param
+        const urlEventId = router.query.eventId as string;
         
-        if (!resolvedVenue) {
-          console.log("[TV] ⚠️ No venue parameter - waiting for venue selection");
-          setVenueSlug("");
-          setLoadingError(null);
-          return;
+        // Priority 2: localStorage
+        const storedEventId = localStorage.getItem("tv_event_id");
+        
+        const targetEventId = urlEventId || storedEventId;
+        
+        if (targetEventId) {
+          console.log("[TV] 📌 Auto-selecting event:", targetEventId, "from", urlEventId ? "URL" : "localStorage");
+          
+          // Validate event exists before selecting
+          const eventExists = await validateEventExists(targetEventId);
+          if (eventExists) {
+            setSelectedEventId(targetEventId);
+          } else {
+            console.warn("[TV] ⚠️ Event", targetEventId, "no longer exists, clearing and showing selection");
+            localStorage.removeItem("tv_event_id");
+            setSelectedEventId("");
+          }
+        } else {
+          console.log("[TV] ℹ️ No stored event, user must select");
         }
-        
-        console.log("[TV] 📌 Venue resolved:", resolvedVenue);
-        setVenueSlug(resolvedVenue);
-        storeVenue(resolvedVenue);
-        
-        // Fetch ACTIVE event for this venue only
-        await loadActiveEventForVenue(resolvedVenue);
-        
       } catch (error) {
         console.error("[TV] ❌ Initialization failed:", error);
         setLoadingError("Failed to initialize TV display. Please refresh the page.");
@@ -83,7 +80,7 @@ export default function TVScreen() {
     };
 
     initializeTV();
-  }, [router.isReady, router.query.venue]);
+  }, [router.query.eventId]);
 
   // Validate event exists in database
   const validateEventExists = async (eventId: string): Promise<boolean> => {
@@ -133,31 +130,9 @@ export default function TVScreen() {
       console.log("[TV] Real-time event update received:", payload);
       const updatedEvent = payload.new;
       
-      // ✅ CRITICAL: For GLOBAL mode, we need to fetch draw_session.drawn_numbers
-      // Event's drawn_numbers is not used in global mode
-      if (updatedEvent.draw_mode === 'global' && updatedEvent.draw_session_id) {
-        console.log("[TV] 🌍 GLOBAL MODE - Fetching draw_session drawn_numbers");
-        const { data: session, error } = await supabase
-          .from('draw_sessions')
-          .select('drawn_numbers')
-          .eq('id', updatedEvent.draw_session_id)
-          .single();
-        
-        if (!error && session) {
-          console.log("[TV] ✅ Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
-          console.log("[TV] 📋 Draw session numbers array:", session.drawn_numbers);
-          const newDrawnSet = new Set(session.drawn_numbers || []);
-          console.log("[TV] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
-          setDrawnNumbers(newDrawnSet);
-          console.log("[TV] ✅ drawnNumbers state updated");
-        } else {
-          console.error("[TV] ❌ Failed to fetch draw_session drawn_numbers:", error);
-        }
-      } else {
-        // Standalone mode - use event.drawn_numbers
-        console.log("[TV] 📍 STANDALONE MODE - Using event drawn_numbers:", updatedEvent.drawn_numbers?.length || 0);
-        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-      }
+      // ✅ CRITICAL: Always update drawn numbers set from event
+      console.log("[TV] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+      setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
       
       // ✅ CRITICAL: Log winner detection
       if (updatedEvent.winner_ticket_id) {
@@ -184,7 +159,7 @@ export default function TVScreen() {
       console.log("[TV] Event state updated:", {
         status: updatedEvent.status,
         current_number: updatedEvent.current_drawn_number,
-        drawn_count: drawnNumbers.size,
+        drawn_count: updatedEvent.drawn_numbers?.length || 0,
         winner: updatedEvent.winner_ticket_id || "none"
       });
     });
@@ -267,27 +242,9 @@ export default function TVScreen() {
           clearInterval(pollInterval);
         }
         
-        // ✅ CRITICAL: For GLOBAL mode, fetch draw_session.drawn_numbers
-        if (updatedEvent.draw_mode === 'global' && updatedEvent.draw_session_id) {
-          console.log("[TV-POLL] 🌍 GLOBAL MODE - Fetching draw_session drawn_numbers");
-          const { data: session, error } = await supabase
-            .from('draw_sessions')
-            .select('drawn_numbers')
-            .eq('id', updatedEvent.draw_session_id)
-            .single();
-          
-          if (!error && session) {
-            console.log("[TV-POLL] ✅ Updating drawn numbers from draw_session:", session.drawn_numbers?.length || 0);
-            console.log("[TV-POLL] 📋 Draw session numbers array:", session.drawn_numbers);
-            const newDrawnSet = new Set(session.drawn_numbers || []);
-            console.log("[TV-POLL] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
-            setDrawnNumbers(newDrawnSet);
-          }
-        } else {
-          // Standalone mode
-          console.log("[TV-POLL] 📍 STANDALONE MODE - Updating drawn numbers from event:", updatedEvent.drawn_numbers?.length || 0);
-          setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
-        }
+        // ✅ CRITICAL: Always update drawn numbers (fixes refresh bug)
+        console.log("[TV-POLL] Updating drawn numbers:", updatedEvent.drawn_numbers?.length || 0);
+        setDrawnNumbers(new Set(updatedEvent.drawn_numbers || []));
         
         // Check if drawn number changed
         const numberChanged = updatedEvent.current_drawn_number !== event.current_drawn_number;
@@ -304,7 +261,7 @@ export default function TVScreen() {
         console.log("[TV-POLL] Event refreshed:", {
           status: updatedEvent.status,
           current_number: updatedEvent.current_drawn_number,
-          drawn_count: drawnNumbers.size
+          drawn_count: updatedEvent.drawn_numbers?.length || 0
         });
         
       } catch (error) {
@@ -343,49 +300,6 @@ export default function TVScreen() {
     }
   };
 
-  const loadActiveEventForVenue = async (venue: string) => {
-    try {
-      console.log("[TV] 🔍 loadActiveEventForVenue:", venue);
-      setLoadingError(null);
-      
-      // Fetch active event for this venue
-      const { data, error } = await supabase
-        .from("events")
-        .select("*")
-        .eq("status", "active")
-        .eq("venue_slug", venue)
-        .maybeSingle();
-      
-      if (error) {
-        console.error("[TV] ❌ Failed to fetch active event for venue:", error);
-        setLoadingError(`Greška pri dohvaćanju eventa: ${error.message}`);
-        return;
-      }
-      
-      if (!data) {
-        console.log("[TV] ℹ️ No active event found for venue:", venue);
-        setEvent(null);
-        setSelectedEventId("");
-        setLoadingError(null);
-        return;
-      }
-      
-      console.log("[TV] ✅ Active event found for venue:", data.name);
-      setEvent(data as unknown as Event);
-      setSelectedEventId(data.id);
-      lastDrawnNumberRef.current = data.current_drawn_number;
-      setDrawnNumbers(new Set(data.drawn_numbers || []));
-      
-      if (data.current_drawn_number) {
-        await loadCurrentQuestion(data.id, data.current_drawn_number);
-      }
-      
-    } catch (error) {
-      console.error("[TV] ❌ loadActiveEventForVenue failed:", error);
-      setLoadingError("Failed to load active event for venue.");
-    }
-  };
-
   const loadEventData = async () => {
     if (!selectedEventId) {
       console.warn("[TV] ⚠️ loadEventData called without selectedEventId");
@@ -411,7 +325,7 @@ export default function TVScreen() {
       console.log("[TV] ✅ Step 2: Event fetched successfully:", data);
       console.log("[TV] ✅ Step 3: Event name:", data.name);
       console.log("[TV] ✅ Step 4: Event status:", data.status);
-      console.log("[TV] ✅ Step 5: Draw mode:", data.draw_mode);
+      console.log("[TV] ✅ Step 5: Drawn numbers:", data.drawn_numbers?.length || 0);
       
       // ✅ CRITICAL: Respect FINISHED status - stop polling
       if (data.status === "finished") {
@@ -422,29 +336,9 @@ export default function TVScreen() {
       setEvent(data);
       lastDrawnNumberRef.current = data.current_drawn_number;
       
-      // ✅ CRITICAL: Load drawn numbers based on mode
-      if (data.draw_mode === 'global' && data.draw_session_id) {
-        console.log("[TV] 🌍 GLOBAL MODE - Loading draw_session drawn_numbers");
-        const { data: session, error } = await supabase
-          .from('draw_sessions')
-          .select('drawn_numbers')
-          .eq('id', data.draw_session_id)
-          .single();
-        
-        if (!error && session) {
-          console.log("[TV] ✅ Step 6: Draw session drawn_numbers loaded:", session.drawn_numbers?.length || 0);
-          console.log("[TV] 📋 Draw session numbers array:", session.drawn_numbers);
-          const newDrawnSet = new Set(session.drawn_numbers || []);
-          console.log("[TV] 🔄 Setting drawnNumbers state with Set of size:", newDrawnSet.size);
-          setDrawnNumbers(newDrawnSet);
-        } else {
-          console.error("[TV] ❌ Failed to load draw_session drawn_numbers:", error);
-          setDrawnNumbers(new Set());
-        }
-      } else {
-        console.log("[TV] 📍 STANDALONE MODE - Loading event drawn_numbers:", data.drawn_numbers?.length || 0);
-        setDrawnNumbers(new Set(data.drawn_numbers || []));
-      }
+      // Load drawn numbers from event
+      setDrawnNumbers(new Set(data.drawn_numbers || []));
+      console.log("[TV] ✅ Step 6: Drawn numbers set loaded");
       
       // Load current question if one exists
       if (data.current_drawn_number) {
@@ -555,10 +449,9 @@ export default function TVScreen() {
     if (!event || tickets.length === 0) return;
     
     try {
-      const resultsMap = new Map<string, any>();
+      const resultsMap = new Map<string, TicketDetailedResults>();
       
       for (const ticket of tickets) {
-        /*
         const details = await answerService.getTicketDetailedResults(
           ticket.id,
           ticket,
@@ -566,7 +459,6 @@ export default function TVScreen() {
           event.drawn_numbers || []
         );
         resultsMap.set(ticket.serial_number, details);
-        */
       }
       
       setDetailedResults(resultsMap);
@@ -579,13 +471,9 @@ export default function TVScreen() {
     if (!event || tickets.length === 0) return;
     
     try {
-      // Mock stats for now
-      /*
       const statsData = await answerService.getEventTicketStats(event.id);
       setTicketStats(statsData);
-      */
-       setTicketStats([]);
-      console.log("[TV] ✅ Stats loaded (mock)");
+      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
     } catch (error) {
       console.error("[TV] Failed to load stats:", error);
       setTicketStats([]);
@@ -644,31 +532,19 @@ export default function TVScreen() {
         <div className="min-h-screen bg-black flex items-center justify-center p-4">
           <Card className="w-full max-w-md">
             <CardContent className="pt-6">
-              {!venueSlug ? (
-                /* No venue - ask to scan QR code */
-                <>
-                  <h1 className="text-2xl font-bold mb-4 text-center">TV Display</h1>
-                  <div className="text-center p-8">
-                    <div className="text-6xl mb-4">📱</div>
-                    <p className="text-lg text-gray-600">
-                      Odaberi kafić (skeniraj QR kod)
-                    </p>
-                  </div>
-                </>
-              ) : (
-                /* Venue exists but no active event */
-                <>
-                  <h1 className="text-2xl font-bold mb-4 text-center">
-                    {venueSlug.toUpperCase()}
-                  </h1>
-                  <div className="text-center p-8">
-                    <div className="text-6xl mb-4">⏸️</div>
-                    <p className="text-lg text-gray-600">
-                      Nema aktivnog eventa za ovaj kafić
-                    </p>
-                  </div>
-                </>
-              )}
+              <h1 className="text-2xl font-bold mb-4 text-center">Select Event for TV Display</h1>
+              <Select onValueChange={setSelectedEventId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an event" />
+                </SelectTrigger>
+                <SelectContent>
+                  {events.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.name} ({e.status})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </CardContent>
           </Card>
         </div>
@@ -756,8 +632,8 @@ export default function TVScreen() {
                       <div className="text-lg text-indigo-300 tracking-wide uppercase">
                         Trenutno pitanje
                       </div>
-                      <div className="text-6xl font-black text-white drop-shadow-2xl">
-                        {event.current_drawn_number}
+                      <div className="text-8xl font-black text-white drop-shadow-2xl">
+                        #{event.current_drawn_number}
                       </div>
                       {timeRemaining > 0 && (
                         <div className="text-5xl font-bold text-yellow-300 animate-pulse">
@@ -766,7 +642,7 @@ export default function TVScreen() {
                       )}
                       {questionText && (
                         <div className="mt-6 bg-white/10 rounded-2xl p-5 backdrop-blur max-h-[40vh] overflow-y-auto">
-                          <p className="text-2xl text-white leading-relaxed">
+                          <p className="text-xl text-white leading-relaxed">
                             {questionText}
                           </p>
                         </div>
@@ -822,8 +698,8 @@ export default function TVScreen() {
               <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
                 
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
-                  <div className="text-3xl font-bold text-yellow-300">{drawnNumbers.size}/90</div>
-                  <div className="text-sm text-gray-300 mt-1">izvučeno</div>
+                  <div className="text-3xl font-bold text-yellow-300">90</div>
+                  <div className="text-sm text-gray-300 mt-1">pitanja</div>
                 </div>
                 
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">

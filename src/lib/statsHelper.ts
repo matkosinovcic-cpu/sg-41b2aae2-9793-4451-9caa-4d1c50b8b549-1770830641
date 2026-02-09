@@ -161,133 +161,6 @@ export async function computeEventLevelGlobalStats(
 }
 
 /**
- * Compute event-level global stats filtered by venue
- * Same as computeEventLevelGlobalStats but filters answers through player_sessions.venue_id
- * 
- * @param eventId - Event ID
- * @param venueId - Venue ID to filter by
- * @returns Event-level global stats for specific venue
- */
-export async function computeEventLevelGlobalStatsForVenue(
-  eventId: string,
-  venueId: string
-): Promise<EventLevelGlobalStats> {
-  console.log("[VENUE STATS] Computing stats for venue:", venueId, "event:", eventId);
-
-  // 1. Get TOTAL_DRAWN from event
-  const drawnNumbers = await getDrawnQuestionNumbers(eventId);
-  const totalDrawn = drawnNumbers.length;
-
-  if (totalDrawn === 0) {
-    return {
-      totalDrawn: 0,
-      answeredTotal: 0,
-      correctTotal: 0,
-      incorrectTotal: 0,
-      accuracyPct: 0
-    };
-  }
-
-  // 2. Get session IDs for this venue and event
-  const { data: sessions, error: sessionsError } = await supabase
-    .from("player_sessions")
-    .select("id")
-    .eq("event_id", eventId)
-    .eq("venue_id", venueId);
-
-  if (sessionsError || !sessions || sessions.length === 0) {
-    console.log("[VENUE STATS] No sessions found for venue:", venueId);
-    return {
-      totalDrawn,
-      answeredTotal: 0,
-      correctTotal: 0,
-      incorrectTotal: totalDrawn,
-      accuracyPct: 0
-    };
-  }
-
-  const sessionIds = sessions.map(s => s.id);
-  console.log("[VENUE STATS] Found", sessionIds.length, "sessions for venue");
-
-  // 3. Get ALL answers for these sessions
-  const { data: allAnswers, error } = await supabase
-    .from("player_answers")
-    .select("question_number, is_correct, created_at")
-    .eq("event_id", eventId)
-    .in("session_id", sessionIds)
-    .order("created_at", { ascending: false });
-
-  if (error || !allAnswers) {
-    console.error("[VENUE STATS] Failed to fetch answers:", error);
-    return {
-      totalDrawn,
-      answeredTotal: 0,
-      correctTotal: 0,
-      incorrectTotal: totalDrawn,
-      accuracyPct: 0
-    };
-  }
-
-  console.log("[VENUE STATS] Found", allAnswers.length, "answers for venue");
-
-  // 4. Deduplicate answers by question_number (keep latest)
-  const drawnSet = new Set(drawnNumbers);
-  const answerMap = new Map<number, { is_correct: boolean }>();
-
-  for (const ans of allAnswers) {
-    const qNum = Number(ans.question_number);
-    
-    // Only count answers for drawn questions
-    if (!drawnSet.has(qNum)) continue;
-    
-    // Keep first (latest due to DESC sort)
-    if (!answerMap.has(qNum)) {
-      answerMap.set(qNum, { is_correct: ans.is_correct });
-    }
-  }
-
-  // 5. Compute stats
-  const answeredTotal = answerMap.size;
-  let correctTotal = 0;
-  let answeredIncorrect = 0;
-
-  for (const [, ans] of answerMap) {
-    if (ans.is_correct) {
-      correctTotal++;
-    } else {
-      answeredIncorrect++;
-    }
-  }
-
-  // Skipped questions = incorrect
-  const skippedCount = totalDrawn - answeredTotal;
-  const incorrectTotal = answeredIncorrect + skippedCount;
-  
-  // ACCURACY = (CORRECT / TOTAL_DRAWN) * 100
-  const accuracyPct = totalDrawn > 0 
-    ? Math.round((correctTotal / totalDrawn) * 100)
-    : 0;
-
-  console.log("[VENUE STATS] Result:", {
-    venueId,
-    totalDrawn,
-    answeredTotal,
-    correctTotal,
-    incorrectTotal,
-    skippedCount,
-    accuracyPct
-  });
-
-  return {
-    totalDrawn,
-    answeredTotal,
-    correctTotal,
-    incorrectTotal,
-    accuracyPct
-  };
-}
-
-/**
  * Calculate stats for a single ticket (client-side helper for /player)
  * Used for real-time display without DB queries
  */
@@ -583,7 +456,7 @@ export async function getTicketDetailedResults(
   // 5. Build detailed results
   const results = drawnOnTicket.map(qn => {
     const questionId = questionIdMap.get(qn);
-    const questionData = questionDataMap.get(questionId);
+    const questionData = questionId ? questionDataMap.get(questionId) : null;
     const answer = answerMap.get(qn);
 
     const questionText = questionData?.text || "N/A";

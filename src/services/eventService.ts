@@ -10,18 +10,12 @@ export interface Event {
   id: string;
   name: string;
   status: "draft" | "active" | "paused" | "finished";
-  venue_slug: string;
-  venue_id: string;
   current_question_number: number | null;
   current_drawn_number: number | null;
   drawn_numbers: number[];
   question_open_until: string | null;
   winner_ticket_id: string | null;
   created_at: string;
-  draw_mode?: "standalone" | "global" | "manual" | "auto" | "scheduled";
-  draw_session_id?: string | null;
-  venue_name?: string; // Added for UI display
-  question_timer_seconds?: number; // Added field
 }
 
 export interface EventQuestion {
@@ -160,8 +154,7 @@ export const eventService = {
     return { count: questionCount, total: availableCount };
   },
 
-  async generateTickets(eventId: string, count: number, venueId: string) {
-    console.log(`[EventService] Generating ${count} tickets for event ${eventId} (venue: ${venueId})`);
+  async generateTickets(eventId: string, count: number) {
     const tickets = [];
     
     for (let i = 0; i < count; i++) {
@@ -177,7 +170,7 @@ export const eventService = {
 
       const { data: ticket, error: ticketError } = await supabase
         .from("tickets")
-        .insert({ serial_number: serialNumber, event_id: eventId, venue_id: venueId })
+        .insert({ serial_number: serialNumber, event_id: eventId })
         .select()
         .single();
       
@@ -277,38 +270,91 @@ export const eventService = {
     if (error) throw error;
   },
 
-  /**
-   * ✅ ATOMIC DRAW: Calls Postgres function to handle everything safely
-   */
   async drawNextQuestion(eventId: string) {
-    console.log("[drawNextQuestion] 🎯 CALLING ATOMIC RPC for event:", eventId);
+    // ✅ CRITICAL: Re-fetch event from DB (SOURCE OF TRUTH)
+    const { data: event } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
 
-    // Call atomic function
-    const { data: atomicResult, error: atomicError } = await supabase
-      .rpc('draw_next_number', { p_event_id: eventId });
+    if (!event) throw new Error("Event not found");
 
-    if (atomicError) {
-      console.error("[drawNextQuestion] ❌ RPC Failed:", atomicError);
-      throw atomicError;
+    // ✅ STATE MACHINE: Enforce strict status rules
+    if (event.status === "finished") {
+      throw new Error("Event je završen. Za novo izvlačenje koristi 'Reset Event' u admin panelu.");
     }
 
-    // Handle array response (function returns table)
-    const result = Array.isArray(atomicResult) ? atomicResult[0] : atomicResult;
-
-    if (!result || !result.success) {
-      throw new Error(result?.message || "Draw failed (unknown error)");
+    if (event.status === "paused") {
+      throw new Error("Event je pauziran. Klikni 'Nastavi' za nastavak.");
     }
 
-    console.log("[drawNextQuestion] ✅ Atomic draw successful:", {
-      new_number: result.new_number,
-      draw_count: result.draw_count,
-      is_duplicate: false
-    });
+    if (event.status !== "active") {
+      throw new Error(`Event mora biti aktivan za izvlačenje (trenutni status: ${event.status})`);
+    }
 
-    return { 
-      drawnNumber: result.new_number,
-      questionOpenUntil: null // Handled by subscription/event update
-    };
+    const drawnNumbers = event.drawn_numbers || [];
+    
+    // Check if all 90 numbers are drawn
+    if (drawnNumbers.length >= 90) {
+      throw new Error("Svih 90 brojeva je izvučeno");
+    }
+
+    // Find all numbers from 1-90 that haven't been drawn yet
+    const availableNumbers = [];
+    for (let i = 1; i <= 90; i++) {
+      if (!drawnNumbers.includes(i)) {
+        availableNumbers.push(i);
+      }
+    }
+
+    if (availableNumbers.length === 0) {
+      throw new Error("Nema više dostupnih brojeva");
+    }
+
+    // Randomly select one number from available numbers
+    const randomIndex = Math.floor(Math.random() * availableNumbers.length);
+    const drawnNumber = availableNumbers[randomIndex];
+
+    // Get the question for this number
+    const { data: questionData } = await supabase
+      .from("event_questions")
+      .select("*, questions(*)")
+      .eq("event_id", eventId)
+      .eq("question_number", drawnNumber)
+      .single();
+
+    if (!questionData) {
+      throw new Error("Pitanje nije pronađeno za izvučeni broj");
+    }
+
+    const questionOpenUntil = new Date(Date.now() + 10000).toISOString();
+
+    // Mark question as drawn
+    await supabase
+      .from("event_questions")
+      .update({ drawn: true, drawn_at: new Date().toISOString() })
+      .eq("id", questionData.id);
+
+    // Update drawn numbers list and current drawn number
+    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
+
+    await supabase
+      .from("events")
+      .update({
+        drawn_numbers: updatedDrawnNumbers,
+        current_drawn_number: drawnNumber,
+        current_question_number: drawnNumber,
+        question_open_until: questionOpenUntil
+      })
+      .eq("id", eventId);
+
+    console.log("[drawNextQuestion] ✅ Drew number:", drawnNumber, "Total drawn:", updatedDrawnNumbers.length);
+
+    // ✅ CRITICAL: Check for winner after drawing (auto-sets FINISHED if winner found)
+    await this.checkForWinner(eventId);
+
+    return { question: questionData, questionOpenUntil, drawnNumber };
   },
 
   async pauseEvent(eventId: string) {
@@ -384,7 +430,7 @@ export const eventService = {
 
     const { data: event } = await supabase
       .from("events")
-      .select("*, draw_sessions(*)")
+      .select("*")
       .eq("id", eventId)
       .single();
 
@@ -396,17 +442,8 @@ export const eventService = {
       return { winnerFound: true, winnerSerial: undefined };
     }
 
-    // ✅ GLOBAL MODE: Use draw_session.drawn_numbers
-    const isGlobalMode = event.draw_mode === "global" && event.draw_session_id && event.draw_sessions;
-    const drawnNumbers = isGlobalMode 
-      ? (event.draw_sessions.drawn_numbers || [])
-      : (event.drawn_numbers || []);
-
-    console.log("[checkForWinner] Drawn numbers:", {
-      mode: isGlobalMode ? "GLOBAL" : "STANDALONE",
-      count: drawnNumbers.length,
-      numbers: drawnNumbers
-    });
+    const drawnNumbers = event.drawn_numbers || [];
+    console.log("[checkForWinner] Drawn numbers:", drawnNumbers.length);
 
     // Get all tickets with their questions
     const { data: tickets } = await supabase
@@ -519,7 +556,7 @@ export const eventService = {
       .order("question_number", { ascending: true });
     
     if (error) throw error;
-    return data as unknown as EventQuestion[];
+    return data as EventQuestion[];
   },
 
   async getQuestionForNumber(eventId: string, questionNumber: number) {
@@ -534,53 +571,15 @@ export const eventService = {
     return data as EventQuestion;
   },
 
-  async getActiveEvent(venueId: string): Promise<Event> {
-    try {
-      console.log(`[EventService] 🔍 Getting ACTIVE event for venue_id: ${venueId}`);
-      
-      const { data, error } = await supabase
-        .from("events")
-        .select(`
-          *,
-          venues!inner(id, name, slug)
-        `)
-        .eq("venue_id", venueId)  // CRITICAL: Must filter by venue_id
-        .ilike("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        console.error("[EventService] ❌ Error getting active event:", error);
-        throw error;
-      }
-
-      if (!data) {
-        console.error("[EventService] ❌ No active event found for venue_id:", venueId);
-        throw new Error("No active event found for this venue");
-      }
-
-      console.log("[EventService] ✅ Found active event:", {
-        event_id: data.id,
-        event_name: data.name,
-        venue_id: data.venue_id,
-        status: data.status
-      });
-
-      // Flatten venue data
-      const venue = Array.isArray(data.venues) ? data.venues[0] : data.venues;
-      
-      return {
-        ...data,
-        draw_mode: data.draw_mode as "standalone" | "global" | "manual" | "auto" | "scheduled",
-        venue_name: venue?.name,
-        venue_slug: venue?.slug,
-        status: data.status as "draft" | "active" | "paused" | "finished" // Explicit cast
-      };
-    } catch (err) {
-      console.error("[EventService] ❌ Failed to get active event:", err);
-      throw err;
-    }
+  async getActiveEvent() {
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("status", "active")
+      .single();
+    
+    if (error) throw error;
+    return data as Event;
   },
 
   async getActiveOrLastFinished() {
@@ -660,40 +659,5 @@ export const eventService = {
     
     console.log(`[eventService] ✅ Loaded ${detailedQuestions.length} drawn questions for event ${eventId}`);
     return detailedQuestions;
-  },
-
-  async nextQuestion(eventId: string): Promise<void> {
-    try {
-      console.log(`[EventService] ⏭️ Advancing to next question for event: ${eventId}`);
-
-      const { data: event, error: eventError } = await supabase
-        .from("events")
-        .select("current_question_number")
-        .eq("id", eventId)
-        .single();
-
-      if (eventError) throw eventError;
-
-      const nextQuestionNum = (event?.current_question_number || 0) + 1;
-
-      // STOP if we reached 90
-      if (nextQuestionNum > 90) {
-        console.log(`[EventService] 🛑 Reached limit (90). Finishing event.`);
-        await supabase
-          .from("events")
-          .update({ status: "FINISHED" })
-          .eq("id", eventId);
-        return;
-      }
-
-      const { error } = await supabase.rpc("draw_next_number", {
-        p_event_id: eventId
-      });
-
-      if (error) throw error;
-    } catch (err) {
-      console.error("[EventService] ❌ Failed to advance to next question:", err);
-      throw err;
-    }
-  },
-}
+  }
+};
