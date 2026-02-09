@@ -21,6 +21,7 @@ export interface Event {
   draw_mode?: "standalone" | "global" | "manual" | "auto" | "scheduled";
   draw_session_id?: string | null;
   venue_name?: string; // Added for UI display
+  question_timer_seconds?: number; // Added field
 }
 
 export interface EventQuestion {

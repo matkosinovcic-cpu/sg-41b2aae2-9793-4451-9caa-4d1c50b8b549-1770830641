@@ -433,4 +433,36 @@ export async function createFreeTicket(eventId: string, venueId: string) {
   };
 }
 
+export async function getTicket(ticketId: string) {
+  try {
+    const { data, error } = await supabase
+      .from("tickets")
+      .select("*, ticket_questions(*)")
+      .eq("id", ticketId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("[TicketService] ❌ Failed to get ticket by ID:", error);
+    throw error;
+  }
+}
+
+export async function getTicketBySerial(serialNumber: string) {
+  try {
+    const { data, error } = await supabase
+      .from("tickets")
+      .select("*, ticket_questions(*)")
+      .eq("serial_number", serialNumber)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data as Ticket | null;
+  } catch (error) {
+    console.error("[TicketService] ❌ Failed to get ticket:", error);
+    throw error;
+  }
+}
+
 export default ticketService;

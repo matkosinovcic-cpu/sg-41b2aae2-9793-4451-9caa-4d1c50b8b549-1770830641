@@ -2,6 +2,7 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import * as eventService from "@/services/eventService";
+import type { Event } from "@/services/eventService"; // Import Type
 import * as venueService from "@/services/venueService";
 import * as ticketService from "@/services/ticketService";
 import * as answerService from "@/services/answerService";
@@ -11,18 +12,6 @@ import { OnboardingModal } from "@/components/OnboardingModal";
 import { AlertCircle, CheckCircle2, XCircle, Clock, Trophy, Loader2 } from "lucide-react";
 
 // Types
-interface Event {
-  id: string;
-  name: string;
-  status: "draft" | "active" | "paused" | "completed";
-  draw_mode: "standalone" | "global" | "manual" | "auto" | "scheduled";
-  current_question_number: number;
-  question_timer_seconds: number;
-  venue_id?: string;
-  venue_name?: string;
-  venue_slug?: string;
-}
-
 interface Ticket {
   id: string;
   serial_number: string;
@@ -293,9 +282,18 @@ export default function PlayPage() {
           // Check if player has a ticket by checking localStorage or session
           const player = getPlayer();
           if (player?.ticketId) {
-            const ticket = await ticketService.getTicket(player.ticketId);
-            if (ticket && ticket.event_id === activeEvent.id) {
-              setMyTicket(ticket);
+            const ticketData = await ticketService.getTicket(player.ticketId);
+            if (ticketData && ticketData.event_id === activeEvent.id) {
+              // Transform DB response to local Ticket interface
+              const ticketNumbers = ticketData.ticket_questions 
+                ? ticketData.ticket_questions.map((tq: any) => tq.question_number)
+                : [];
+                
+              setMyTicket({
+                id: ticketData.id,
+                serial_number: ticketData.serial_number,
+                ticket_numbers: ticketNumbers
+              });
             }
           }
         } catch (err) {
