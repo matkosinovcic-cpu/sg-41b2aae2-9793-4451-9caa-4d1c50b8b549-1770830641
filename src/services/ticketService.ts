@@ -20,7 +20,7 @@ export const ticketService = {
     const payload = {
       p_email: email,
       p_nickname: nickname,
-      p_limit: 1
+      p_limit: 4  // ✅ Changed from 1 to 4 for promo phase
     };
 
     console.log("[TicketService] Calling RPC:", rpcName);
@@ -54,7 +54,8 @@ export const ticketService = {
           id: t.id,
           serial: t.serial_number,
           has_numbers: Array.isArray(t.ticket_numbers) && t.ticket_numbers.length > 0,
-          numbers_count: t.numbers_count || (Array.isArray(t.ticket_numbers) ? t.ticket_numbers.length : 0)
+          numbers_count: t.numbers_count || (Array.isArray(t.ticket_numbers) ? t.ticket_numbers.length : 0),
+          first_5_numbers: t.ticket_numbers?.slice(0, 5) || []
         }));
         console.log("[TicketService] First 2 tickets preview:", preview);
       }
@@ -80,20 +81,34 @@ export const ticketService = {
 
   // Standard get ticket (needed for player.tsx)
   async getTicket(ticketId: string) {
+    console.log("[ticketService] getTicket called with ID:", ticketId);
+    
     const { data, error } = await supabase
       .from("tickets")
       .select("*")
       .eq("id", ticketId)
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error("[ticketService] ❌ getTicket error:", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
+      throw error;
+    }
+
+    if (!data) {
+      throw new Error("Ticket not found");
+    }
     
-    console.log("[ticketService] getTicket result:", {
+    console.log("[ticketService] ✅ getTicket result:", {
       id: data.id,
       serial: data.serial_number,
       has_numbers: Array.isArray(data.ticket_numbers),
       numbers_count: data.ticket_numbers?.length || 0,
-      numbers_preview: data.ticket_numbers?.slice(0, 5) || []
+      numbers: data.ticket_numbers
     });
     
     return data as Ticket;

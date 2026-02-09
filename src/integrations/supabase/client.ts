@@ -2,15 +2,47 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-// Read from environment variables instead of hardcoding tokens
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// ENV validation
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-  throw new Error('Missing Supabase environment variables. Please check your .env.local file.');
+// Debug logging (only in browser)
+if (typeof window !== "undefined") {
+  const isDebugMode = window.location.search.includes("debug=1");
+  
+  if (isDebugMode) {
+    console.log("[Supabase Client Debug]", {
+      url_present: !!SUPABASE_URL,
+      url_domain: SUPABASE_URL ? new URL(SUPABASE_URL).hostname : "MISSING",
+      anon_key_present: !!SUPABASE_ANON_KEY,
+      anon_key_last6: SUPABASE_ANON_KEY ? "..." + SUPABASE_ANON_KEY.slice(-6) : "MISSING"
+    });
+  }
+
+  // Fail-fast check
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error("[Supabase Client] ❌ ENV MISSING:", {
+      NEXT_PUBLIC_SUPABASE_URL: !!SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: !!SUPABASE_ANON_KEY
+    });
+  }
 }
 
-// Import the supabase client like this:
-// import { supabase } from "@/integrations/supabase/client";
+export const supabase = createClient<Database>(
+  SUPABASE_URL || "",
+  SUPABASE_ANON_KEY || ""
+);
 
-export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+// Export debug helper
+export const getSupabaseDebugInfo = () => {
+  if (typeof window === "undefined") return null;
+  
+  return {
+    hostname: window.location.hostname,
+    supabase_url_domain: SUPABASE_URL ? new URL(SUPABASE_URL).hostname : "MISSING",
+    supabase_url_last6: SUPABASE_URL ? "..." + SUPABASE_URL.slice(-6) : "MISSING",
+    anon_key_present: !!SUPABASE_ANON_KEY,
+    anon_key_last6: SUPABASE_ANON_KEY ? "..." + SUPABASE_ANON_KEY.slice(-6) : "MISSING",
+    client_ready: !!SUPABASE_URL && !!SUPABASE_ANON_KEY
+  };
+};

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-empty-object-type */
+ 
 export type Json =
   | string
   | number
@@ -448,20 +448,30 @@ export type Database = {
       ticket_questions: {
         Row: {
           id: string
+          question_id: string
           question_number: number
           ticket_id: string
         }
         Insert: {
           id?: string
+          question_id: string
           question_number: number
           ticket_id: string
         }
         Update: {
           id?: string
+          question_id?: string
           question_number?: number
           ticket_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "ticket_questions_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: false
+            referencedRelation: "questions"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ticket_questions_ticket_id_fkey"
             columns: ["ticket_id"]

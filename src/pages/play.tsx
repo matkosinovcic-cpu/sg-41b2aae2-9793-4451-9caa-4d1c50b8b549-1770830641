@@ -1,319 +1,178 @@
-import { useState, useEffect } from "react";
-import Head from "next/head";
 import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
+import { ticketService, Ticket } from "@/services/ticketService";
 import { eventService, Event } from "@/services/eventService";
-import { ticketService } from "@/services/ticketService";
-import { useToast } from "@/hooks/use-toast";
+import { getSupabaseDebugInfo } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Loader2, Ticket as TicketIcon, AlertCircle } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, AlertCircle, Ticket as TicketIcon } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
+import Head from "next/head";
 import { RegistrationModal } from "@/components/RegistrationModal";
-import { SEO } from "@/components/SEO";
-import { cn } from "@/lib/utils";
-import { supabase } from "@/integrations/supabase/client";
+import { OnboardingModal } from "@/components/OnboardingModal";
 
-export default function Play() {
+export default function PlayPage() {
   const router = useRouter();
-  const { toast } = useToast();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(""); // Ensure this exists
-  const [activeEvent, setActiveEvent] = useState<any>(null);
-  const [registrationOpen, setRegistrationOpen] = useState(false);
-  const [ticketClaimed, setTicketClaimed] = useState(false);
-  const [ticket, setTicket] = useState<any>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const { venue: venueSlug, debug } = router.query;
   
-  // Debug state
-  const [debugInfo, setDebugInfo] = useState({
-    venue_slug: "",
-    venue_id: "",
-    event_id: "",
-    event_name: "",
-    rpc_name: "",
-    rpc_params: "",
-    rpc_status: "",
-    tickets_created_count: 0,
-    player_id: "",
-    last_error: null
-  });
+  const [loadingEvent, setLoadingEvent] = useState(true);
+  const [event, setEvent] = useState<Event | null>(null);
+  const [ticket, setTicket] = useState<Ticket[] | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [showRegistration, setShowRegistration] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [envError, setEnvError] = useState(false);
+  const [timeoutError, setTimeoutError] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [lastRequest, setLastRequest] = useState<string>("");
 
+  const isDebugMode = debug === "1";
+
+  // ENV validation on mount
   useEffect(() => {
-    // Check for debug param
-    if (typeof window !== 'undefined') {
-      setShowDebug(window.location.search.includes('debug=1'));
+    if (typeof window !== "undefined") {
+      const info = getSupabaseDebugInfo();
+      setDebugInfo(info);
+      
+      if (!info?.client_ready) {
+        setEnvError(true);
+        console.error("[PlayPage] ❌ Supabase ENV missing");
+      }
     }
   }, []);
 
-  // Load active event on mount
+  // Load active event with timeout
   useEffect(() => {
+    if (!router.isReady || envError) {
+      if (envError) setLoadingEvent(false);
+      return;
+    }
+
     const loadActiveEvent = async () => {
+      const timeoutId = setTimeout(() => {
+        setTimeoutError(true);
+        setLoadingEvent(false);
+        console.error("[PlayPage] ⏱️ Timeout after 8s");
+      }, 8000);
+
       try {
-        setLoading(true);
+        setLastRequest("eventService.getActiveEvent");
+        if (isDebugMode) {
+          console.log("[PlayPage] Request: getActiveEvent");
+        }
+
+        // Fix: Removed venueSlug argument as getActiveEvent takes no args
+        const activeEvent = await eventService.getActiveEvent();
         
-        // STEP 1: Check URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        const eventIdParam = urlParams.get("eventId");
-        const venueSlugParam = urlParams.get("venue");
-
-        let resolvedEvent = null;
-        let resolvePath = "";
-        let venueInfo = { slug: "", id: "" };
-
-        // STEP 2: Resolve event
-        if (eventIdParam) {
-          // Direct event ID provided
-          console.log("[PLAY] Resolving by eventId:", eventIdParam);
-          const { data: event } = await supabase
-            .from("events")
-            .select("*, venues(id, slug, name)")
-            .eq("id", eventIdParam)
-            .single();
-          
-          if (event && !event.name?.startsWith("GLOBAL")) {
-            resolvedEvent = event;
-            resolvePath = "eventId";
-            if (event.venues) {
-              venueInfo = { 
-                slug: event.venues.slug || "", 
-                id: event.venues.id || "" 
-              };
-            }
-          }
-        } else if (venueSlugParam) {
-          // Venue slug provided - find active event for this venue
-          console.log("[PLAY] Resolving by venue slug:", venueSlugParam);
-          
-          // Find venue
-          const { data: venue } = await supabase
-            .from("venues")
-            .select("id, slug, name")
-            .eq("slug", venueSlugParam)
-            .single();
-
-          if (venue) {
-            venueInfo = { slug: venue.slug, id: venue.id };
-            
-            // Find active event for this venue (non-GLOBAL)
-            const { data: event } = await supabase
-              .from("events")
-              .select("*")
-              .eq("venue_id", venue.id)
-              .eq("status", "active")
-              .not("name", "like", "GLOBAL%")
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .single();
-
-            if (event) {
-              resolvedEvent = { ...event, venues: venue };
-              resolvePath = "venue_active";
-            }
-          }
-        } else {
-          // NO params - find any active non-GLOBAL event (legacy single event mode)
-          console.log("[PLAY] Resolving by active event (no params)");
-          const { data: event } = await supabase
-            .from("events")
-            .select("*, venues(id, slug, name)")
-            .eq("status", "active")
-            .not("name", "like", "GLOBAL%")
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single();
-
-          if (event) {
-            resolvedEvent = event;
-            resolvePath = "active_event";
-            if (event.venues) {
-              venueInfo = { 
-                slug: event.venues.slug || "", 
-                id: event.venues.id || "" 
-              };
-            }
-          }
+        clearTimeout(timeoutId);
+        
+        if (isDebugMode) {
+          console.log("[PlayPage] Response: getActiveEvent", {
+            success: !!activeEvent,
+            event_id: activeEvent?.id,
+            event_name: activeEvent?.name
+          });
         }
 
-        // STEP 3: Handle result
-        if (!resolvedEvent) {
-          console.error("[PLAY] ❌ No active event found - resolvePath:", resolvePath);
-          setError("Nema aktivnog kviza. Molimo pokušajte kasnije.");
-          setLoading(false);
-          return;
+        setEvent(activeEvent);
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        
+        if (isDebugMode) {
+          console.error("[PlayPage] Error: getActiveEvent", {
+            code: error.code,
+            message: error.message,
+            details: error.details
+          });
         }
 
-        console.log("[PLAY] ✅ Event resolved:", {
-          resolve_path: resolvePath,
-          event_id: resolvedEvent.id,
-          event_name: resolvedEvent.name,
-          venue_slug: venueInfo.slug,
-          venue_id: venueInfo.id
-        });
-
-        setActiveEvent(resolvedEvent);
-        setError("");
-      } catch (err: any) {
-        console.error("[PLAY] Error loading event:", err);
-        setError("Greška pri učitavanju kviza: " + (err.message || "Nepoznata greška"));
+        console.error("Error loading active event:", error);
       } finally {
-        setLoading(false);
+        clearTimeout(timeoutId);
+        setLoadingEvent(false);
       }
     };
 
     loadActiveEvent();
-  }, []);
+  }, [router.isReady, venueSlug, envError, isDebugMode]);
 
-  const handleClaimTicket = async (email: string, nickname: string) => {
-    if (!activeEvent) return;
-
-    // Save user info
-    localStorage.setItem("user_email", email);
-    localStorage.setItem("user_nickname", nickname);
-
-    // Update debug info
-    setDebugInfo(prev => ({ 
-      ...prev, 
-      rpc_name: "claim_free_tickets", 
-      rpc_params: JSON.stringify({ email, nickname, limit: 1 }) 
-    }));
-
-    try {
-      // 1. Check existing tickets via localStorage (simple check)
-      const existingTicket = localStorage.getItem(`ticket_${activeEvent.id}`);
-      
-      if (existingTicket) {
-        setTicket(JSON.parse(existingTicket));
-        setTicketClaimed(true);
-        return;
-      }
-
-      // 2. Claim Ticket via Service (RPC)
-      // Note: We use the simpler method that auto-finds active event
-      const result = await ticketService.createFreeTicket(
-        email, 
-        nickname, 
-        activeEvent.id // REQUIRED: Pass eventId
-      );
-
-      // Handle Result
-      const responseData = result as any;
-      const createdTickets = responseData.tickets || [];
-      const ticket = createdTickets[0] || null;
-
-      if (ticket) {
-        // Save to localStorage
-        localStorage.setItem(`ticket_${activeEvent.id}`, JSON.stringify(ticket));
-        
-        // Update State
-        setTicket(ticket);
-        setTicketClaimed(true);
-        setRegistrationOpen(false);
-
-        // Update Debug
-        setDebugInfo(prev => ({ 
-          ...prev, 
-          rpc_status: "success",
-          tickets_created_count: createdTickets.length,
-          player_id: responseData.player_id
-        }));
-
-        toast({
-          title: "Uspjeh!",
-          description: "Tvoj tiket je spreman.",
-        });
-
-        // Redirect to player view
-        router.push(`/player?ticket=${ticket.id}`);
-      } else {
-        throw new Error("No ticket returned from server");
-      }
-
-    } catch (err: any) {
-      console.error("❌ [PLAY] handleClaimTicket failed:", err);
-      
-      setDebugInfo(prev => ({ 
-        ...prev, 
-        rpc_status: "error",
-        last_error: err
-      }));
-
+  const handleRegistrationSuccess = (result: any) => {
+    if (result.success && result.tickets) {
+      setTicket(result.tickets);
+      setShowRegistration(false);
+      setShowOnboarding(true);
       toast({
-        title: "Greška",
-        description: err.message || "Neuspješna registracija.",
-        variant: "destructive",
+        title: "Uspješno!",
+        description: `Kreirano ${result.tickets.length} listića.`,
       });
-      
-      throw err;
     }
   };
 
-  const handleRegistrationSuccess = (data: any) => {
-    console.log("Registration success:", data);
-    setRegistrationOpen(false);
-    
-    // Check if we got tickets back
-    const responseData = data as any;
-    if (responseData && responseData.tickets && responseData.tickets.length > 0) {
-      const ticket = responseData.tickets[0];
-      setTicket(ticket);
-      setTicketClaimed(true);
-      
-      // Save to local storage
-      if (activeEvent) {
-        localStorage.setItem(`ticket_${activeEvent.id}`, JSON.stringify(ticket));
-      }
-      
-      // Redirect to player page
-      router.push(`/player?ticket=${ticket.id}`);
-    }
-  };
-
-  // Check if ticket is a winner (Client-side validation)
-  const checkWinner = (ticketNumbers: number[], drawnNumbers: number[]) => {
-    // GUARD: Ticket must have exactly 15 numbers
-    if (!ticketNumbers || ticketNumbers.length !== 15) {
-      console.warn("[PLAY] Winner Check Skipped: Ticket does not have 15 numbers", ticketNumbers);
-      return false;
-    }
-
-    // GUARD: Drawn numbers must be enough to potentially win
-    if (!drawnNumbers || drawnNumbers.length < 15) {
-      return false;
-    }
-
-    // Check full match (Legacy logic: all 15 numbers must be drawn)
-    const matches = ticketNumbers.filter(num => drawnNumbers.includes(num));
-    const isWinner = matches.length === 15;
-    
-    if (isWinner) {
-      console.log("[PLAY] 🏆 WINNER DETECTED! Full match:", matches);
-    }
-    
-    return isWinner;
-  };
-
-  if (loading) {
+  // ENV Error Screen
+  if (envError) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400">
-        <Loader2 className="h-12 w-12 text-white animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <Card className="w-full max-w-md border-red-200 shadow-xl">
+          <CardHeader>
+            <CardTitle className="text-red-500 flex items-center gap-2">
+              <AlertCircle className="h-6 w-6" />
+              Supabase ENV Missing
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              Supabase environment variables are missing in this environment.
+            </p>
+            <div className="bg-red-50 p-3 rounded text-sm text-red-700 font-mono">
+              <p>NEXT_PUBLIC_SUPABASE_URL</p>
+              <p>NEXT_PUBLIC_SUPABASE_ANON_KEY</p>
+            </div>
+            <p className="text-sm text-gray-500">
+              Set these in <strong>Softgen Settings → Environment</strong> for Preview.
+            </p>
+            {debugInfo && (
+              <div className="bg-gray-100 p-3 rounded text-xs font-mono space-y-1">
+                <p>hostname: {debugInfo.hostname}</p>
+                <p>supabase_url: {debugInfo.supabase_url_domain}</p>
+                <p>anon_key_present: {String(debugInfo.anon_key_present)}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
-  if (!activeEvent) {
+  // Timeout Error Screen
+  if (timeoutError) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-4">
-        <Card className="w-full max-w-md bg-white/90 backdrop-blur">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <Card className="w-full max-w-md border-orange-200 shadow-xl">
           <CardHeader>
-            <CardTitle className="text-center text-xl text-red-600 flex items-center justify-center gap-2">
+            <CardTitle className="text-orange-500 flex items-center gap-2">
               <AlertCircle className="h-6 w-6" />
-              Nema aktivnog eventa
+              Request Timeout
             </CardTitle>
-            <CardDescription className="text-center">
-              Trenutno nema aktivne igre. Molimo pokušajte kasnije.
-            </CardDescription>
           </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              Ne mogu dohvatiti podatke (timeout nakon 8s).
+            </p>
+            <p className="text-sm text-gray-500">
+              Otvori DevTools → Network i provjeri pozive prema *.supabase.co
+            </p>
+            <Button onClick={() => window.location.reload()} className="w-full">
+              Pokušaj ponovno
+            </Button>
+            {debugInfo && (
+              <div className="bg-gray-100 p-3 rounded text-xs font-mono space-y-1">
+                <p>hostname: {debugInfo.hostname}</p>
+                <p>supabase_url: {debugInfo.supabase_url_domain}</p>
+                <p>last_request: {lastRequest}</p>
+              </div>
+            )}
+          </CardContent>
         </Card>
       </div>
     );
@@ -321,156 +180,132 @@ export default function Play() {
 
   return (
     <>
-      <SEO title="Preuzmi Tiket - Pitalica Skitalica" />
-      
-      {showDebug && activeEvent && (
-        <div className="fixed top-0 left-0 right-0 bg-black/95 text-white text-xs p-4 z-50 font-mono overflow-auto max-h-96">
-          <div className="max-w-4xl mx-auto">
-            <h3 className="text-yellow-400 font-bold mb-2">🔍 DEBUG PANEL - Play Page</h3>
-            
-            <div className="grid grid-cols-2 gap-4">
-              {/* Event Resolution */}
-              <div className="border border-gray-700 p-2 rounded">
-                <div className="text-blue-400 font-bold mb-1">Event Resolution</div>
-                <div>venue_slug: {router.query.venue || "N/A"}</div>
-                <div>venue_id: {(activeEvent as any).venue_id || "N/A"}</div>
-                <div>resolved_event_id: {activeEvent.id}</div>
-                <div>event_name: {activeEvent.name}</div>
-                <div>resolve_path: {router.query.eventId ? "eventId" : router.query.venue ? "venue_active" : "default_active"}</div>
-              </div>
+      <Head>
+        <title>Igraj Pitalicu Skitalicu</title>
+      </Head>
 
-              {/* RPC Call Info */}
-              <div className="border border-gray-700 p-2 rounded">
-                <div className="text-green-400 font-bold mb-1">RPC Call Info</div>
-                <div>rpc_called: {ticketClaimed ? "true" : "false"}</div>
-                <div>rpc_name: claim_free_tickets</div>
-                <div>rpc_status: {error ? "ERROR" : ticketClaimed ? "SUCCESS" : "PENDING"}</div>
-                <div>tickets_created_count: {ticketClaimed ? "1" : "0"}</div>
-              </div>
-
-              {/* Ticket Numbers Source */}
-              <div className="border border-gray-700 p-2 rounded">
-                <div className="text-purple-400 font-bold mb-1">Ticket Numbers Source</div>
-                <div>ticket_numbers_source: ticket_questions (DB table)</div>
-                <div>expected_count: 15 unique numbers (1-90)</div>
-                <div>storage: ticket_questions.question_number</div>
-              </div>
-
-              {/* Error Details */}
-              {error && (
-                <div className="border border-red-700 p-2 rounded">
-                  <div className="text-red-400 font-bold mb-1">⚠️ Supabase Error</div>
-                  <div>message: {error}</div>
-                  {(error as any).code && <div>code: {(error as any).code}</div>}
-                  {(error as any).details && <div>details: {(error as any).details}</div>}
-                  {(error as any).hint && <div>hint: {(error as any).hint}</div>}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-2 text-gray-400 text-[10px]">
-              💡 This panel shows when ?debug=1 is in URL
-            </div>
+      <div className="min-h-screen bg-gray-100">
+        {/* Header */}
+        <div className="bg-white shadow-sm border-b">
+          <div className="container mx-auto px-4 py-4">
+            <h1 className="text-2xl font-bold text-center">Pitalica Skitalica</h1>
           </div>
         </div>
-      )}
 
-      <div className={cn("min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-4", showDebug && "pt-[420px]")}>
-        <div className="max-w-md mx-auto space-y-8 pt-10">
-          
-          <div className="text-center space-y-2">
-            <h1 className="text-4xl font-extrabold text-white drop-shadow-md">
-              PITALICA SKITALICA
-            </h1>
-            <p className="text-white/90 text-lg font-medium">
-              {activeEvent.name}
+        <main className="container mx-auto px-4 py-8">
+          {loadingEvent ? (
+            <div className="text-center py-8">
+              <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
+              <p className="text-gray-500">Učitavanje kviza...</p>
+            </div>
+          ) : !event ? (
+            <div className="text-center py-8">
+              <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600">
+                Nema aktivnog kviza na ovoj lokaciji. Pokušajte kasnije.
+              </p>
+              {isDebugMode && (
+                <p className="text-xs text-gray-400 mt-2">Venue: {venueSlug || "default"}</p>
+              )}
+            </div>
+          ) : !ticket ? (
+            <Card className="max-w-md mx-auto shadow-md">
+              <CardHeader>
+                <CardTitle className="text-center">Dobrodošli!</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-center text-gray-600">
+                  Registrirajte se i preuzmite svoje listiće
+                </p>
+                <Button 
+                  onClick={() => setShowRegistration(true)}
+                  className="w-full"
+                  size="lg"
+                >
+                  Preuzmi listiće
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-6 animate-in fade-in duration-500">
+              <div className="text-center">
+                <h2 className="text-xl font-bold mb-2">Vaši Listići</h2>
+                <Badge variant="outline">{ticket.length} listića</Badge>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {ticket.map((t) => (
+                  <Card 
+                    key={t.id}
+                    className="cursor-pointer hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
+                    onClick={() => router.push(`/player?ticket=${t.id}${debug ? '&debug=1' : ''}`)}
+                  >
+                    <CardHeader className="pb-3 bg-gray-50/50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <TicketIcon className="h-5 w-5 text-primary" />
+                          <span className="font-bold text-lg">{t.serial_number}</span>
+                        </div>
+                        <Badge variant="secondary">Klikni za igru</Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <div className="grid grid-cols-5 gap-2">
+                        {t.ticket_numbers?.sort((a, b) => a - b).slice(0, 15).map((num) => (
+                          <div
+                            key={num}
+                            className="aspect-square rounded bg-white border flex items-center justify-center text-sm font-bold text-gray-700 shadow-sm"
+                          >
+                            {num}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* Debug Panel */}
+        {isDebugMode && debugInfo && (
+          <div className="fixed bottom-4 right-4 bg-black/90 text-white p-4 rounded-lg text-xs font-mono max-w-sm space-y-1 z-50 shadow-2xl border border-gray-700">
+            <p className="font-bold text-yellow-400 mb-2 flex justify-between">
+              <span>🔍 DEBUG MODE</span>
+              <span className="text-gray-400 cursor-pointer" onClick={() => window.location.href = window.location.pathname}>✕</span>
             </p>
+            <p>hostname: <span className="text-green-300">{debugInfo.hostname}</span></p>
+            <p>supabase_url: <span className="text-blue-300">{debugInfo.supabase_url_domain}</span></p>
+            <p>url_masked: {debugInfo.supabase_url_last6}</p>
+            <p>anon_key: {debugInfo.anon_key_present ? "✅ PRESENT" : "❌ MISSING"}</p>
+            <p>key_masked: {debugInfo.anon_key_last6}</p>
+            <p>client_ready: {debugInfo.client_ready ? "✅ YES" : "❌ NO"}</p>
+            <p className="pt-2 border-t border-gray-600">last_request: <span className="text-yellow-300">{lastRequest}</span></p>
+            {event && (
+              <>
+                <p className="pt-2 border-t border-gray-600">event_id: {event.id.slice(0, 8)}...</p>
+                <p>event_name: {event.name}</p>
+              </>
+            )}
+            {ticket && <p>tickets_count: {ticket.length}</p>}
           </div>
+        )}
 
-          <Card className="bg-white/95 backdrop-blur shadow-xl border-0">
-            <CardHeader className="text-center pb-2">
-              <CardTitle className="text-2xl text-purple-700">
-                Preuzmi Svoj Tiket
-              </CardTitle>
-              <CardDescription>
-                Sudjeluj u igri i osvoji nagrade!
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6 pt-4">
-              
-              <div className="flex justify-center py-4">
-                <div className="relative">
-                  <div className="absolute inset-0 bg-purple-500 blur-xl opacity-20 rounded-full"></div>
-                  <TicketIcon className="w-24 h-24 text-purple-600 relative z-10" />
-                </div>
-              </div>
+        <RegistrationModal
+          open={showRegistration}
+          onOpenChange={setShowRegistration}
+          onSuccess={handleRegistrationSuccess}
+          eventId={event?.id || ""}
+          venueId={typeof venueSlug === "string" ? venueSlug : ""}
+        />
 
-              {!ticketClaimed ? (
-                <div className="space-y-4">
-                  <Button 
-                    size="lg" 
-                    className="w-full text-lg font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 shadow-lg transform transition active:scale-95"
-                    onClick={() => setRegistrationOpen(true)}
-                  >
-                    Registriraj se i preuzmi tiket
-                  </Button>
-                  <p className="text-xs text-center text-muted-foreground">
-                    *Potrebna je samo email adresa
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4 text-center">
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <p className="text-green-700 font-medium">
-                      ✅ Tiket uspješno preuzet!
-                    </p>
-                    <p className="text-sm text-green-600 mt-1">
-                      Serijski broj: <span className="font-mono font-bold">{ticket?.serial_number}</span>
-                    </p>
-                  </div>
-                  <Button 
-                    variant="outline" 
-                    className="w-full border-purple-200 text-purple-700 hover:bg-purple-50"
-                    onClick={() => router.push(`/player?ticket=${ticket?.id}`)}
-                  >
-                    Otvori moj tiket
-                  </Button>
-                </div>
-              )}
-
-            </CardContent>
-          </Card>
-          
-          <div className="text-center text-white/60 text-sm">
-            &copy; 2026 Pitalica Skitalica
-          </div>
-        </div>
+        <OnboardingModal
+          open={showOnboarding}
+          onOpenChange={setShowOnboarding}
+          onDismiss={() => setShowOnboarding(false)}
+        />
       </div>
-
-      {showDebug && (
-        <div className="fixed bottom-0 left-0 right-0 bg-black/90 text-white p-2 text-xs z-50 border-t border-white/20">
-          <div className="flex justify-between items-center">
-            <div>
-              <span className="font-bold">Build Info:</span> 
-              {" "}Commit: {process.env.GIT_COMMIT?.substring(0, 7) || "local"}
-              {" | "}Build: {new Date(process.env.BUILD_TIME || Date.now()).toLocaleString()}
-            </div>
-            <div>
-              <span className="font-bold">Supabase:</span> 
-              {" "}...{process.env.NEXT_PUBLIC_SUPABASE_URL?.split(".")[0].slice(-6) || "N/A"}
-              {" | "}ENV: {process.env.ENV_NAME || "dev"}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <RegistrationModal
-        open={registrationOpen}
-        onOpenChange={setRegistrationOpen}
-        onSuccess={handleRegistrationSuccess}
-        eventId={activeEvent.id}
-        venueId={(activeEvent as any).venue_id || ""}
-      />
     </>
   );
 }

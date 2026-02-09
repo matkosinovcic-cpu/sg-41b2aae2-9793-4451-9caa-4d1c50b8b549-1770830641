@@ -158,7 +158,6 @@ export const eventService = {
     const tickets = [];
     
     for (let i = 0; i < count; i++) {
-      // Generate truly unique serial number with timestamp + random component + index
       const timestamp = Date.now();
       const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, "0");
       const serialNumber = `T${timestamp}-${randomPart}-${i.toString().padStart(4, "0")}`;
@@ -179,9 +178,20 @@ export const eventService = {
       
       if (ticketError) throw ticketError;
 
-      const ticketQuestions = Array.from(numbers).map(num => ({
+      // Get question_ids for these numbers from event_questions
+      const { data: eventQuestions, error: eqError } = await supabase
+        .from("event_questions")
+        .select("question_number, question_id")
+        .eq("event_id", eventId)
+        .in("question_number", Array.from(numbers));
+      
+      if (eqError) throw eqError;
+
+      // Create ticket_questions with question_id mapping
+      const ticketQuestions = eventQuestions.map(eq => ({
         ticket_id: ticket.id,
-        question_number: num
+        question_number: eq.question_number,
+        question_id: eq.question_id
       }));
 
       const { error: questionsError } = await supabase
@@ -626,23 +636,29 @@ export const eventService = {
   },
 
   async getDrawnQuestions(eventId: string) {
-    const { data, error } = await supabase
-      .from("event_questions")
-      .select("question_number, questions(id, text, correct_answer)")
-      .eq("event_id", eventId)
-      .eq("drawn", true);
+    console.log("[eventService] getDrawnQuestions called for event:", eventId);
     
-    if (error) throw error;
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("drawn_numbers")
+      .eq("id", eventId)
+      .single();
     
-    // Transform to simple map: question_number -> correct_answer
-    const correctAnswersMap: Record<number, boolean> = {};
-    data.forEach((item: any) => {
-      if (item.questions) {
-        correctAnswersMap[item.question_number] = item.questions.correct_answer;
-      }
+    if (eventError) {
+      console.error("[eventService] ❌ getDrawnQuestions event error:", eventError);
+      throw eventError;
+    }
+
+    const drawnNumbers = event?.drawn_numbers || [];
+    console.log("[eventService] ✅ Drawn numbers:", drawnNumbers);
+
+    // Return simple map: question_number -> true if drawn
+    const drawnMap: Record<number, boolean> = {};
+    drawnNumbers.forEach((num: number) => {
+      drawnMap[num] = true;
     });
     
-    return correctAnswersMap;
+    return drawnMap;
   },
 
   /**
