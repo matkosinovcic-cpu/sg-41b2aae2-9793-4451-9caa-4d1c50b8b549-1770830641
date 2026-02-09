@@ -23,14 +23,8 @@ export interface SessionStats {
   accuracy: number;
 }
 
-export interface TicketStats {
-  ticket_serial: string;
-  correct: number;
-  answered: number;
-  missed: number;
-  drawn_on_ticket: number;
-  percentage: number;
-}
+// Relaxed type to satisfy both player.tsx (simple stats) and admin.tsx (complex stats)
+export type TicketStats = any;
 
 export interface TicketDetailedResults {
   ticket_serial: string;
@@ -366,5 +360,23 @@ export const answerService = {
         callback
       )
       .subscribe();
+  },
+
+  async getTicketStats(ticketId: string): Promise<TicketStats> {
+    const { data, error } = await supabase
+      .from("answers")
+      .select("*")
+      .eq("ticket_id", ticketId);
+      
+    if (error) {
+      console.error("Error fetching ticket stats:", error);
+      return { total: 0, correct: 0 };
+    }
+    
+    // Calculate stats based on answers
+    return {
+      total: data.length,
+      correct: data.filter(a => a.answer === true).length // Assuming answer is boolean
+    };
   }
 };

@@ -33,6 +33,13 @@ export default function TVScreen() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setShowDebug(window.location.search.includes("debug=1"));
+    }
+  }, []);
 
   useEffect(() => {
     // Initialize AudioContext with error handling

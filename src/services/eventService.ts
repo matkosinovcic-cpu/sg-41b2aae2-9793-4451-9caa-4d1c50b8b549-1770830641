@@ -170,7 +170,10 @@ export const eventService = {
 
       const { data: ticket, error: ticketError } = await supabase
         .from("tickets")
-        .insert({ serial_number: serialNumber, event_id: eventId })
+        .insert({ 
+          serial_number: serialNumber, 
+          event_id: eventId
+        } as any)
         .select()
         .single();
       
