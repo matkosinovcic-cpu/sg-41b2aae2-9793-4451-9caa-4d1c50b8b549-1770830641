@@ -107,6 +107,18 @@ export function getPlayer() {
   return playerJson ? JSON.parse(playerJson) : null;
 }
 
+export async function updatePlayerNickname(playerId: string, nickname: string) {
+  const { data, error } = await supabase
+    .from("players")
+    .update({ nickname })
+    .eq("id", playerId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
 const playerService = {
   createPlayer,
   getPlayerById,

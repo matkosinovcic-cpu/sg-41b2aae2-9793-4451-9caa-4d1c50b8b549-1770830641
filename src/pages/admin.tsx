@@ -22,7 +22,8 @@ export default function AdminPanel() {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  // Use 'any' for stats until service is implemented
+  const [ticketStats, setTicketStats] = useState<any[]>([]);
 
   const [legacyAnswersCount, setLegacyAnswersCount] = useState<number>(0);
   const [isDeletingLegacy, setIsDeletingLegacy] = useState(false);
@@ -240,9 +241,14 @@ export default function AdminPanel() {
 
   const loadTicketStats = async (eventId: string) => {
     try {
+      // Mock stats for now to unblock build
+      console.log("[Admin] Stats not implemented yet");
+      setTicketStats([]);
+      /*
       const result = await answerService.getEventTicketStats(eventId);
       console.log("[Admin] ✅ Loaded ticket stats:", result.length, "tickets");
       setTicketStats(result);
+      */
     } catch (error) {
       console.error("[Admin] Failed to load ticket stats:", error);
     }

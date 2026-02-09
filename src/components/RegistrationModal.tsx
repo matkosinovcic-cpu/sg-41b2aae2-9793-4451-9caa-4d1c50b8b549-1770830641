@@ -1,12 +1,5 @@
 /**
  * Registration Modal - Minimal player registration before ticket generation
- * 
- * Fields:
- * - Nickname (required)
- * - Email (required)
- * - Confirm Email (required, must match)
- * - Age 18+ checkbox (required)
- * - Accept rules checkbox (required)
  */
 
 import { useState, useEffect } from "react";
@@ -22,21 +15,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, UserPlus } from "lucide-react";
-import { claimFreeTickets } from "@/services/ticketService";
+import { createFreeTicket } from "@/services/ticketService";
 
 interface RegistrationSuccessData {
   email: string;
   nickname: string;
-  userId: string;
-  sessionId: string;
-  tickets: any[];
-  totalTickets: number;
+  tickets: any[]; // Using any to be flexible with backend response
 }
 
 interface RegistrationModalProps {
   open: boolean;
-  eventId: string; // CRITICAL: Event ID for ticket creation
-  venueId: string; // ✅ Added venueId
+  eventId: string;
+  venueId: string;
   onSuccess: (data: RegistrationSuccessData) => void;
   onCancel: () => void;
 }
@@ -44,7 +34,7 @@ interface RegistrationModalProps {
 export function RegistrationModal({
   open,
   eventId,
-  venueId, // ✅ Destructure venueId
+  venueId,
   onSuccess,
   onCancel,
 }: RegistrationModalProps) {
@@ -54,158 +44,96 @@ export function RegistrationModal({
   const [isAdult, setIsAdult] = useState(false);
   const [acceptRules, setAcceptRules] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<{
+  
+  // Custom error state for detailed reporting
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<any>(null);
+  
+  // Field validation errors
+  const [fieldErrors, setFieldErrors] = useState<{
     nickname?: string;
     email?: string;
     confirmEmail?: string;
     checkboxes?: string;
-    general?: string;
   }>({});
 
-  // DEBUG: Log eventId prop on mount and when it changes
+  // Reset state when modal opens
   useEffect(() => {
-    console.log("[RegistrationModal] 🎯 STEP 12: Received eventId prop:", eventId);
-    console.log("[RegistrationModal] 🎯 STEP 12.1: eventId type:", typeof eventId);
-    console.log("[RegistrationModal] 🎯 STEP 12.2: eventId length:", eventId?.length);
-  }, [eventId]);
+    if (open) {
+      setSubmitError(null);
+      setErrorDetails(null);
+    }
+  }, [open]);
 
-  // Real-time validation
   const validateFields = () => {
-    const newErrors: typeof errors = {};
+    const newErrors: typeof fieldErrors = {};
 
-    // Nickname validation
-    if (!nickname.trim()) {
-      newErrors.nickname = "Nadimak je obavezan";
-    } else if (nickname.trim().length < 2) {
-      newErrors.nickname = "Nadimak mora imati minimalno 2 znaka";
-    } else if (nickname.trim().length > 50) {
-      newErrors.nickname = "Nadimak može imati maksimalno 50 znakova";
-    }
+    if (!nickname.trim()) newErrors.nickname = "Nadimak je obavezan";
+    else if (nickname.trim().length < 2) newErrors.nickname = "Min 2 znaka";
 
-    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email.trim()) {
-      newErrors.email = "Email je obavezan";
-    } else if (!emailRegex.test(email.trim())) {
-      newErrors.email = "Email nije valjan";
-    }
+    if (!email.trim()) newErrors.email = "Email je obavezan";
+    else if (!emailRegex.test(email.trim())) newErrors.email = "Email nije valjan";
 
-    // Confirm email validation
-    if (!confirmEmail.trim()) {
-      newErrors.confirmEmail = "Ponovi email";
-    } else if (email.trim() !== confirmEmail.trim()) {
-      newErrors.confirmEmail = "Email se ne podudara";
-    }
+    if (email.trim() !== confirmEmail.trim()) newErrors.confirmEmail = "Email se ne podudara";
 
-    // Checkboxes validation
-    if (!isAdult || !acceptRules) {
-      newErrors.checkboxes = "Moraš prihvatiti oba uvjeta";
-    }
+    if (!isAdult || !acceptRules) newErrors.checkboxes = "Moraš prihvatiti uvjete";
 
-    setErrors(newErrors);
+    setFieldErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrors({});
+    setSubmitError(null);
+    setErrorDetails(null);
 
-    // Validate all fields
-    if (!validateFields()) {
-      return;
-    }
+    if (!validateFields()) return;
 
     setLoading(true);
 
-    // Normalize email before sending to backend - MOVED UP
-    const normalizedEmail = email.trim().toLowerCase();
-    const trimmedNickname = nickname.trim();
-
     try {
-      console.log("[RegistrationModal] 🎟️ STEP 13: Claiming free tickets atomically...");
-      console.log("[RegistrationModal] 📋 STEP 13.1: Parameters:", {
+      console.log("[RegistrationModal] 🎫 Claiming ticket...", { eventId, venueId, email, nickname });
+
+      // Call service with explicit credentials
+      const ticket = await createFreeTicket(
         eventId,
         venueId,
-        email: normalizedEmail,
-        nickname: trimmedNickname,
-        limit: 4
-      });
-
-      // ATOMIC: Call RPC to claim tickets
-      const result = await claimFreeTickets(
-        eventId,
-        venueId, // ✅ Pass venueId from props
-        normalizedEmail,
-        trimmedNickname,
-        4
+        email.trim().toLowerCase(),
+        nickname.trim()
       );
 
-      console.log("[RegistrationModal] ✅ STEP 14: Tickets claimed successfully!");
-      console.log("[RegistrationModal] 🎫 STEP 14.1: Claimed tickets details:", {
-        count: result.tickets.length,
-        eventId: result.event_id,
-        eventName: result.event_name,
-        venueName: result.venue_name,
-        tickets: result.tickets.map((t: any) => ({
-          id: t.id,
-          serial: t.serial_number,
-          event_id: t.event_id
-        }))
-      });
+      console.log("[RegistrationModal] ✅ Success:", ticket);
 
-      // Store session info in localStorage
-      if (typeof window !== "undefined") {
-        localStorage.setItem("ps_player_email", normalizedEmail);
-        localStorage.setItem("ps_player_nickname", trimmedNickname);
-        localStorage.setItem("ps_user_id", result.user_id);
-        localStorage.setItem("ps_session_id", result.session_id);
-      }
+      // Save to localStorage
+      localStorage.setItem("playerEmail", email.trim().toLowerCase());
+      localStorage.setItem("playerNickname", nickname.trim());
 
-      // Success - close modal and notify parent
       onSuccess({
-        email: normalizedEmail,
-        nickname: trimmedNickname,
-        userId: result.user_id,
-        sessionId: result.session_id,
-        tickets: result.tickets,
-        totalTickets: result.total_tickets,
+        email: email.trim().toLowerCase(),
+        nickname: nickname.trim(),
+        tickets: [ticket]
       });
-
-    } catch (err) {
-      console.error("[RegistrationModal] ❌ STEP 15: Registration failed:", err);
       
-      // User-friendly error messages
-      let errorMessage = "Greška pri registraciji. Pokušajte ponovno.";
+    } catch (err: any) {
+      console.error("[RegistrationModal] ❌ Error:", err);
       
-      if (err instanceof Error) {
-        if (err.message.includes("NO_ACTIVE_EVENT")) {
-          errorMessage = "Trenutno nema aktivnog eventa. Pokušajte kasnije.";
-        } else if (err.message.includes("duplicate key") || err.message.includes("already exists")) {
-          errorMessage = "Email je već registriran. Koristite drugi email ili kontaktirajte podršku.";
-        } else if (err.message.includes("network") || err.message.includes("timeout")) {
-          errorMessage = "Problem s internetskom vezom. Provjerite vezu i pokušajte ponovno.";
-        } else {
-          errorMessage = err.message;
-        }
-      }
+      const message = err?.message || "Došlo je do greške pri preuzimanju tiketa.";
+      setSubmitError(message);
       
-      setErrors({
-        general: errorMessage
+      setErrorDetails({
+        code: err?.code || "UNKNOWN",
+        details: err?.details || null,
+        hint: err?.hint || null,
+        raw: err
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const isFormValid =
-    nickname.trim().length >= 2 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) &&
-    email.trim() === confirmEmail.trim() &&
-    isAdult &&
-    acceptRules;
-
   return (
-    <Dialog open={open} onOpenChange={(open) => !open && !loading && onCancel()}>
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && !loading && onCancel()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold text-center flex items-center justify-center gap-2">
@@ -213,165 +141,93 @@ export function RegistrationModal({
             Brza registracija
           </DialogTitle>
           <DialogDescription className="text-center">
-            Upiši osnovne podatke da bi preuzeo tiket
+            Upiši podatke za preuzimanje tiketa
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
-          {/* Nickname */}
-          <div className="space-y-2">
-            <Label htmlFor="nickname">
-              Nadimak <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="nickname"
-              type="text"
-              placeholder="Tvoj nadimak"
-              value={nickname}
-              onChange={(e) => {
-                setNickname(e.target.value);
-                if (errors.nickname) {
-                  setErrors({ ...errors, nickname: undefined });
-                }
-              }}
-              disabled={loading}
-              maxLength={50}
-            />
-            {errors.nickname && (
-              <p className="text-sm text-destructive">{errors.nickname}</p>
+        {submitError && (
+          <div className="rounded-lg bg-red-50 border border-red-200 p-4 mb-4">
+            <p className="text-sm font-bold text-red-800 mb-1">❌ Greška: {submitError}</p>
+            {errorDetails && (
+              <details className="mt-2">
+                <summary className="text-xs font-mono text-red-600 cursor-pointer">Detalji greške (za developera)</summary>
+                <div className="mt-1 text-[10px] font-mono bg-red-100 p-2 rounded overflow-auto max-h-32">
+                  <div>Code: {errorDetails.code}</div>
+                  {errorDetails.details && <div>Details: {errorDetails.details}</div>}
+                  {errorDetails.hint && <div>Hint: {errorDetails.hint}</div>}
+                </div>
+              </details>
             )}
           </div>
+        )}
 
-          {/* Email */}
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="email">
-              Email <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="nickname">Nadimak *</Label>
+            <Input
+              id="nickname"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              disabled={loading}
+            />
+            {fieldErrors.nickname && <p className="text-xs text-red-500">{fieldErrors.nickname}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="email">Email *</Label>
             <Input
               id="email"
               type="email"
-              placeholder="tvoj@email.com"
               value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                if (errors.email) {
-                  setErrors({ ...errors, email: undefined });
-                }
-              }}
+              onChange={(e) => setEmail(e.target.value)}
               disabled={loading}
             />
-            {errors.email && (
-              <p className="text-sm text-destructive">{errors.email}</p>
-            )}
+            {fieldErrors.email && <p className="text-xs text-red-500">{fieldErrors.email}</p>}
           </div>
 
-          {/* Confirm Email */}
           <div className="space-y-2">
-            <Label htmlFor="confirmEmail">
-              Ponovi email <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="confirmEmail">Ponovi Email *</Label>
             <Input
               id="confirmEmail"
               type="email"
-              placeholder="Ponovi email"
               value={confirmEmail}
-              onChange={(e) => {
-                setConfirmEmail(e.target.value);
-                if (errors.confirmEmail) {
-                  setErrors({ ...errors, confirmEmail: undefined });
-                }
-              }}
+              onChange={(e) => setConfirmEmail(e.target.value)}
               disabled={loading}
             />
-            {errors.confirmEmail && (
-              <p className="text-sm text-destructive">{errors.confirmEmail}</p>
-            )}
+            {fieldErrors.confirmEmail && <p className="text-xs text-red-500">{fieldErrors.confirmEmail}</p>}
           </div>
 
-          {/* Checkboxes */}
           <div className="space-y-3 pt-2">
-            <div className="flex items-start gap-3">
-              <Checkbox
-                id="age-check"
-                checked={isAdult}
-                onCheckedChange={(checked) => {
-                  setIsAdult(checked === true);
-                  if (errors.checkboxes) {
-                    setErrors({ ...errors, checkboxes: undefined });
-                  }
-                }}
+            <div className="flex items-center gap-2">
+              <Checkbox 
+                id="age" 
+                checked={isAdult} 
+                onCheckedChange={(c) => setIsAdult(c === true)}
                 disabled={loading}
               />
-              <Label
-                htmlFor="age-check"
-                className="text-sm font-normal leading-tight cursor-pointer"
-              >
-                Imam 18+ godina
-              </Label>
+              <Label htmlFor="age" className="cursor-pointer">Imam 18+ godina</Label>
             </div>
-
-            <div className="flex items-start gap-3">
-              <Checkbox
-                id="rules-check"
-                checked={acceptRules}
-                onCheckedChange={(checked) => {
-                  setAcceptRules(checked === true);
-                  if (errors.checkboxes) {
-                    setErrors({ ...errors, checkboxes: undefined });
-                  }
-                }}
-                disabled={loading}
-              />
-              <Label
-                htmlFor="rules-check"
-                className="text-sm font-normal leading-tight cursor-pointer"
-              >
-                Prihvaćam pravila igre
-              </Label>
-            </div>
-
-            {errors.checkboxes && (
-              <p className="text-sm text-destructive">{errors.checkboxes}</p>
-            )}
             
-            {errors.general && (
-              <p className="text-sm text-destructive font-medium bg-destructive/10 p-2 rounded text-center">
-                {errors.general}
-              </p>
-            )}
+            <div className="flex items-center gap-2">
+              <Checkbox 
+                id="rules" 
+                checked={acceptRules} 
+                onCheckedChange={(c) => setAcceptRules(c === true)}
+                disabled={loading}
+              />
+              <Label htmlFor="rules" className="cursor-pointer">Prihvaćam pravila</Label>
+            </div>
+            
+            {fieldErrors.checkboxes && <p className="text-xs text-red-500">{fieldErrors.checkboxes}</p>}
           </div>
 
-          {/* Submit Button */}
           <Button
             type="submit"
-            disabled={!isFormValid || loading}
-            className="w-full h-12 text-lg font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-            size="lg"
+            className="w-full bg-gradient-to-r from-purple-600 to-pink-600"
+            disabled={loading}
           >
-            {loading ? (
-              <>
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                Registracija...
-              </>
-            ) : (
-              <>
-                <UserPlus className="mr-2 h-5 w-5" />
-                Registriraj se i preuzmi tiket
-              </>
-            )}
+            {loading ? <Loader2 className="animate-spin h-5 w-5" /> : "Registriraj se i preuzmi tiket"}
           </Button>
-
-          {/* Cancel button (optional - only if user wants to go back) */}
-          {!loading && (
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onCancel}
-              className="w-full"
-            >
-              Odustani
-            </Button>
-          )}
         </form>
       </DialogContent>
     </Dialog>

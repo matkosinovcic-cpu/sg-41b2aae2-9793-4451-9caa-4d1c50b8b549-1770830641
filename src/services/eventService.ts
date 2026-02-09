@@ -536,19 +536,15 @@ export const eventService = {
 
   async getActiveEvent(venueId: string): Promise<Event> {
     try {
-      console.log(`[EventService] 🔍 Getting active event for venue: ${venueId}`);
-
+      console.log(`[EventService] 🔍 Getting ACTIVE event for venue_id: ${venueId}`);
+      
       const { data, error } = await supabase
         .from("events")
         .select(`
           *,
-          venues!inner (
-            id,
-            name,
-            slug
-          )
+          venues!inner(id, name, slug)
         `)
-        .eq("venue_id", venueId)  // ← CRITICAL: Filter by venue_id
+        .eq("venue_id", venueId)  // CRITICAL: Must filter by venue_id
         .ilike("status", "active")
         .order("created_at", { ascending: false })
         .limit(1)
@@ -560,21 +556,26 @@ export const eventService = {
       }
 
       if (!data) {
-        console.log("[EventService] ⚠️ No active event found for venue:", venueId);
+        console.error("[EventService] ❌ No active event found for venue_id:", venueId);
         throw new Error("No active event found for this venue");
       }
 
-      console.log("[EventService] ✅ Active event found:", data);
+      console.log("[EventService] ✅ Found active event:", {
+        event_id: data.id,
+        event_name: data.name,
+        venue_id: data.venue_id,
+        status: data.status
+      });
 
       // Flatten venue data
       const venue = Array.isArray(data.venues) ? data.venues[0] : data.venues;
-
+      
       return {
         ...data,
-        status: data.status as "draft" | "active" | "paused" | "finished",
         draw_mode: data.draw_mode as "standalone" | "global" | "manual" | "auto" | "scheduled",
         venue_name: venue?.name,
         venue_slug: venue?.slug,
+        status: data.status as "draft" | "active" | "paused" | "finished" // Explicit cast
       };
     } catch (err) {
       console.error("[EventService] ❌ Failed to get active event:", err);
@@ -659,5 +660,40 @@ export const eventService = {
     
     console.log(`[eventService] ✅ Loaded ${detailedQuestions.length} drawn questions for event ${eventId}`);
     return detailedQuestions;
-  }
-};
+  },
+
+  async nextQuestion(eventId: string): Promise<void> {
+    try {
+      console.log(`[EventService] ⏭️ Advancing to next question for event: ${eventId}`);
+
+      const { data: event, error: eventError } = await supabase
+        .from("events")
+        .select("current_question_number")
+        .eq("id", eventId)
+        .single();
+
+      if (eventError) throw eventError;
+
+      const nextQuestionNum = (event?.current_question_number || 0) + 1;
+
+      // STOP if we reached 90
+      if (nextQuestionNum > 90) {
+        console.log(`[EventService] 🛑 Reached limit (90). Finishing event.`);
+        await supabase
+          .from("events")
+          .update({ status: "FINISHED" })
+          .eq("id", eventId);
+        return;
+      }
+
+      const { error } = await supabase.rpc("draw_next_number", {
+        p_event_id: eventId
+      });
+
+      if (error) throw error;
+    } catch (err) {
+      console.error("[EventService] ❌ Failed to advance to next question:", err);
+      throw err;
+    }
+  },
+}

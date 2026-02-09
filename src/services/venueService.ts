@@ -32,15 +32,34 @@ export async function getVenueById(id: string) {
 }
 
 export async function getVenueBySlug(slug: string) {
-  const { data, error } = await supabase
-    .from("venues")
-    .select("*")
-    .eq("slug", slug)
-    .single();
+  try {
+    console.log(`[VenueService] 🔍 Fetching venue by slug: "${slug}"`);
+    
+    const { data, error } = await supabase
+      .from("venues")
+      .select("*")
+      .eq("slug", slug)
+      .single();
 
-  if (error) {
-    console.error("[VENUE SERVICE] Error fetching venue by slug:", error);
+    if (error) {
+      console.error("[VenueService] ❌ Error fetching venue by slug:", error);
+      return null;
+    }
+
+    if (!data) {
+      console.error("[VenueService] ❌ No venue found for slug:", slug);
+      return null;
+    }
+
+    console.log("[VenueService] ✅ Found venue:", {
+      id: data.id,
+      name: data.name,
+      slug: data.slug
+    });
+
+    return data;
+  } catch (err) {
+    console.error("[VenueService] ❌ Exception fetching venue by slug:", err);
     return null;
   }
-  return data;
 }

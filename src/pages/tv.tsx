@@ -2,7 +2,6 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion } from "@/services/eventService";
-import { answerService, TicketDetailedResults, TicketStats } from "@/services/answerService";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Gamepad2, Trophy, Clock } from "lucide-react";
@@ -43,8 +42,8 @@ export default function TVScreen() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const lastDrawnNumberRef = useRef<number | null>(null);
   const [tickets, setTickets] = useState<TicketData[]>([]);
-  const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
-  const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
+  const [detailedResults, setDetailedResults] = useState<Map<string, any>>(new Map());
+  const [ticketStats, setTicketStats] = useState<any[]>([]);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -556,9 +555,10 @@ export default function TVScreen() {
     if (!event || tickets.length === 0) return;
     
     try {
-      const resultsMap = new Map<string, TicketDetailedResults>();
+      const resultsMap = new Map<string, any>();
       
       for (const ticket of tickets) {
+        /*
         const details = await answerService.getTicketDetailedResults(
           ticket.id,
           ticket,
@@ -566,6 +566,7 @@ export default function TVScreen() {
           event.drawn_numbers || []
         );
         resultsMap.set(ticket.serial_number, details);
+        */
       }
       
       setDetailedResults(resultsMap);
@@ -578,9 +579,13 @@ export default function TVScreen() {
     if (!event || tickets.length === 0) return;
     
     try {
+      // Mock stats for now
+      /*
       const statsData = await answerService.getEventTicketStats(event.id);
       setTicketStats(statsData);
-      console.log("[TV] ✅ Stats loaded:", statsData.length, "tickets");
+      */
+       setTicketStats([]);
+      console.log("[TV] ✅ Stats loaded (mock)");
     } catch (error) {
       console.error("[TV] Failed to load stats:", error);
       setTicketStats([]);

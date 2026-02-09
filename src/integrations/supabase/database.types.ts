@@ -473,6 +473,7 @@ export type Database = {
       }
       tickets: {
         Row: {
+          claimed_at: string | null
           created_at: string | null
           event_id: string
           id: string
@@ -480,9 +481,11 @@ export type Database = {
           player_id: string | null
           serial_number: string
           session_id: string | null
+          ticket_numbers: number[] | null
           venue_id: string
         }
         Insert: {
+          claimed_at?: string | null
           created_at?: string | null
           event_id: string
           id?: string
@@ -490,9 +493,11 @@ export type Database = {
           player_id?: string | null
           serial_number: string
           session_id?: string | null
+          ticket_numbers?: number[] | null
           venue_id: string
         }
         Update: {
+          claimed_at?: string | null
           created_at?: string | null
           event_id?: string
           id?: string
@@ -500,6 +505,7 @@ export type Database = {
           player_id?: string | null
           serial_number?: string
           session_id?: string | null
+          ticket_numbers?: number[] | null
           venue_id?: string
         }
         Relationships: [
@@ -581,15 +587,15 @@ export type Database = {
             }
             Returns: Json
           }
-        | {
-            Args: {
-              p_email: string
-              p_limit: number
-              p_nickname: string
-              p_venue_id: string
-            }
-            Returns: Json
-          }
+      claim_free_tickets_v2: {
+        Args: {
+          p_email: string
+          p_limit?: number
+          p_nickname: string
+          p_venue_id: string
+        }
+        Returns: Json
+      }
       claim_free_tickets_v3: {
         Args: {
           p_email: string

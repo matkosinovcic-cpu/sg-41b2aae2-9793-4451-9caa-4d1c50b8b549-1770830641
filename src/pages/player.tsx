@@ -1,8 +1,10 @@
 import { SEO } from "@/components/SEO";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
-import { answerService } from "@/services/answerService";
-import ticketService from "@/services/ticketService";
+import Head from "next/head";
+import * as ticketService from "@/services/ticketService";
+import { getPlayer } from "@/services/playerService";
+import * as answerService from "@/services/answerService";
 import { Ticket as TicketIcon, Check, X, AlertCircle, Trophy, Loader2, RefreshCw, Plus, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -17,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Event } from "@/services/eventService";
 import { eventService } from "@/services/eventService";
 import { resolveVenue, storeVenue } from "@/lib/venueHelper";
+import { Separator } from "@/components/ui/separator";
 
 // Interface definitions
 interface Question {
@@ -1561,7 +1564,7 @@ export default function PlayerPage() {
               <span className="font-bold">🔍 DEBUG:</span>
               <span>query={String(router.query.venue || "null")}</span>
               <span>resolved={venueSlug || "null"}</span>
-              <span>stored={typeof window !== "undefined" ? localStorage.getItem("ps_venue") || "null" : "null"}</span>
+              <span>stored={typeof window !== "undefined" ? localStorage.getItem("ps_venue") : null}</span>
               <span>isReady={String(router.isReady)}</span>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
