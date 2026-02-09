@@ -17,22 +17,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, UserPlus } from "lucide-react";
 import { createFreeTicket } from "@/services/ticketService";
 
-interface RegistrationSuccessData {
+export interface RegistrationSuccessData {
   email: string;
   nickname: string;
-  tickets: any[]; // Using any to be flexible with backend response
+  tickets: any[]; 
 }
 
 interface RegistrationModalProps {
   open: boolean;
+  onOpenChange?: (open: boolean) => void; // Added missing prop
   eventId: string;
   venueId: string;
-  onSuccess: (data: RegistrationSuccessData) => void;
+  onSuccess: (email: string, nickname: string) => void; // Simplified to match usage in play.tsx
   onCancel: () => void;
 }
 
 export function RegistrationModal({
   open,
+  onOpenChange,
   eventId,
   venueId,
   onSuccess,
@@ -93,39 +95,28 @@ export function RegistrationModal({
     setLoading(true);
 
     try {
-      console.log("[RegistrationModal] 🎫 Claiming ticket...", { eventId, venueId, email, nickname });
-
-      // Call service with explicit credentials
-      const ticket = await createFreeTicket(
-        eventId,
-        venueId,
-        email.trim().toLowerCase(),
-        nickname.trim()
-      );
-
-      console.log("[RegistrationModal] ✅ Success:", ticket);
-
-      // Save to localStorage
-      localStorage.setItem("playerEmail", email.trim().toLowerCase());
-      localStorage.setItem("playerNickname", nickname.trim());
-
-      onSuccess({
-        email: email.trim().toLowerCase(),
-        nickname: nickname.trim(),
-        tickets: [ticket]
-      });
+      console.log("[RegistrationModal] 🎫 Calling onSuccess directly for play.tsx to handle claim...", { eventId, venueId, email, nickname });
+      
+      // DELEGATE CLAIM LOGIC TO PARENT (play.tsx handles the actual RPC call now via handleClaimTicket)
+      // This is cleaner as play.tsx has the debug context
+      await onSuccess(email.trim().toLowerCase(), nickname.trim());
       
     } catch (err: any) {
-      console.error("[RegistrationModal] ❌ Error:", err);
-      
-      const message = err?.message || "Došlo je do greške pri preuzimanju tiketa.";
-      setSubmitError(message);
-      
-      setErrorDetails({
-        code: err?.code || "UNKNOWN",
+      console.error("❌ [RegistrationModal] CLAIM_TICKETS_ERROR - FULL DIAGNOSTIC:", {
+        message: err?.message || "Unknown error",
         details: err?.details || null,
         hint: err?.hint || null,
+        code: err?.code || null,
+        status: err?.status || null,
+        statusText: err?.statusText || null,
         raw: err
+      });
+      
+      setSubmitError(err?.message || "Došlo je do greške.");
+      setErrorDetails({
+        code: err?.code,
+        details: err?.details,
+        hint: err?.hint
       });
     } finally {
       setLoading(false);
@@ -133,7 +124,10 @@ export function RegistrationModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && !loading && onCancel()}>
+    <Dialog open={open} onOpenChange={(val) => {
+      if (onOpenChange) onOpenChange(val);
+      if (!val && !loading) onCancel();
+    }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold text-center flex items-center justify-center gap-2">

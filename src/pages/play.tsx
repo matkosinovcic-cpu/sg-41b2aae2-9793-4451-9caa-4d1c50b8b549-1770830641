@@ -5,9 +5,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { RegistrationModal } from "@/components/RegistrationModal";
-import { Ticket, createFreeTicket } from "@/services/ticketService";
-import { Event, eventService } from "@/services/eventService";
-import { getVenueBySlug } from "@/services/venueService";
+import { Ticket } from "@/services/ticketService";
+import { Event } from "@/services/eventService";
+import { cn } from "@/lib/utils";
+import { SEO } from "@/components/SEO";
 
 interface MyTicket {
   id: string;
@@ -48,68 +49,77 @@ export default function PlayPage() {
 
   // Load active event
   useEffect(() => {
-    const loadEvent = async () => {
+    if (!router.isReady) return;
+
+    const loadData = async () => {
       try {
-        let event: Event | null = null;
-
-        // PRIORITY A: Event ID (ADMIN mode)
-        if (queryEvent && typeof queryEvent === "string") {
-          console.log("[PLAY] 🔍 Loading event by ID:", queryEvent);
-          event = await eventService.getEventById(queryEvent);
-          if (event) {
-            setActiveEvent(event);
-            setResolvedEventId(event.id);
-            setResolvedEventName(event.name);
-          }
+        const venueParam = router.query.venue as string;
+        
+        // DEBUG: Update venue param
+        if (showDebug) {
+          setDebugInfo(prev => ({ ...prev, urlVenueParam: venueParam || null }));
         }
-        // PRIORITY B: Venue Slug (PLAYER mode - KRITIČNO!)
-        else if (queryVenue && typeof queryVenue === "string") {
-          console.log("[PLAY] 🏢 Loading event by venue slug:", queryVenue);
-          setVenueSlug(queryVenue);
 
-          // 1. Resolve venue_id by slug
-          const venue = await getVenueBySlug(queryVenue);
-          if (!venue) {
-            console.error("[PLAY] ❌ Venue not found:", queryVenue);
-            return;
-          }
-
-          setVenueId(venue.id);
-          console.log("[PLAY] ✅ Venue resolved:", { slug: queryVenue, id: venue.id });
-
-          // 2. Get ACTIVE event for this venue
-          const { data: events, error } = await supabase
-            .from("events")
-            .select("*")
-            .eq("venue_id", venue.id)
-            .eq("status", "active")
-            .limit(1)
-            .single();
-
-          if (error || !events) {
-            console.error("[PLAY] ❌ No active event for venue:", queryVenue, error);
-            return;
-          }
-
-          event = events as unknown as Event; // Cast to Event to fix status type mismatch
-          setResolvedEventId(event.id);
-          setResolvedEventName(event.name);
-          setActiveEvent(event);
+        if (!venueParam) {
+          setVenueSlug(null);
+          setLoading(false);
+          return;
         }
-        // FALLBACK: Global active event (DEPRECATED)
-        else {
-          console.log("[PLAY] 🌍 Loading global active event (fallback)");
-          // This fallback needs a venue_id parameter - skip if not available
-          // event = await eventService.getActiveEvent();
-          console.warn("[PLAY] No venue specified, cannot load event");
+
+        setVenueSlug(venueParam);
+
+        // Resolve venue_id
+        const { data: venue } = await supabase
+          .from("venues")
+          .select("id, name")
+          .eq("slug", venueParam)
+          .single();
+
+        if (showDebug) {
+          setDebugInfo(prev => ({
+            ...prev,
+            resolvedVenueId: venue?.id || null,
+            resolvedVenueName: venue?.name || null
+          }));
         }
+
+        if (!venue) {
+          setLoading(false);
+          return;
+        }
+
+        // Get active event
+        const { data: event } = await supabase
+          .from("events")
+          .select("*")
+          .eq("venue_id", venue.id)
+          .eq("status", "active")
+          .single();
+
+        if (showDebug) {
+          setDebugInfo(prev => ({
+            ...prev,
+            resolvedEventId: event?.id || null,
+            resolvedEventName: event?.name || null
+          }));
+        }
+
+        if (event) {
+          setActiveEvent(event as any);
+        }
+
       } catch (error) {
-        console.error("[PLAY] Failed to load event:", error);
+        console.error("[PLAY] Load error:", error);
+        if (showDebug) {
+          setDebugInfo(prev => ({ ...prev, lastError: error }));
+        }
+      } finally {
+        setLoading(false);
       }
     };
 
-    loadEvent();
-  }, [queryVenue, queryEvent]);
+    loadData();
+  }, [router.isReady, router.query.venue, showDebug]);
 
   // Load my ticket
   useEffect(() => {
@@ -251,17 +261,79 @@ export default function PlayPage() {
   };
 
   const handleClaimTicket = async (email: string, nickname: string) => {
-    if (!activeEvent) {
-      throw new Error("No active event");
+    if (!activeEvent) throw new Error("No active event");
+
+    // DEBUG: Set RPC status to pending
+    if (showDebug) {
+      setDebugInfo(prev => ({
+        ...prev,
+        rpcCalled: "claim_free_tickets_v3",
+        rpcParams: {
+          p_event_id: activeEvent.id,
+          p_venue_id: activeEvent.venue_id,
+          p_email: email,
+          p_nickname: nickname,
+          p_limit: 1
+        },
+        rpcStatus: "pending"
+      }));
     }
 
-    // Use the createFreeTicket service which handles RPC fallback
-    const result = await createFreeTicket(activeEvent.id, activeEvent.venue_id || "", email, nickname);
-    
-    // Track which RPC was used (for debug panel)
-    setRpcCalled("claim_free_tickets_v3"); // The service tries v3 first
-    
-    return result;
+    try {
+      console.log("🚀 [PLAY] Calling claim_free_tickets_v3 RPC...");
+      // Call RPC
+      const { data, error } = await supabase.rpc("claim_free_tickets_v3", {
+        p_event_id: activeEvent.id,
+        p_venue_id: activeEvent.venue_id || "",
+        p_email: email,
+        p_nickname: nickname,
+        p_limit: 1
+      });
+
+      if (error) {
+        // THIS IS THE CRITICAL LOGGING POINT FOR THE USER
+        console.error("❌ [PLAY] CLAIM_TICKETS_ERROR - FULL DIAGNOSTIC:", {
+          message: error?.message || "Unknown error",
+          details: error?.details || null,
+          hint: error?.hint || null,
+          code: error?.code || null,
+          raw: error
+        });
+
+        if (showDebug) {
+          setDebugInfo(prev => ({
+            ...prev,
+            rpcStatus: "error",
+            lastError: {
+              message: error.message,
+              details: error.details,
+              hint: error.hint,
+              code: error.code
+            }
+          }));
+        }
+
+        throw error;
+      }
+
+      // DEBUG: Success
+      if (showDebug) {
+        setDebugInfo(prev => ({
+          ...prev,
+          rpcStatus: "success",
+          ticketsCreatedCount: data?.tickets?.length || 0,
+          playerCreated: !!data?.player_id,
+          playerId: data?.player_id || null
+        }));
+      }
+
+      console.log("✅ [PLAY] Tickets claimed:", data);
+      return data;
+
+    } catch (err) {
+      console.error("❌ [PLAY] handleClaimTicket failed:", err);
+      throw err;
+    }
   };
 
   if (!activeEvent) {
@@ -282,45 +354,46 @@ export default function PlayPage() {
       </Head>
 
       {isDebug && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 border-b-2 border-yellow-400 p-4">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-bold text-sm">🔧 DEBUG MODE</h3>
-              <button
-                onClick={() => router.push(router.pathname)}
-                className="text-xs px-2 py-1 bg-yellow-200 rounded hover:bg-yellow-300"
-              >
-                Exit Debug
-              </button>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-100 border-b-2 border-yellow-400 p-3 text-xs font-mono overflow-x-auto">
+          <div className="max-w-6xl mx-auto">
+            <p className="font-bold text-lg mb-2">🔍 DEBUG PANEL</p>
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <strong>Venue Slug:</strong> {venueSlug || "N/A"}
+                <p className="font-semibold">URL & Venue:</p>
+                <p>venue (param): {debugInfo.urlVenueParam || "null"}</p>
+                <p>venue_id: {debugInfo.resolvedVenueId?.slice(0, 8) || "null"}</p>
+                <p>venue_name: {debugInfo.resolvedVenueName || "null"}</p>
               </div>
               <div>
-                <strong>Venue ID:</strong> {venueId?.slice(0, 8) || "N/A"}...
+                <p className="font-semibold">Event:</p>
+                <p>event_id: {debugInfo.resolvedEventId?.slice(0, 8) || "null"}</p>
+                <p>event_name: {debugInfo.resolvedEventName || "null"}</p>
               </div>
               <div>
-                <strong>Event ID:</strong> {resolvedEventId?.slice(0, 8) || "N/A"}...
+                <p className="font-semibold">RPC Call:</p>
+                <p>rpc_called: {debugInfo.rpcCalled || "none"}</p>
+                <p>rpc_status: <span className={debugInfo.rpcStatus === "success" ? "text-green-600" : debugInfo.rpcStatus === "error" ? "text-red-600" : ""}>{debugInfo.rpcStatus || "none"}</span></p>
+                <p>tickets_created: {debugInfo.ticketsCreatedCount}</p>
               </div>
               <div>
-                <strong>Event Name:</strong> {resolvedEventName || "N/A"}
-              </div>
-              <div>
-                <strong>RPC Called:</strong> {rpcCalled || "none"}
-              </div>
-              <div>
-                <strong>Tickets Claimed:</strong> {rpcResultCount || 0}
-              </div>
-              <div className="col-span-2">
-                <details className="cursor-pointer">
-                  <summary className="font-semibold">Full Event Data</summary>
-                  <pre className="mt-2 p-2 bg-white rounded text-[10px] overflow-auto max-h-40">
-                    {JSON.stringify(activeEvent, null, 2)}
-                  </pre>
-                </details>
+                <p className="font-semibold">Player:</p>
+                <p>player_created: {debugInfo.playerCreated ? "✅" : "❌"}</p>
+                <p>player_id: {debugInfo.playerId?.slice(0, 8) || "null"}</p>
+                <p>fallback_used: {debugInfo.fallbackUsed ? "✅" : "❌"}</p>
               </div>
             </div>
+            {debugInfo.rpcParams && (
+              <div className="mt-2">
+                <p className="font-semibold">RPC Params:</p>
+                <pre className="bg-white p-2 rounded text-xs overflow-x-auto">{JSON.stringify(debugInfo.rpcParams, null, 2)}</pre>
+              </div>
+            )}
+            {debugInfo.lastError && (
+              <div className="mt-2">
+                <p className="font-semibold text-red-600">Last Error:</p>
+                <pre className="bg-red-50 p-2 rounded text-xs overflow-x-auto">{JSON.stringify(debugInfo.lastError, null, 2)}</pre>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -417,8 +490,36 @@ export default function PlayPage() {
       {/* Registration Modal */}
       <RegistrationModal
         open={isRegistrationOpen}
+        onOpenChange={setIsRegistrationOpen}
         onCancel={() => setIsRegistrationOpen(false)}
-        onSuccess={onTicketClaimed}
+        onSuccess={async (email, nickname) => {
+          try {
+            const result = await handleClaimTicket(email, nickname);
+            
+            // Save ticket ID to localStorage
+            if (result?.tickets?.[0]) {
+              localStorage.setItem(`ps_ticket_${activeEvent?.id}`, result.tickets[0].id);
+              
+               // Transform to MyTicket format
+              const transformedTicket: MyTicket = {
+                id: result.tickets[0].id,
+                serial_number: result.tickets[0].serial_number,
+                ticket_numbers: result.tickets[0].ticket_numbers || [],
+                venue_id: result.tickets[0].venue_id,
+                event_id: result.tickets[0].event_id
+              };
+              setMyTicket(transformedTicket);
+              setTicket(result.tickets[0]);
+              
+              setIsRegistrationOpen(false);
+              alert(`Tiket preuzet! Serial: ${result.tickets[0].serial_number}`);
+            }
+          } catch (error) {
+            // Error is already logged in handleClaimTicket
+            // Rethrow so RegistrationModal can show it in UI
+            throw error;
+          }
+        }}
         eventId={activeEvent.id}
         venueId={activeEvent.venue_id || ""}
       />

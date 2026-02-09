@@ -968,7 +968,7 @@ export default function PlayerPage() {
         focusedTicket.id,
         currentQuestion.id,
         answer,
-        isCorrectString
+        isCorrect // Now accepted as boolean too
       );
 
       // Refresh answers

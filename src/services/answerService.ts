@@ -12,17 +12,17 @@ export interface Answer {
 export async function submitAnswer(
   ticketId: string,
   questionId: string,
-  selectedAnswer: string,
-  isCorrect: boolean | string // Allow both to satisfy any legacy calls or strict checks
+  answer: boolean,
+  isCorrect: boolean | string
 ) {
-  // Use 'any' cast temporarily to bypass strict type checking against generated types
-  // which might be out of sync with the actual table schema or this specific insert
-  const payload: any = {
+  // Normalize isCorrect to boolean
+  const isCorrectBool = typeof isCorrect === "boolean" ? isCorrect : isCorrect === "true";
+  
+  const payload = {
     ticket_id: ticketId,
-    question_id: questionId, // Ensure this column exists in DB
-    selected_answer: selectedAnswer,
-    is_correct: isCorrect === "true" || isCorrect === true, // Handle string or boolean
-    answered_at: new Date().toISOString(),
+    question_number: parseInt(questionId) || 0,
+    answer: answer,
+    is_correct: isCorrectBool
   };
 
   const { data, error } = await supabase
@@ -52,10 +52,8 @@ export async function getAnswersForTicket(ticketId: string) {
 }
 
 export async function getOrCreateSession(ticketId: string) {
-  // Legacy function support
   console.log("[AnswerService] getOrCreateSession called (legacy support)");
   return { id: "legacy-session", ticket_id: ticketId };
 }
 
-// Add mock types/functions if strictly required by other files not yet updated
 export type TicketStats = any;
