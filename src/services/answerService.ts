@@ -13,7 +13,7 @@ export async function submitAnswer(
   ticketId: string,
   questionId: string,
   selectedAnswer: string,
-  isCorrect: boolean
+  isCorrect: boolean | string // Allow both to satisfy any legacy calls or strict checks
 ) {
   // Use 'any' cast temporarily to bypass strict type checking against generated types
   // which might be out of sync with the actual table schema or this specific insert
@@ -21,7 +21,7 @@ export async function submitAnswer(
     ticket_id: ticketId,
     question_id: questionId, // Ensure this column exists in DB
     selected_answer: selectedAnswer,
-    is_correct: isCorrect,
+    is_correct: isCorrect === "true" || isCorrect === true, // Handle string or boolean
     answered_at: new Date().toISOString(),
   };
 

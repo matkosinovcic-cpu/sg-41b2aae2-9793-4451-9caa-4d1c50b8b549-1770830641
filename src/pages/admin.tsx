@@ -2,7 +2,6 @@ import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
-import { answerService, TicketStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -187,22 +186,6 @@ export default function AdminPanel() {
         loadTicketStats(selectedEvent.id);
       }
     }
-  }, [selectedEvent?.id, selectedEvent?.status]);
-
-  // Real-time subscription for answers (only when finished)
-  useEffect(() => {
-    if (!selectedEvent || selectedEvent.status !== "finished") return;
-
-    console.log("[Admin] Setting up answer subscription for finished event:", selectedEvent.id);
-
-    const subscription = answerService.subscribeToEventAnswers(selectedEvent.id, () => {
-      console.log("[Admin] Answer update detected, reloading stats");
-      loadTicketStats(selectedEvent.id);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
   }, [selectedEvent?.id, selectedEvent?.status]);
 
   // CRITICAL: Only poll stats when event is finished

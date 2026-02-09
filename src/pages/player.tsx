@@ -957,16 +957,21 @@ export default function PlayerPage() {
 
     setSubmitting(true);
     try {
-      console.log("[Player] 💬 Submitting answer:", { ticket: focusedTicket.serial_number, question: currentDrawnNumber, answer });
+      console.log("[Player] 📝 Submitting answer:", { ticket: focusedTicket.serial_number, question: currentDrawnNumber, answer });
       
+      // Calculate correctness
+      const isCorrect = answer === currentQuestion.correct_answer;
+      const isCorrectString: string = isCorrect ? "true" : "false";
+
+      // Submit answer
       await answerService.submitAnswer(
-          sessionId, 
-          focusedTicket.event_id, 
-          currentDrawnNumber, 
-          answer, 
-          focusedTicket.serial_number
+        focusedTicket.id,
+        currentQuestion.id,
+        answer,
+        isCorrectString
       );
-      
+
+      // Refresh answers
       const newAnswer: Answer = {
         ticket_id: focusedTicket.serial_number,
         question_number: currentDrawnNumber,
@@ -980,7 +985,6 @@ export default function PlayerPage() {
         .then(stats => setGlobalStats(stats))
         .catch(err => console.error("[Player] Failed to update global stats:", err));
 
-      const isCorrect = normalizeAnswer(answer) === normalizeAnswer(currentQuestion.correct_answer);
       console.log("[Player] ✅ Answer submitted:", isCorrect ? "CORRECT" : "INCORRECT");
       
       // Toast removed - feedback shown in UI
