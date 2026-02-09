@@ -14,15 +14,16 @@ import { SEO } from "@/components/SEO";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 
-export default function PlayPage() {
+export default function Play() {
   const router = useRouter();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [activeEvent, setActiveEvent] = useState<Event | null>(null);
-  const [ticketClaimed, setTicketClaimed] = useState(false);
-  const [ticketData, setTicketData] = useState<any>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [error, setError] = useState(""); // Ensure this exists
+  const [activeEvent, setActiveEvent] = useState<any>(null);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [ticketClaimed, setTicketClaimed] = useState(false);
+  const [ticket, setTicket] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
   
   // Debug state
   const [debugInfo, setDebugInfo] = useState({
@@ -45,65 +46,123 @@ export default function PlayPage() {
     }
   }, []);
 
+  // Load active event on mount
   useEffect(() => {
-    if (!router.isReady) return;
-
-    const loadData = async () => {
+    const loadActiveEvent = async () => {
       try {
         setLoading(true);
-        const slug = (router.query.venue as string) || null;
         
-        // Debug update
-        setDebugInfo(prev => ({ ...prev, venue_slug: slug || "none" }));
+        // STEP 1: Check URL params
+        const urlParams = new URLSearchParams(window.location.search);
+        const eventIdParam = urlParams.get("eventId");
+        const venueSlugParam = urlParams.get("venue");
 
-        // 1. Get Active Event
-        const { event, mode } = await eventService.getActiveOrLastFinished();
-        
-        if (event) {
-          setActiveEvent(event);
-          setDebugInfo(prev => ({ 
-            ...prev, 
-            event_id: event.id, 
-            event_name: event.name 
-          }));
+        let resolvedEvent = null;
+        let resolvePath = "";
+        let venueInfo = { slug: "", id: "" };
 
-          // 2. Check for existing ticket in localStorage
-          const savedTicket = localStorage.getItem(`ticket_${event.id}`);
-          if (savedTicket) {
-            const parsed = JSON.parse(savedTicket);
-            setTicketData(parsed);
-            setTicketClaimed(true);
+        // STEP 2: Resolve event
+        if (eventIdParam) {
+          // Direct event ID provided
+          console.log("[PLAY] Resolving by eventId:", eventIdParam);
+          const { data: event } = await supabase
+            .from("events")
+            .select("*, venues(id, slug, name)")
+            .eq("id", eventIdParam)
+            .single();
+          
+          if (event && !event.name?.startsWith("GLOBAL")) {
+            resolvedEvent = event;
+            resolvePath = "eventId";
+            if (event.venues) {
+              venueInfo = { 
+                slug: event.venues.slug || "", 
+                id: event.venues.id || "" 
+              };
+            }
+          }
+        } else if (venueSlugParam) {
+          // Venue slug provided - find active event for this venue
+          console.log("[PLAY] Resolving by venue slug:", venueSlugParam);
+          
+          // Find venue
+          const { data: venue } = await supabase
+            .from("venues")
+            .select("id, slug, name")
+            .eq("slug", venueSlugParam)
+            .single();
+
+          if (venue) {
+            venueInfo = { slug: venue.slug, id: venue.id };
             
-            // Validate ticket exists in DB
-            try {
-              const ticket = await ticketService.getTicket(parsed.id);
-              if (ticket) {
-                setTicketData(ticket);
-              } else {
-                // Invalid ticket, clear local storage
-                localStorage.removeItem(`ticket_${event.id}`);
-                setTicketClaimed(false);
-                setTicketData(null);
-              }
-            } catch (err) {
-              console.error("Error validating ticket:", err);
+            // Find active event for this venue (non-GLOBAL)
+            const { data: event } = await supabase
+              .from("events")
+              .select("*")
+              .eq("venue_id", venue.id)
+              .eq("status", "active")
+              .not("name", "like", "GLOBAL%")
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .single();
+
+            if (event) {
+              resolvedEvent = { ...event, venues: venue };
+              resolvePath = "venue_active";
+            }
+          }
+        } else {
+          // NO params - find any active non-GLOBAL event (legacy single event mode)
+          console.log("[PLAY] Resolving by active event (no params)");
+          const { data: event } = await supabase
+            .from("events")
+            .select("*, venues(id, slug, name)")
+            .eq("status", "active")
+            .not("name", "like", "GLOBAL%")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .single();
+
+          if (event) {
+            resolvedEvent = event;
+            resolvePath = "active_event";
+            if (event.venues) {
+              venueInfo = { 
+                slug: event.venues.slug || "", 
+                id: event.venues.id || "" 
+              };
             }
           }
         }
-      } catch (error) {
-        console.error("Error loading play page data:", error);
-        toast({
-          title: "Greška",
-          description: "Ne mogu učitati podatke o eventu.",
-          variant: "destructive",
+
+        // STEP 3: Handle result
+        if (!resolvedEvent) {
+          console.error("[PLAY] ❌ No active event found - resolvePath:", resolvePath);
+          setError("Nema aktivnog kviza. Molimo pokušajte kasnije.");
+          setLoading(false);
+          return;
+        }
+
+        console.log("[PLAY] ✅ Event resolved:", {
+          resolve_path: resolvePath,
+          event_id: resolvedEvent.id,
+          event_name: resolvedEvent.name,
+          venue_slug: venueInfo.slug,
+          venue_id: venueInfo.id
         });
+
+        setActiveEvent(resolvedEvent);
+        setError("");
+      } catch (err: any) {
+        console.error("[PLAY] Error loading event:", err);
+        setError("Greška pri učitavanju kviza: " + (err.message || "Nepoznata greška"));
       } finally {
         setLoading(false);
       }
     };
 
-    loadData();
-  }, [router.isReady, router.query.venue]);
+    loadActiveEvent();
+  }, []);
 
   const handleClaimTicket = async (email: string, nickname: string) => {
     if (!activeEvent) return;
@@ -124,7 +183,7 @@ export default function PlayPage() {
       const existingTicket = localStorage.getItem(`ticket_${activeEvent.id}`);
       
       if (existingTicket) {
-        setTicketData(JSON.parse(existingTicket));
+        setTicket(JSON.parse(existingTicket));
         setTicketClaimed(true);
         return;
       }
@@ -147,7 +206,7 @@ export default function PlayPage() {
         localStorage.setItem(`ticket_${activeEvent.id}`, JSON.stringify(ticket));
         
         // Update State
-        setTicketData(ticket);
+        setTicket(ticket);
         setTicketClaimed(true);
         setRegistrationOpen(false);
 
@@ -197,7 +256,7 @@ export default function PlayPage() {
     const responseData = data as any;
     if (responseData && responseData.tickets && responseData.tickets.length > 0) {
       const ticket = responseData.tickets[0];
-      setTicketData(ticket);
+      setTicket(ticket);
       setTicketClaimed(true);
       
       // Save to local storage
@@ -208,6 +267,30 @@ export default function PlayPage() {
       // Redirect to player page
       router.push(`/player?ticket=${ticket.id}`);
     }
+  };
+
+  // Check if ticket is a winner (Client-side validation)
+  const checkWinner = (ticketNumbers: number[], drawnNumbers: number[]) => {
+    // GUARD: Ticket must have exactly 15 numbers
+    if (!ticketNumbers || ticketNumbers.length !== 15) {
+      console.warn("[PLAY] Winner Check Skipped: Ticket does not have 15 numbers", ticketNumbers);
+      return false;
+    }
+
+    // GUARD: Drawn numbers must be enough to potentially win
+    if (!drawnNumbers || drawnNumbers.length < 15) {
+      return false;
+    }
+
+    // Check full match (Legacy logic: all 15 numbers must be drawn)
+    const matches = ticketNumbers.filter(num => drawnNumbers.includes(num));
+    const isWinner = matches.length === 15;
+    
+    if (isWinner) {
+      console.log("[PLAY] 🏆 WINNER DETECTED! Full match:", matches);
+    }
+    
+    return isWinner;
   };
 
   if (loading) {
@@ -240,27 +323,59 @@ export default function PlayPage() {
     <>
       <SEO title="Preuzmi Tiket - Pitalica Skitalica" />
       
-      {showDebug && (
-        <div className="fixed top-0 left-0 right-0 bg-black/95 text-white p-4 text-xs z-50 overflow-auto max-h-64">
-          <div className="font-bold mb-2">🔍 DEBUG INFO</div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>Event ID: {debugInfo.event_id || "N/A"}</div>
-            <div>Event: {debugInfo.event_name || "N/A"}</div>
-            <div>Venue ID: {debugInfo.venue_id || "N/A"}</div>
-            <div>RPC: {debugInfo.rpc_name || "N/A"}</div>
-            <div>Status: {debugInfo.rpc_status || "N/A"}</div>
-            <div>Tickets: {debugInfo.tickets_created_count || 0}</div>
-            {debugInfo.last_error && (
-              <div className="col-span-2 mt-2 p-2 bg-red-900/50 rounded">
-                <div className="font-bold">Last Error:</div>
-                <pre className="text-xs overflow-auto">{debugInfo.last_error}</pre>
+      {showDebug && activeEvent && (
+        <div className="fixed top-0 left-0 right-0 bg-black/95 text-white text-xs p-4 z-50 font-mono overflow-auto max-h-96">
+          <div className="max-w-4xl mx-auto">
+            <h3 className="text-yellow-400 font-bold mb-2">🔍 DEBUG PANEL - Play Page</h3>
+            
+            <div className="grid grid-cols-2 gap-4">
+              {/* Event Resolution */}
+              <div className="border border-gray-700 p-2 rounded">
+                <div className="text-blue-400 font-bold mb-1">Event Resolution</div>
+                <div>venue_slug: {router.query.venue || "N/A"}</div>
+                <div>venue_id: {(activeEvent as any).venue_id || "N/A"}</div>
+                <div>resolved_event_id: {activeEvent.id}</div>
+                <div>event_name: {activeEvent.name}</div>
+                <div>resolve_path: {router.query.eventId ? "eventId" : router.query.venue ? "venue_active" : "default_active"}</div>
               </div>
-            )}
+
+              {/* RPC Call Info */}
+              <div className="border border-gray-700 p-2 rounded">
+                <div className="text-green-400 font-bold mb-1">RPC Call Info</div>
+                <div>rpc_called: {ticketClaimed ? "true" : "false"}</div>
+                <div>rpc_name: claim_free_tickets</div>
+                <div>rpc_status: {error ? "ERROR" : ticketClaimed ? "SUCCESS" : "PENDING"}</div>
+                <div>tickets_created_count: {ticketClaimed ? "1" : "0"}</div>
+              </div>
+
+              {/* Ticket Numbers Source */}
+              <div className="border border-gray-700 p-2 rounded">
+                <div className="text-purple-400 font-bold mb-1">Ticket Numbers Source</div>
+                <div>ticket_numbers_source: ticket_questions (DB table)</div>
+                <div>expected_count: 15 unique numbers (1-90)</div>
+                <div>storage: ticket_questions.question_number</div>
+              </div>
+
+              {/* Error Details */}
+              {error && (
+                <div className="border border-red-700 p-2 rounded">
+                  <div className="text-red-400 font-bold mb-1">⚠️ Supabase Error</div>
+                  <div>message: {error}</div>
+                  {(error as any).code && <div>code: {(error as any).code}</div>}
+                  {(error as any).details && <div>details: {(error as any).details}</div>}
+                  {(error as any).hint && <div>hint: {(error as any).hint}</div>}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-2 text-gray-400 text-[10px]">
+              💡 This panel shows when ?debug=1 is in URL
+            </div>
           </div>
         </div>
       )}
 
-      <div className={cn("min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-4", showDebug && "pt-64")}>
+      <div className={cn("min-h-screen bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 p-4", showDebug && "pt-[420px]")}>
         <div className="max-w-md mx-auto space-y-8 pt-10">
           
           <div className="text-center space-y-2">
@@ -310,13 +425,13 @@ export default function PlayPage() {
                       ✅ Tiket uspješno preuzet!
                     </p>
                     <p className="text-sm text-green-600 mt-1">
-                      Serijski broj: <span className="font-mono font-bold">{ticketData?.serial_number}</span>
+                      Serijski broj: <span className="font-mono font-bold">{ticket?.serial_number}</span>
                     </p>
                   </div>
                   <Button 
                     variant="outline" 
                     className="w-full border-purple-200 text-purple-700 hover:bg-purple-50"
-                    onClick={() => router.push(`/player?ticket=${ticketData?.id}`)}
+                    onClick={() => router.push(`/player?ticket=${ticket?.id}`)}
                   >
                     Otvori moj tiket
                   </Button>

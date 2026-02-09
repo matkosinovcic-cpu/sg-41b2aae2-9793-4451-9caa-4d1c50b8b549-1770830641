@@ -14,63 +14,53 @@ export interface Ticket {
 export const ticketService = {
   // RPC Claim Function
   async claimFreeTickets(email: string, nickname: string) {
-    console.log("=== [TicketService] claimFreeTickets START ===");
-    console.log("[TicketService] Input:", { email, nickname });
+    console.log("=== [TicketService] CLAIM FREE TICKETS START ===");
+    
+    const rpcName = "claim_free_tickets";
+    const payload = {
+      p_email: email,
+      p_nickname: nickname,
+      p_limit: 1
+    };
+
+    console.log("[TicketService] Calling RPC:", rpcName);
+    console.log("[TicketService] Payload:", JSON.stringify(payload, null, 2));
 
     try {
-      // Get active event
-      const { data: event, error: eventError } = await supabase
-        .from("events")
-        .select("id, name, venue_id")
-        .eq("status", "active")
-        .single();
-
-      if (eventError || !event) {
-        console.error("[TicketService] No active event found:", eventError);
-        throw new Error("No active event found");
-      }
-
-      console.log("[TicketService] Active event:", {
-        event_id: event.id,
-        event_name: event.name,
-        venue_id: event.venue_id || "NULL"
-      });
-
-      const rpcName = "claim_free_tickets";
-      const payload = {
-        p_email: email,
-        p_limit: 1,
-        p_nickname: nickname
-      };
-
-      console.log("[TicketService] Calling RPC:", rpcName);
-      console.log("[TicketService] RPC Payload:", JSON.stringify(payload, null, 2));
-
       const { data: rawData, error } = await supabase.rpc(rpcName, payload);
       const data = rawData as any;
 
       if (error) {
-        console.error("[TicketService] RPC Error:", JSON.stringify(error, null, 2));
+        console.error("[TicketService] ❌ RPC Error:", {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
         throw error;
       }
 
-      console.log("[TicketService] RPC Response:", {
+      console.log("[TicketService] ✅ RPC Success:", {
         success: data?.success,
-        tickets_created: data?.tickets_created || 0,
-        has_tickets_array: Array.isArray(data?.tickets)
+        tickets_created: data?.tickets_created,
+        event_id: data?.event_id,
+        venue_id: data?.venue_id,
+        player_id: data?.player_id
       });
 
+      // Log first 2 tickets preview
       if (data?.tickets && Array.isArray(data.tickets)) {
-        const first2 = data.tickets.slice(0, 2);
-        console.log("[TicketService] First 2 tickets:", first2.map((t: any) => ({
+        const preview = data.tickets.slice(0, 2).map((t: any) => ({
           id: t.id,
           serial: t.serial_number,
           has_numbers: Array.isArray(t.ticket_numbers) && t.ticket_numbers.length > 0,
-          numbers_count: t.ticket_numbers?.length || 0
-        })));
+          numbers_count: t.numbers_count || (Array.isArray(t.ticket_numbers) ? t.ticket_numbers.length : 0)
+        }));
+        console.log("[TicketService] First 2 tickets preview:", preview);
       }
 
-      console.log("=== [TicketService] claimFreeTickets END ===");
+      console.log("=== [TicketService] CLAIM FREE TICKETS END ===");
+
       return data;
     } catch (err: any) {
       console.error("[TicketService] Claim Error:", JSON.stringify(err, null, 2));
@@ -97,6 +87,15 @@ export const ticketService = {
       .single();
     
     if (error) throw error;
+    
+    console.log("[ticketService] getTicket result:", {
+      id: data.id,
+      serial: data.serial_number,
+      has_numbers: Array.isArray(data.ticket_numbers),
+      numbers_count: data.ticket_numbers?.length || 0,
+      numbers_preview: data.ticket_numbers?.slice(0, 5) || []
+    });
+    
     return data as Ticket;
   },
 

@@ -76,23 +76,26 @@ export default function PlayerPage() {
     };
 
     loadData();
+  }, [ticketId]);
 
-    // Setup subscriptions
+  // Setup realtime subscriptions AFTER ticket is loaded
+  useEffect(() => {
+    if (!ticket || !ticket.event_id) return;
+
     const eventSub = supabase
-      .channel(`player-event-${ticketId}`)
+      .channel(`player-event-${ticket.event_id}`)
       .on(
         "postgres_changes",
         {
           event: "UPDATE",
           schema: "public",
           table: "events",
-          filter: `id=eq.${ticketId}` // This filter looks wrong in original code, likely needs event_id from ticket
+          filter: `id=eq.${ticket.event_id}`
         },
         (payload) => {
-          // Refresh event data on change
           if (payload.new) {
-             setEvent(payload.new as Event);
-             setLastDrawnNumber(payload.new.current_drawn_number);
+            setEvent(payload.new as Event);
+            setLastDrawnNumber(payload.new.current_drawn_number);
           }
         }
       )
@@ -101,7 +104,7 @@ export default function PlayerPage() {
     return () => {
       eventSub.unsubscribe();
     };
-  }, [ticketId]);
+  }, [ticket?.event_id]);
 
   // Render loading state
   if (loading) {
