@@ -1,4 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
+import { getPlayer } from "@/services/playerService";
+import type { Database } from "@/integrations/supabase/types";
 import { generateTicketSerial } from "@/lib/utils";
 
 // Standardized Storage Keys
@@ -379,6 +381,56 @@ export async function claimFreeTickets(
     console.error("[TicketService] ❌ Failed to claim free tickets:", err);
     throw err;
   }
+}
+
+export async function createFreeTicket(eventId: string, venueId: string) {
+  const player = getPlayer();
+  if (!player?.email || !player?.nickname) {
+    throw new Error("Player data missing");
+  }
+
+  console.log("[TICKET SERVICE] Claiming ticket via RPC claim_free_tickets_v3...");
+  console.log("[TICKET SERVICE] Params:", {
+    email: player.email,
+    nickname: player.nickname,
+    venue_id: venueId,
+    event_id: eventId,
+    limit: 1
+  });
+
+  const { data, error } = await supabase.rpc("claim_free_tickets_v3", {
+    p_email: player.email,
+    p_nickname: player.nickname,
+    p_venue_id: venueId,
+    p_event_id: eventId,
+    p_limit: 1
+  });
+
+  if (error) {
+    console.error("[TICKET SERVICE] ❌ RPC error:", error);
+    throw error;
+  }
+
+  const result = data as any; // Cast JSON to any to access properties
+  console.log("[TICKET SERVICE] ✅ RPC response:", result);
+
+  if (!result?.ok) {
+    throw new Error(result?.reason || "Failed to claim ticket");
+  }
+
+  // Return first ticket from array
+  const ticket = result.tickets?.[0];
+  if (!ticket) {
+    throw new Error("No ticket returned from RPC");
+  }
+
+  return {
+    id: ticket.id,
+    serial_number: ticket.serial,
+    ticket_numbers: ticket.numbers,
+    event_id: eventId,
+    venue_id: venueId
+  };
 }
 
 export default ticketService;

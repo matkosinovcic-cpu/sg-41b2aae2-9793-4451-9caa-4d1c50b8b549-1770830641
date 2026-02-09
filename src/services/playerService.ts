@@ -101,6 +101,12 @@ export async function checkEmailExists(email: string): Promise<boolean> {
   return data !== null;
 }
 
+export function getPlayer() {
+  if (typeof window === "undefined") return null;
+  const playerJson = localStorage.getItem("player_data");
+  return playerJson ? JSON.parse(playerJson) : null;
+}
+
 const playerService = {
   createPlayer,
   getPlayerById,

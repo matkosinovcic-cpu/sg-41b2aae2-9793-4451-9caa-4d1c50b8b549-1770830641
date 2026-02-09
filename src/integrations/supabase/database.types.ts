@@ -566,7 +566,31 @@ export type Database = {
           ticket_serial: string
         }[]
       }
-      claim_free_tickets: {
+      claim_free_tickets:
+        | {
+            Args: { p_email: string; p_limit: number; p_nickname: string }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_email: string
+              p_event_id: string
+              p_limit?: number
+              p_nickname: string
+              p_venue_id: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_email: string
+              p_limit: number
+              p_nickname: string
+              p_venue_id: string
+            }
+            Returns: Json
+          }
+      claim_free_tickets_v3: {
         Args: {
           p_email: string
           p_event_id: string
