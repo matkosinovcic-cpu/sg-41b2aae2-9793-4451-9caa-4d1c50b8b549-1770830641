@@ -451,14 +451,31 @@ export const eventService = {
     // Get all tickets with their questions
     const { data: tickets } = await supabase
       .from("tickets")
-      .select("id, serial_number, ticket_questions(question_number)")
+      .select("id, serial_number, ticket_numbers")
       .eq("event_id", eventId);
 
     if (!tickets || tickets.length === 0) return null;
 
     // Check each ticket for all 15 numbers drawn
     for (const ticket of tickets) {
-      const ticketNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
+      const ticketNumbers = ticket.ticket_numbers || [];
+      
+      // ✅ CRITICAL GUARD: Skip "broken" tickets (1-15 sequence)
+      // This prevents false winners from old test tickets
+      const isBrokenTicket = 
+        ticketNumbers.length === 15 &&
+        ticketNumbers.every((num, idx) => num === idx + 1);
+      
+      if (isBrokenTicket) {
+        console.log("[checkForWinner] ⚠️ Skipping broken ticket (1-15):", ticket.serial_number);
+        continue;
+      }
+      
+      // ✅ CRITICAL GUARD: Skip tickets without proper numbers
+      if (!ticketNumbers || ticketNumbers.length !== 15) {
+        console.log("[checkForWinner] ⚠️ Skipping ticket without 15 numbers:", ticket.serial_number);
+        continue;
+      }
       
       // Check if ALL 15 ticket numbers have been drawn
       const allNumbersDrawn = ticketNumbers.every((num: number) => drawnNumbers.includes(num));
