@@ -649,9 +649,8 @@ export default function PlayPage() {
     try {
       console.log("[PlayPage] 📤 Getting/creating DB session...");
       
-      // CRITICAL: Use event.id to get/create session (not playerId!)
-      // The answerService.getOrCreateSession() creates player_sessions record
-      const dbSession = await answerService.getOrCreateSession(event.id);
+      // CRITICAL: Use both playerId and eventId to create/get valid session linked to player
+      const dbSession = await answerService.getOrCreateSession(session.playerId, event.id);
       
       console.log("[PlayPage] ✅ DB Session obtained:", {
         sessionId: dbSession.id?.slice(0, 8),
