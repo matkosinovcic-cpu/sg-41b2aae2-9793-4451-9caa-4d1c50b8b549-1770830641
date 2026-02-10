@@ -91,23 +91,29 @@ function checkCorrectness(
 export const answerService = {
   /**
    * Get or create a session for the player/event
-   * @param playerId - Player UUID from registration
+   * @param playerId - Player UUID (optional, required for Preview)
    * @param eventId - Event UUID
    */
-  async getOrCreateSession(playerId: string, eventId: string): Promise<PlayerSession> {
+  async getOrCreateSession(playerId: string | undefined, eventId: string): Promise<PlayerSession> {
     console.log("[AnswerService] 🔍 getOrCreateSession called:", {
-      playerId: playerId?.slice(0, 8) + "...",
+      playerId: playerId ? playerId.slice(0, 8) + "..." : "UNDEFINED",
       eventId: eventId?.slice(0, 8) + "..."
     });
 
     // Try to find existing session
     console.log("[AnswerService] 📖 Querying player_sessions table...");
-    const { data: existingSession, error: queryError } = await supabase
+    
+    let query = supabase
       .from("player_sessions")
       .select("*")
-      .eq("player_id", playerId)
-      .eq("event_id", eventId)
-      .maybeSingle();
+      .eq("event_id", eventId);
+      
+    // If playerId provided, use it. Otherwise rely on RLS/Event scope (legacy/prod behavior)
+    if (playerId) {
+      query = query.eq("player_id", playerId);
+    }
+      
+    const { data: existingSession, error: queryError } = await query.maybeSingle();
 
     if (queryError) {
       console.error("[AnswerService] ❌ Query error:", queryError);
@@ -125,14 +131,21 @@ export const answerService = {
 
     console.log("[AnswerService] ⚠️ No existing session - creating new one...");
 
+    // Prepare insert data
+    const insertData: any = { 
+      event_id: eventId,
+      session_token: crypto.randomUUID()
+    };
+    
+    // Only add player_id if provided
+    if (playerId) {
+      insertData.player_id = playerId;
+    }
+
     // Create new session
     const { data: newSession, error: insertError } = await supabase
       .from("player_sessions")
-      .insert({ 
-        player_id: playerId,
-        event_id: eventId,
-        session_token: crypto.randomUUID()
-      })
+      .insert(insertData)
       .select()
       .single();
 

@@ -583,6 +583,9 @@ export default function PlayPage() {
       return;
     }
 
+    // Variable to hold the resolved player ID
+    let activePlayerId: string | undefined;
+
     if (isPreview) {
       console.log("[PlayPage] 🎭 Preview mode - validating session...");
       
@@ -610,6 +613,9 @@ export default function PlayPage() {
         setShowRegistration(true);
         return;
       }
+      
+      // Capture valid playerId for use in try/catch block
+      activePlayerId = session.playerId;
 
       console.log("[PlayPage] ✅ Session validated - playerId is valid UUID");
 
@@ -649,8 +655,8 @@ export default function PlayPage() {
     try {
       console.log("[PlayPage] 📤 Getting/creating DB session...");
       
-      // CRITICAL: Use both playerId and eventId to create/get valid session linked to player
-      const dbSession = await answerService.getOrCreateSession(session.playerId, event.id);
+      // CRITICAL: Use activePlayerId (if available) and event.id to get/create session
+      const dbSession = await answerService.getOrCreateSession(activePlayerId, event.id);
       
       console.log("[PlayPage] ✅ DB Session obtained:", {
         sessionId: dbSession.id?.slice(0, 8),
