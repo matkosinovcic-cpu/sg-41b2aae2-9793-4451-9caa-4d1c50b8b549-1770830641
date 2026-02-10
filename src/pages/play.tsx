@@ -83,16 +83,28 @@ export default function PlayPage() {
     if (!isPreview) return;
 
     const loadSession = async () => {
-      const session = await getPlayerSession();
-      setPlayerSession(session);
-      
-      if (session) {
-        console.log("[PlayPage] Player session loaded:", {
-          playerId: session.playerId.slice(0, 8),
-          nickname: session.nickname
-        });
-      } else {
-        console.log("[PlayPage] No player session found");
+      try {
+        const session = await getPlayerSession();
+        setPlayerSession(session);
+        
+        if (session) {
+          console.log("[PlayPage] Player session loaded:", {
+            playerId: session.playerId.slice(0, 8),
+            nickname: session.nickname
+          });
+        } else {
+          console.log("[PlayPage] No player session found");
+        }
+      } catch (error) {
+        console.error("[PlayPage] Error loading session:", error);
+        
+        // PREVIEW ONLY: Clean up broken session
+        if (isPreview) {
+          console.log("[PlayPage] 🧹 Cleaning up broken session from localStorage");
+          localStorage.removeItem("player_session");
+          localStorage.removeItem("player_email");
+          localStorage.removeItem("player_nickname");
+        }
       }
     };
 
@@ -114,21 +126,81 @@ export default function PlayPage() {
     }
   }, []);
 
-  // Load active event
+  // Load active event with timeout and error handling
   useEffect(() => {
-    if (!router.isReady || !isDebugMode) return;
+    if (!router.isReady) return;
+
+    // PREVIEW ONLY: Debug logging
+    if (isPreview) {
+      console.log("[PlayPage] 🔍 DEBUG - Starting event load", {
+        isPreview,
+        playerSession: playerSession ? {
+          playerId: playerSession.playerId.slice(0, 8) + "...",
+          nickname: playerSession.nickname
+        } : null
+      });
+    }
 
     const loadActiveEvent = async () => {
+      // Create timeout controller (8 seconds)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        if (isPreview) {
+          console.log("[PlayPage] ⏱️ DEBUG - Event load TIMEOUT after 8s");
+        }
+        setEventError("Timeout pri učitavanju događaja. Pokušaj ponovno.");
+        setEventLoading(false);
+      }, 8000);
+
       try {
+        setEventLoading(true);
+        setEventError(null);
+
+        if (isPreview) {
+          console.log("[PlayPage] 🔄 DEBUG - Fetching active event...");
+        }
+
         const activeEvent = await eventService.getActiveEvent();
+        
+        clearTimeout(timeoutId);
+        
+        if (isPreview) {
+          console.log("[PlayPage] ✅ DEBUG - Event loaded successfully", {
+            eventId: activeEvent.id.slice(0, 8) + "...",
+            eventName: activeEvent.name,
+            status: activeEvent.status
+          });
+        }
+
         setEvent(activeEvent);
-      } catch (error) {
-        console.error("[PlayPage] Error loading active event:", error);
+        setEventError(null);
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        
+        if (isPreview) {
+          console.error("[PlayPage] ❌ DEBUG - Event load ERROR:", {
+            message: error.message,
+            code: error.code,
+            details: error.details
+          });
+        }
+
+        if (error.name === 'AbortError') {
+          setEventError("Timeout pri učitavanju događaja. Pokušaj ponovno.");
+        } else if (error.code === 'PGRST116') {
+          setEventError("Nema aktivnog događaja. Čekaj da admin pokrene event.");
+        } else {
+          setEventError(error.message || "Greška pri učitavanju događaja.");
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        setEventLoading(false);
       }
     };
 
     loadActiveEvent();
-  }, [router.isReady, isDebugMode]);
+  }, [router.isReady, isPreview, playerSession]);
 
   // Auto-load existing tickets
   useEffect(() => {
@@ -533,10 +605,46 @@ export default function PlayPage() {
         </div>
 
         <div className="container mx-auto px-4 py-6 max-w-4xl">
-          {!event ? (
+          {eventLoading ? (
             <Card className="max-w-md mx-auto shadow-md">
               <CardContent className="p-6 text-center">
                 <p className="text-gray-600">Učitavanje aktivnog događaja...</p>
+                {isPreview && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    Debug: Timeout nakon 8s
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          ) : eventError ? (
+            <Card className="max-w-md mx-auto shadow-md border-red-200">
+              <CardContent className="p-6 text-center space-y-4">
+                <div className="text-red-500 text-lg font-semibold">
+                  Ne mogu učitati aktivni događaj
+                </div>
+                <p className="text-gray-600">{eventError}</p>
+                <Button
+                  onClick={() => window.location.reload()}
+                  className="w-full"
+                >
+                  Pokušaj ponovno
+                </Button>
+                {isPreview && (
+                  <div className="text-xs text-gray-400 mt-4 p-2 bg-gray-50 rounded">
+                    <p className="font-mono">
+                      Debug: Provjeri Network tab u DevTools
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : !event ? (
+            <Card className="max-w-md mx-auto shadow-md">
+              <CardContent className="p-6 text-center">
+                <p className="text-gray-600">Nema aktivnog događaja.</p>
+                <p className="text-sm text-gray-500 mt-2">
+                  Čekaj da admin pokrene event.
+                </p>
               </CardContent>
             </Card>
           ) : !ticket ? (
