@@ -37,12 +37,14 @@ export default function PlayPage() {
   const [playerSession, setPlayerSession] = useState<PreviewPlayerSession | null>(null);
   const [nickname, setNickname] = useState<string>("");
   const [email, setEmail] = useState<string>("");
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   
   // Event & Questions
   const [event, setEvent] = useState<Event | null>(null);
   const [eventLoading, setEventLoading] = useState(true);
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
   const [drawnQuestions, setDrawnQuestions] = useState<Record<number, boolean>>({});
+  const [timeRemaining, setTimeRemaining] = useState(0);
   
   // Tickets
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -56,6 +58,14 @@ export default function PlayPage() {
   // Answer state
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
   const [playerAnswers, setPlayerAnswers] = useState<Record<number, boolean>>({});
+  
+  // Global stats
+  const [globalStats, setGlobalStats] = useState({
+    answered: 0,
+    correct: 0,
+    incorrect: 0,
+    accuracy: 0
+  });
   
   // Modals
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -250,6 +260,191 @@ export default function PlayPage() {
     };
   }, [event?.id, drawnQuestions]);
 
+  // Subscribe to event_questions changes for real-time sync
+  useEffect(() => {
+    if (!event || !isPreview) return;
+
+    console.log("[PlayPage] 📡 Subscribing to event_questions for event:", event.id);
+
+    const channel = supabase
+      .channel(`event_questions:${event.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_questions",
+          filter: `event_id=eq.${event.id}`
+        },
+        (payload) => {
+          console.log("[PlayPage] 🔔 Event question update:", payload);
+
+          if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
+            const questionData = payload.new as EventQuestion;
+            
+            // Only update if this is the current active question
+            if (questionData.drawn_at && questionData.question_open_until) {
+              console.log("[PlayPage] ✅ Setting active question:", questionData.question_number);
+              setCurrentQuestion(questionData);
+              
+              // Calculate time remaining
+              const now = Date.now();
+              const openUntil = new Date(questionData.question_open_until).getTime();
+              const remaining = Math.max(0, Math.floor((openUntil - now) / 1000));
+              setTimeRemaining(remaining);
+              setRealtimeConnected(true);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log("[PlayPage] 🔌 Unsubscribing from event_questions");
+      supabase.removeChannel(channel);
+    };
+  }, [event, isPreview]);
+
+  // Subscribe to player_answers for real-time stats updates (PREVIEW ONLY)
+  useEffect(() => {
+    if (!event || !isPreview || !playerSession) return;
+
+    console.log("[PlayPage] 📡 Subscribing to player_answers for player:", playerSession.playerId.slice(0, 8));
+
+    const channel = supabase
+      .channel(`player_answers:${playerSession.playerId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "player_answers",
+          filter: `session_id=eq.${playerSession.playerId}`
+        },
+        (payload) => {
+          console.log("[PlayPage] 🔔 Player answer update:", payload);
+
+          const answer = payload.new as any;
+          const isCorrect = answer.is_correct === true;
+
+          // Update player answers (for coloring numbers)
+          setPlayerAnswers(prev => ({
+            ...prev,
+            [answer.question_number]: isCorrect
+          }));
+
+          // Update stats
+          setGlobalStats(prev => ({
+            answered: prev.answered + 1,
+            correct: prev.correct + (isCorrect ? 1 : 0),
+            incorrect: prev.incorrect + (!isCorrect ? 1 : 0),
+            accuracy: Math.round(
+              ((prev.correct + (isCorrect ? 1 : 0)) / (prev.answered + 1)) * 100
+            )
+          }));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log("[PlayPage] 🔌 Unsubscribing from player_answers");
+      supabase.removeChannel(channel);
+    };
+  }, [event, isPreview, playerSession]);
+
+  // Countdown timer with auto-negative answer on expiry
+  useEffect(() => {
+    if (timeRemaining <= 0) {
+      // CRITICAL: Auto-submit negative answer if not answered yet
+      if (currentQuestion && !playerAnswers[currentQuestion.question_number] && !submittingAnswer) {
+        console.log("[PlayPage] ⏰ Timer expired - auto-submitting NEGATIVE answer");
+        handleAutoNegativeAnswer();
+      }
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setTimeRemaining((prev) => {
+        const newTime = Math.max(0, prev - 1);
+        
+        // Check if timer just hit 0
+        if (newTime === 0 && prev === 1) {
+          console.log("[PlayPage] ⏰ Timer reached 0 - triggering auto-negative");
+        }
+        
+        return newTime;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [timeRemaining, currentQuestion, playerAnswers, submittingAnswer]);
+
+  // Auto-submit negative answer when timer expires
+  const handleAutoNegativeAnswer = async () => {
+    if (!currentQuestion || !event || !playerSession || !tickets || tickets.length === 0) {
+      console.log("[PlayPage] ⚠️ Cannot auto-submit - missing data");
+      return;
+    }
+
+    console.log("[PlayPage] 🔴 AUTO-NEGATIVE ANSWER:", {
+      playerId: playerSession.playerId.slice(0, 8),
+      questionNumber: currentQuestion.question_number,
+      reason: "Timer expired - no answer submitted"
+    });
+
+    try {
+      const dbSession = await answerService.getOrCreateSession(event.id);
+      const firstTicket = tickets[0];
+
+      // Submit as NO (negative)
+      await answerService.submitAnswer(
+        dbSession.id,
+        event.id,
+        currentQuestion.question_number,
+        "NO",
+        firstTicket.serial_number
+      );
+
+      // Mark as incorrect
+      const isCorrect = false;
+
+      console.log("[PlayPage] ✅ Auto-negative answer submitted");
+
+      // Update per-ticket stats
+      setTicketStats(prev => ({
+        ...prev,
+        [firstTicket.serial_number]: {
+          answered: (prev[firstTicket.serial_number]?.answered || 0) + 1,
+          correct: prev[firstTicket.serial_number]?.correct || 0,
+          incorrect: (prev[firstTicket.serial_number]?.incorrect || 0) + 1,
+          accuracy: Math.round(
+            ((prev[firstTicket.serial_number]?.correct || 0) /
+              ((prev[firstTicket.serial_number]?.answered || 0) + 1)) * 100
+          )
+        }
+      }));
+
+      // Update global stats
+      setGlobalStats(prev => ({
+        answered: prev.answered + 1,
+        correct: prev.correct,
+        incorrect: prev.incorrect + 1,
+        accuracy: Math.round(
+          (prev.correct / (prev.answered + 1)) * 100
+        )
+      }));
+
+      // Update player answers (for coloring numbers RED)
+      setPlayerAnswers(prev => ({
+        ...prev,
+        [currentQuestion.question_number]: false
+      }));
+
+    } catch (error: any) {
+      console.error("[PlayPage] ❌ Auto-negative submit error:", error);
+    }
+  };
+
   // Handle Answer Submission
   const handleAnswer = async (answerYesNo: boolean) => {
     if (!currentQuestion || !event) return;
@@ -259,7 +454,13 @@ export default function PlayPage() {
       return;
     }
 
-    // Preview Mode: Validate session
+    // Check if already answered
+    if (playerAnswers[currentQuestion.question_number] !== undefined) {
+      console.log("[PlayPage] ⚠️ Already answered this question");
+      return;
+    }
+
+    // Preview: Check session
     if (isPreview) {
       const session = getPreviewPlayerSession();
       
@@ -271,11 +472,7 @@ export default function PlayPage() {
 
       if (!tickets || tickets.length === 0) {
         console.log("[PlayPage] ❌ No tickets");
-        toast({
-          title: "Greška",
-          description: "Nema tiketa. Registriraj se ponovo.",
-          variant: "destructive"
-        });
+        setShowRegistration(true);
         return;
       }
 
@@ -284,7 +481,6 @@ export default function PlayPage() {
         nickname: session.nickname,
         eventId: event.id.slice(0, 8),
         ticketId: tickets[0].id.slice(0, 8),
-        ticketSerial: tickets[0].serial_number,
         questionNumber: currentQuestion.question_number,
         answer: answerYesNo ? "DA" : "NE"
       });
@@ -471,16 +667,18 @@ export default function PlayPage() {
         <title>Pitalica Skitalica - Igraj</title>
       </Head>
 
-      {/* DEBUG BANNER (Preview Only) */}
-      {isPreview && (
+      {/* PREVIEW DEBUG BANNER */}
+      {isPreview && event && (
         <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
-          <strong>PREVIEW MODE</strong>
+          <strong>PREVIEW MODE = PROD LOGIC</strong>
           <span className="ml-4">
             Event: {event.id.slice(0, 8)}... | 
-            Q: {currentQuestion?.question_number || 0}/90 | 
             Player: {playerSession?.nickname || "N/A"} | 
             ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} |
-            Tickets: {tickets.length}
+            Q: {currentQuestion?.question_number || 0}/90 | 
+            QID: {currentQuestion?.question_id?.slice(0, 8) || "N/A"} |
+            Tickets: {tickets.length} |
+            RT: {realtimeConnected ? "✓" : "✗"}
           </span>
         </div>
       )}

@@ -25,6 +25,7 @@ export interface EventQuestion {
   question_id: string;
   drawn: boolean;
   drawn_at: string | null;
+  question_open_until: string | null;
   questions?: Question;
 }
 
