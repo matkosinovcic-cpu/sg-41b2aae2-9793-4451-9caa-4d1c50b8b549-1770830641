@@ -71,6 +71,7 @@ export default function PlayerPage() {
   const [timeoutError, setTimeoutError] = useState(false);
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const [lastRequest, setLastRequest] = useState<string>("");
+  const [drawnQuestionsCount, setDrawnQuestionsCount] = useState<number>(0);
   
   // Instrumentacija
   useEffect(() => {
@@ -361,7 +362,7 @@ export default function PlayerPage() {
             <span className="ml-4">
               Event: {event.id.slice(0, 8)}... | 
               Ticket: {ticket.serial_number} | 
-              Question: {activeQuestion?.question_number || 0}/90 |
+              Question: {drawnQuestionsCount}/90 |
               {(() => {
                 const correct = Object.values(answers).filter(a => a === true).length;
                 const incorrect = Object.values(answers).filter(a => a === false).length;
