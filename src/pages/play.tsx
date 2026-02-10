@@ -5,18 +5,16 @@ import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService } from "@/services/answerService";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { 
   Loader2, 
   AlertCircle, 
-  RefreshCcw,
   ThumbsUp,
   ThumbsDown,
   Trophy,
-  TrendingUp,
-  Ticket as TicketIcon
+  User,
+  TicketIcon
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import Head from "next/head";
@@ -34,83 +32,72 @@ import {
 export default function PlayPage() {
   const router = useRouter();
   
-  // State
+  // Preview detection
   const [isPreview, setIsPreview] = useState(false);
   const [playerSession, setPlayerSession] = useState<PreviewPlayerSession | null>(null);
   const [nickname, setNickname] = useState<string>("");
   const [email, setEmail] = useState<string>("");
   
+  // Event & Questions
   const [event, setEvent] = useState<Event | null>(null);
   const [eventLoading, setEventLoading] = useState(true);
-  const [eventError, setEventError] = useState<string | null>(null);
-  
-  const [ticket, setTicket] = useState<Ticket[]>([]); // Array of tickets
-  const [ticketStats, setTicketStats] = useState<Record<string, { answered: number; correct: number; incorrect: number; accuracy: number }>>({});
-  
   const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
-  const [questionTimer, setQuestionTimer] = useState(0);
-  const [isQuestionActive, setIsQuestionActive] = useState(false);
+  const [drawnQuestions, setDrawnQuestions] = useState<Record<number, boolean>>({});
   
+  // Tickets
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [ticketStats, setTicketStats] = useState<Record<string, { 
+    answered: number; 
+    correct: number; 
+    incorrect: number; 
+    accuracy: number 
+  }>>({});
+  
+  // Answer state
   const [submittingAnswer, setSubmittingAnswer] = useState(false);
-  const [playerAnswers, setPlayerAnswers] = useState<Record<number, { answer: boolean; isCorrect: boolean }>>({});
-  const [answerFeedback, setAnswerFeedback] = useState<{
-    show: boolean;
-    message: string;
-    isCorrect: boolean;
-  }>({ show: false, message: "", isCorrect: false });
-
+  const [playerAnswers, setPlayerAnswers] = useState<Record<number, boolean>>({});
+  
   // Modals
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showRegistration, setShowRegistration] = useState(false);
 
-  // Initialize Preview Mode
+  // Initialize Preview Mode & Load Session
   useEffect(() => {
-    setIsPreview(isPreviewEnvironment());
+    const hostname = window.location.hostname;
+    const preview = 
+      hostname.includes("softgen") ||
+      hostname.includes("vercel.app") ||
+      hostname.includes("localhost");
+    
+    setIsPreview(preview);
+
+    if (preview) {
+      const session = getPreviewPlayerSession();
+      if (session) {
+        console.log("[PlayPage] ✅ Session restored:", {
+          playerId: session.playerId.slice(0, 8),
+          nickname: session.nickname,
+          ticketCount: session.ticketIds.length
+        });
+        
+        setPlayerSession(session);
+        setNickname(session.nickname);
+        setEmail(session.email);
+      } else {
+        console.log("[PlayPage] ⚠️ No session - show onboarding");
+        setShowOnboarding(true);
+      }
+    }
   }, []);
 
-  // 1. Load Preview Session
-  useEffect(() => {
-    if (!isPreview) return;
-
-    console.log("[PlayPage] 🔍 Loading Preview session...");
-    const session = getPreviewPlayerSession();
-    
-    if (session) {
-      console.log("[PlayPage] ✅ Session found:", {
-        playerId: session.playerId.slice(0, 8),
-        nickname: session.nickname,
-        ticketCount: session.ticketIds.length
-      });
-      setPlayerSession(session);
-      setNickname(session.nickname);
-      setEmail(session.email);
-    } else {
-      console.log("[PlayPage] ⚠️ No session found - show onboarding");
-      setShowOnboarding(true);
-    }
-  }, [isPreview]);
-
-  // 2. Load Active Event
+  // Load Active Event
   useEffect(() => {
     if (!router.isReady) return;
 
     const loadActiveEvent = async () => {
       setEventLoading(true);
-      setEventError(null);
-
-      // Timeout safety for Preview
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        if (isPreview) {
-          controller.abort();
-          console.log("[PlayPage] ⏱️ Event fetch timeout after 8s");
-        }
-      }, 8000);
-
       try {
         const activeEvent = await eventService.getActiveEvent();
-        clearTimeout(timeoutId);
-        
         setEvent(activeEvent);
         console.log("[PlayPage] ✅ Event loaded:", {
           id: activeEvent.id.slice(0, 8),
@@ -118,100 +105,152 @@ export default function PlayPage() {
           status: activeEvent.status
         });
       } catch (error: any) {
-        clearTimeout(timeoutId);
-        const errorMsg = error.name === 'AbortError' 
-          ? "Timeout: Ne mogu učitati događaj nakon 8 sekundi."
-          : error.message || "Greška pri učitavanju događaja.";
-        
-        console.error("[PlayPage] ❌ Event load error:", errorMsg);
-        setEventError(errorMsg);
+        console.error("[PlayPage] ❌ Event load error:", error);
       } finally {
         setEventLoading(false);
       }
     };
 
-    // Load if in Preview OR Debug mode
     if (isPreview || router.query.debug === "1") {
       loadActiveEvent();
     }
   }, [router.isReady, isPreview, router.query.debug]);
 
-  // 3. Load Tickets (Preview: from session, Prod: by event)
+  // Load Tickets for Player (Preview only)
   useEffect(() => {
-    if (!event) return;
+    if (!isPreview || !playerSession || !event) return;
 
     const loadTickets = async () => {
       try {
-        if (isPreview && playerSession) {
-          // Preview: Load tickets from session IDs
-          console.log("[PlayPage] 📋 Loading Preview tickets:", playerSession.ticketIds);
-          
-          if (playerSession.ticketIds.length > 0) {
-            const ticketPromises = playerSession.ticketIds.map(id => 
-              ticketService.getTicket(id).catch(e => {
-                console.warn(`[PlayPage] Failed to load ticket ${id}`, e);
-                return null;
-              })
-            );
-            
-            const results = await Promise.all(ticketPromises);
-            const validTickets = results.filter(t => t !== null) as Ticket[];
-            setTicket(validTickets);
-            
-            // Init stats
-            const stats: any = {};
-            validTickets.forEach(t => {
-              stats[t.serial_number] = { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
-            });
-            setTicketStats(stats);
-          }
-        } else if (!isPreview && email) {
-          // Production: Load by email
-          const tickets = await ticketService.getPlayerTickets(email, event.id);
-          setTicket(tickets);
-        }
+        console.log("[PlayPage] 📋 Loading tickets:", {
+          playerId: playerSession.playerId.slice(0, 8),
+          ticketIds: playerSession.ticketIds
+        });
+
+        const ticketPromises = playerSession.ticketIds.map(id =>
+          ticketService.getTicket(id).catch(() => null)
+        );
+        
+        const loadedTickets = await Promise.all(ticketPromises);
+        const validTickets = loadedTickets.filter(t => t !== null) as Ticket[];
+        
+        setTickets(validTickets);
+        
+        // Initialize stats for each ticket
+        const stats: any = {};
+        validTickets.forEach(t => {
+          stats[t.serial_number] = { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+        });
+        setTicketStats(stats);
+        
+        console.log("[PlayPage] ✅ Tickets loaded:", validTickets.length);
       } catch (error) {
-        console.error("[PlayPage] ❌ Failed to load tickets:", error);
+        console.error("[PlayPage] ❌ Error loading tickets:", error);
       }
     };
 
     loadTickets();
-  }, [isPreview, playerSession, event, email]);
+  }, [isPreview, playerSession, event]);
 
-  // 4. Realtime Subscription (Event & Questions)
+  // Load Drawn Questions Map
   useEffect(() => {
     if (!event) return;
 
-    const subscription = eventService.subscribeToEvent(event.id, (payload) => {
-      if (payload.new) {
-        const updatedEvent = payload.new as Event;
-        setEvent(updatedEvent);
-        
-        // Handle new question drawn logic here if needed
+    const loadDrawnQuestions = async () => {
+      try {
+        const drawnMap = await eventService.getDrawnQuestions(event.id);
+        setDrawnQuestions(drawnMap);
+        console.log("[PlayPage] ✅ Drawn questions loaded:", Object.keys(drawnMap).length);
+      } catch (error) {
+        console.error("[PlayPage] ❌ Error loading drawn questions:", error);
       }
-    });
-
-    // Subscribe to questions to get the actual question text immediately
-    const qSub = eventService.subscribeToEventQuestions(event.id, async (payload) => {
-       if (payload.new && payload.new.drawn) {
-         const qData = payload.new as EventQuestion;
-         // Need to fetch full question details including text
-         const fullQuestion = await eventService.getEventQuestion(event.id, qData.question_number);
-         setCurrentQuestion(fullQuestion);
-         setAnswerFeedback({ show: false, message: "", isCorrect: false });
-         setIsQuestionActive(true);
-         // Reset timer logic here if needed
-       }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-      qSub.unsubscribe();
     };
+
+    loadDrawnQuestions();
   }, [event?.id]);
 
+  // Realtime Subscription: Event & Questions
+  useEffect(() => {
+    if (!event) return;
 
-  // Handle Answer
+    // Subscribe to event updates (status changes)
+    const eventSub = supabase
+      .channel(`play-event-${event.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "events",
+          filter: `id=eq.${event.id}`
+        },
+        (payload) => {
+          if (payload.new) {
+            const updatedEvent = payload.new as Event;
+            setEvent(updatedEvent);
+            console.log("[PlayPage] 📡 Event updated:", {
+              status: updatedEvent.status,
+              current_drawn: updatedEvent.current_drawn_number
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    // Subscribe to event_questions (when question is drawn)
+    const questionsSub = supabase
+      .channel(`play-questions-${event.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_questions",
+          filter: `event_id=eq.${event.id}`
+        },
+        async (payload) => {
+          console.log("[PlayPage] 📡 Question change:", payload.eventType);
+          
+          if (payload.eventType === "UPDATE" && payload.new) {
+            const questionData = payload.new as EventQuestion;
+            
+            // If question was just drawn
+            if (questionData.drawn && !drawnQuestions[questionData.question_number]) {
+              console.log("[PlayPage] 🎯 New question drawn:", questionData.question_number);
+              
+              // Fetch full question with text
+              try {
+                const fullQuestion = await eventService.getEventQuestion(
+                  event.id,
+                  questionData.question_number
+                );
+                
+                setCurrentQuestion(fullQuestion);
+                setDrawnQuestions(prev => ({
+                  ...prev,
+                  [questionData.question_number]: true
+                }));
+                
+                console.log("[PlayPage] ✅ Current question set:", {
+                  number: fullQuestion.question_number,
+                  text: fullQuestion.questions?.text?.substring(0, 50) + "..."
+                });
+              } catch (error) {
+                console.error("[PlayPage] ❌ Error fetching question:", error);
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      eventSub.unsubscribe();
+      questionsSub.unsubscribe();
+    };
+  }, [event?.id, drawnQuestions]);
+
+  // Handle Answer Submission
   const handleAnswer = async (answerYesNo: boolean) => {
     if (!currentQuestion || !event) return;
 
@@ -220,42 +259,32 @@ export default function PlayPage() {
       return;
     }
 
-    // Preview Mode: Check session
+    // Preview Mode: Validate session
     if (isPreview) {
-      // Re-fetch session from localStorage to ensure it's fresh
       const session = getPreviewPlayerSession();
       
-      console.log("[PlayPage] 🔍 Preview submit check:", {
-        hasSession: !!session,
-        hasPlayerId: !!session?.playerId,
-        hasTickets: ticket && ticket.length > 0,
-        playerIdPreview: session?.playerId?.slice(0, 8) || "N/A",
-        nicknamePreview: session?.nickname || "N/A"
-      });
-      
       if (!session || !session.playerId) {
-        console.log("[PlayPage] ❌ No valid Preview session - opening registration");
+        console.log("[PlayPage] ❌ No session, open registration");
         setShowRegistration(true);
         return;
       }
 
-      if (!ticket || ticket.length === 0) {
-        console.log("[PlayPage] ❌ No tickets found");
-        setAnswerFeedback({
-          show: true,
-          message: "Nema aktivnih tiketa",
-          isCorrect: false
+      if (!tickets || tickets.length === 0) {
+        console.log("[PlayPage] ❌ No tickets");
+        toast({
+          title: "Greška",
+          description: "Nema tiketa. Registriraj se ponovo.",
+          variant: "destructive"
         });
         return;
       }
 
-      // DEBUG: Log submission
       console.log("[PlayPage] 🔍 PREVIEW SUBMIT:", {
         playerId: session.playerId.slice(0, 8),
         nickname: session.nickname,
         eventId: event.id.slice(0, 8),
-        ticketId: ticket[0].id.slice(0, 8),
-        ticketSerial: ticket[0].serial_number,
+        ticketId: tickets[0].id.slice(0, 8),
+        ticketSerial: tickets[0].serial_number,
         questionNumber: currentQuestion.question_number,
         answer: answerYesNo ? "DA" : "NE"
       });
@@ -276,7 +305,7 @@ export default function PlayPage() {
     try {
       // Get or create session
       const dbSession = await answerService.getOrCreateSession(event.id);
-      const firstTicket = ticket[0];
+      const firstTicket = tickets[0];
 
       // Submit answer
       await answerService.submitAnswer(
@@ -287,7 +316,7 @@ export default function PlayPage() {
         firstTicket.serial_number
       );
 
-      // Check correctness
+      // Calculate if correct
       const isCorrect = (answerYesNo ? "YES" : "NO") === 
         (currentQuestion.questions?.correct_answer ? "YES" : "NO");
 
@@ -297,16 +326,14 @@ export default function PlayPage() {
         correct: isCorrect
       });
 
-      // Show feedback
-      setAnswerFeedback({
-        show: true,
-        message: isCorrect ? "✓ Točan odgovor!" : "✗ Netočan odgovor",
-        isCorrect
-      });
-
       // Update ticket stats (local state)
       setTicketStats(prev => {
-        const current = prev[firstTicket.serial_number] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+        const current = prev[firstTicket.serial_number] || { 
+          answered: 0, 
+          correct: 0, 
+          incorrect: 0, 
+          accuracy: 0 
+        };
         const newAnswered = current.answered + 1;
         const newCorrect = current.correct + (isCorrect ? 1 : 0);
         const newIncorrect = current.incorrect + (!isCorrect ? 1 : 0);
@@ -323,15 +350,17 @@ export default function PlayPage() {
         };
       });
 
-      // Update player answers
+      // Update player answers (for coloring numbers)
       setPlayerAnswers(prev => ({
         ...prev,
-        [currentQuestion.question_number]: isCorrect ? { answer: answerYesNo, isCorrect: true } : { answer: answerYesNo, isCorrect: false }
+        [currentQuestion.question_number]: isCorrect
       }));
 
+      // Show toast
       toast({
         title: isCorrect ? "Točno!" : "Netočno",
-        description: isCorrect ? "Odlično!" : "Pokušaj bolje sljedeći put."
+        description: isCorrect ? "Odlično!" : "Pokušaj bolje sljedeći put.",
+        variant: isCorrect ? "default" : "destructive"
       });
 
     } catch (error: any) {
@@ -346,10 +375,17 @@ export default function PlayPage() {
     }
   };
 
+  // Calculate Global Stats
+  const globalStats = {
+    totalQuestions: Object.keys(drawnQuestions).length,
+    totalCorrect: Object.values(playerAnswers).filter(v => v === true).length,
+    totalIncorrect: Object.values(playerAnswers).filter(v => v === false).length,
+    accuracy: Object.values(playerAnswers).length > 0
+      ? Math.round((Object.values(playerAnswers).filter(v => v === true).length / Object.values(playerAnswers).length) * 100)
+      : 0
+  };
 
-  // --- RENDER ---
-  
-  // PREVIEW: Hide UI if no session
+  // Preview: If no session, show only onboarding/registration
   if (isPreview && !playerSession) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 flex items-center justify-center">
@@ -357,7 +393,6 @@ export default function PlayPage() {
           <title>Pitalica Skitalica - Igraj</title>
         </Head>
 
-        {/* Onboarding Modal */}
         <OnboardingModal
           open={showOnboarding}
           onOpenChange={setShowOnboarding}
@@ -367,12 +402,9 @@ export default function PlayPage() {
           }}
         />
 
-        {/* Registration Modal */}
         <RegistrationModal
           open={showRegistration}
           onOpenChange={setShowRegistration}
-          eventId={event?.id || ""}
-          venueId=""
           onSuccess={(result) => {
             console.log("[PlayPage] ✅ Registration success:", {
               player_id: result.player_id,
@@ -380,7 +412,6 @@ export default function PlayPage() {
               tickets_created: result.tickets_created
             });
 
-            // CRITICAL: Save Preview session to localStorage
             const session: Omit<PreviewPlayerSession, "timestamp"> = {
               eventId: event?.id || "",
               playerId: result.player_id,
@@ -391,61 +422,34 @@ export default function PlayPage() {
             
             setPreviewPlayerSession(session);
             
-            // Update all state from saved session
             setPlayerSession({
               ...session,
               timestamp: Date.now()
             });
             setNickname(result.nickname);
             setEmail(result.email);
-            setTicket(result.tickets);
-            
-            console.log("[PlayPage] 💾 Preview session saved:", {
-              playerId: session.playerId.slice(0, 8),
-              nickname: session.nickname,
-              ticketIds: session.ticketIds
-            });
-
+            setTickets(result.tickets);
             setShowRegistration(false);
+            setShowOnboarding(false);
             
             toast({
               title: "Uspješno!",
               description: `Preuzeto ${result.tickets_created} listića.`
             });
           }}
+          eventId={event?.id || ""}
+          venueId=""
         />
-
-        {/* Loading state while waiting for event */}
-        {!showOnboarding && !showRegistration && (
-          <div className="text-center text-white">
-            <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4" />
-            <p>Učitavanje...</p>
-          </div>
-        )}
       </div>
     );
   }
 
-  // STANDARD UI (Production OR Preview with Session)
-  
+  // Loading state
   if (eventLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
         <span className="ml-2 text-gray-500">Učitavanje...</span>
-      </div>
-    );
-  }
-
-  if (eventError) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 p-4">
-        <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
-        <h3 className="text-lg font-bold text-red-700">Greška</h3>
-        <p className="text-red-600 mb-4">{eventError}</p>
-        <Button onClick={() => window.location.reload()} variant="outline">
-          <RefreshCcw className="mr-2 h-4 w-4" /> Pokušaj ponovno
-        </Button>
       </div>
     );
   }
@@ -460,72 +464,92 @@ export default function PlayPage() {
     );
   }
 
+  // Main Player UI (Production-like layout)
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
+    <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400">
       <Head>
         <title>Pitalica Skitalica - Igraj</title>
       </Head>
 
       {/* DEBUG BANNER (Preview Only) */}
       {isPreview && (
-        <div className="bg-green-600 text-white text-xs font-mono py-1 px-2 text-center">
-          PREVIEW | Player: {playerSession?.nickname || nickname || "N/A"} | ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} | Tickets: {ticket.length}
+        <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
+          <strong>PREVIEW MODE</strong>
+          <span className="ml-4">
+            Event: {event.id.slice(0, 8)}... | 
+            Q: {currentQuestion?.question_number || 0}/90 | 
+            Player: {playerSession?.nickname || "N/A"} | 
+            ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} |
+            Tickets: {tickets.length}
+          </span>
         </div>
       )}
 
       {/* HEADER */}
-      <div className="bg-white border-b sticky top-0 z-10 px-4 py-3 flex justify-between items-center shadow-sm">
-        <div>
-          <h1 className="font-bold text-primary text-lg">Pitalica Skitalica</h1>
-          <p className="text-xs text-gray-500">
-            {playerSession?.nickname || nickname || "Igrač"}
-          </p>
+      <div className="bg-white shadow-sm border-b sticky top-0 z-10">
+        <div className="container mx-auto px-4 py-3">
+          <div className="flex justify-between items-center mb-2">
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-lg text-primary">PITALICA SKITALICA</h1>
+            </div>
+            <Badge variant={event.status === "active" ? "default" : "secondary"}>
+              {event.status === "active" ? "U TOKU" : event.status}
+            </Badge>
+          </div>
+          
+          <div className="flex justify-between items-center text-sm">
+            <div className="flex items-center gap-2">
+              <User className="h-4 w-4 text-gray-500" />
+              <span className="font-medium">{playerSession?.nickname || nickname || "Igrač"}</span>
+            </div>
+            <div className="text-gray-600">{event.name}</div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-           <Badge variant={event.status === 'active' ? 'default' : 'secondary'}>
-             {event.status === 'active' ? 'UŽIVO' : event.status}
-           </Badge>
+        
+        {/* Global Stats Bar */}
+        <div className="bg-gray-50 border-t">
+          <div className="container mx-auto px-4 py-2 grid grid-cols-4 gap-4 text-center text-xs">
+            <div>
+              <div className="font-bold text-lg">{globalStats.totalQuestions}/90</div>
+              <div className="text-gray-500">PITANJA</div>
+            </div>
+            <div>
+              <div className="font-bold text-lg text-green-600">{globalStats.totalCorrect}</div>
+              <div className="text-gray-500">TOČNO</div>
+            </div>
+            <div>
+              <div className="font-bold text-lg text-red-600">{globalStats.totalIncorrect}</div>
+              <div className="text-gray-500">NETOČNO</div>
+            </div>
+            <div>
+              <div className="font-bold text-lg text-blue-600">{globalStats.accuracy}%</div>
+              <div className="text-gray-500">TOČNOST</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <main className="container mx-auto px-4 py-6 max-w-lg">
+      <main className="container mx-auto px-4 py-6 space-y-6">
         
-        {/* ACTIVE QUESTION CARD */}
+        {/* CURRENT QUESTION CARD */}
         {currentQuestion ? (
-          <Card className="mb-6 border-primary/20 shadow-md overflow-hidden">
+          <Card className="border-primary/20 shadow-md overflow-hidden">
             <div className="bg-primary/5 p-4 border-b border-primary/10 flex justify-between items-center">
               <span className="font-bold text-primary">Pitanje #{currentQuestion.question_number}</span>
-              {/* Timer placeholder */}
-              <Badge variant="outline" className="bg-white">9s</Badge> 
+              <Badge variant="outline" className="bg-white">10s</Badge>
             </div>
             <CardContent className="p-6 text-center space-y-6">
               <h2 className="text-xl font-bold text-gray-800 leading-relaxed">
                 {currentQuestion.questions?.text || "Učitavanje teksta pitanja..."}
               </h2>
 
-              {/* FEEDBACK MSG */}
-              {answerFeedback.show && (
-                <div className={cn(
-                  "p-3 rounded-md text-sm font-medium animate-in fade-in slide-in-from-bottom-2",
-                  answerFeedback.message.includes("Nema aktivne") ? "bg-orange-100 text-orange-800" :
-                  answerFeedback.isCorrect ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
-                )}>
-                  {answerFeedback.message}
-                  {answerFeedback.message.includes("Nema aktivne") && (
-                     <div className="mt-2 text-xs underline cursor-pointer" onClick={() => window.location.reload()}>
-                       Osvježi za registraciju
-                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* ACTION BUTTONS */}
+              {/* DA/NE BUTTONS */}
               <div className="grid grid-cols-2 gap-4 pt-2">
                 <Button 
                   size="lg" 
                   className="bg-green-500 hover:bg-green-600 text-white h-16 text-lg"
                   onClick={() => handleAnswer(true)}
-                  disabled={submittingAnswer || answerFeedback.show}
+                  disabled={submittingAnswer || playerAnswers[currentQuestion.question_number] !== undefined}
                 >
                   <ThumbsUp className="mr-2 h-6 w-6" /> DA
                 </Button>
@@ -533,15 +557,31 @@ export default function PlayPage() {
                   size="lg" 
                   className="bg-red-500 hover:bg-red-600 text-white h-16 text-lg"
                   onClick={() => handleAnswer(false)}
-                  disabled={submittingAnswer || answerFeedback.show}
+                  disabled={submittingAnswer || playerAnswers[currentQuestion.question_number] !== undefined}
                 >
                   <ThumbsDown className="mr-2 h-6 w-6" /> NE
                 </Button>
               </div>
+
+              {/* FEEDBACK AFTER ANSWER */}
+              {playerAnswers[currentQuestion.question_number] !== undefined && (
+                <div className={cn(
+                  "p-4 rounded-lg animate-in fade-in slide-in-from-bottom-2",
+                  playerAnswers[currentQuestion.question_number]
+                    ? "bg-green-50 border border-green-200 text-green-800"
+                    : "bg-red-50 border border-red-200 text-red-800"
+                )}>
+                  <p className="font-medium">
+                    {playerAnswers[currentQuestion.question_number] 
+                      ? "✓ Točan odgovor!" 
+                      : "✗ Netočan odgovor"}
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         ) : (
-          <Card className="mb-6 bg-gray-100 border-dashed">
+          <Card className="bg-gray-100 border-dashed">
             <CardContent className="p-8 text-center text-gray-500">
               <Loader2 className="h-8 w-8 mx-auto mb-2 animate-spin opacity-50" />
               <p>Čekanje na iduće pitanje...</p>
@@ -549,38 +589,75 @@ export default function PlayPage() {
           </Card>
         )}
 
-        {/* TICKET GRID (2x2) */}
-        {ticket.length > 0 && (
+        {/* TICKETS GRID (2x2) */}
+        {tickets.length > 0 && (
           <div className="space-y-4">
-            <h3 className="font-bold text-gray-700 flex items-center gap-2">
-              <TicketIcon className="h-4 w-4" /> Moji Listići ({ticket.length})
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <TicketIcon className="h-5 w-5" /> Moji Listići ({tickets.length})
             </h3>
             <div className="grid grid-cols-2 gap-3">
-              {ticket.slice(0, 4).map((t, idx) => (
-                <Card key={t.id} className="overflow-hidden border-2 hover:border-primary/30 transition-colors">
-                  <div className="bg-gray-50 p-2 text-xs text-center border-b font-mono text-gray-500 truncate">
-                    {t.serial_number}
-                  </div>
-                  <CardContent className="p-2">
-                    <div className="grid grid-cols-5 gap-1">
-                      {t.ticket_numbers?.sort((a,b)=>a-b).map(num => {
-                        const isDrawn = event.drawn_numbers?.includes(num);
-                        return (
-                          <div 
-                            key={num} 
-                            className={cn(
-                              "aspect-square flex items-center justify-center text-[10px] font-bold rounded",
-                              isDrawn ? "bg-primary text-white" : "bg-gray-100 text-gray-400"
-                            )}
-                          >
-                            {num}
-                          </div>
-                        )
-                      })}
+              {tickets.map((ticket, idx) => {
+                const stats = ticketStats[ticket.serial_number] || { 
+                  answered: 0, 
+                  correct: 0, 
+                  incorrect: 0, 
+                  accuracy: 0 
+                };
+                
+                return (
+                  <Card key={ticket.id} className="overflow-hidden border-2 hover:border-primary/30 transition-colors">
+                    {/* Serial Number Header */}
+                    <div className="bg-gray-50 p-2 text-xs text-center border-b font-mono text-gray-500 truncate">
+                      {ticket.serial_number}
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    
+                    {/* Stats Row */}
+                    <div className="bg-white p-2 border-b grid grid-cols-3 gap-1 text-center text-xs">
+                      <div>
+                        <div className="font-bold text-green-600">{stats.correct}</div>
+                        <div className="text-gray-400">T</div>
+                      </div>
+                      <div>
+                        <div className="font-bold text-red-600">{stats.incorrect}</div>
+                        <div className="text-gray-400">N</div>
+                      </div>
+                      <div>
+                        <div className="font-bold text-blue-600">{stats.accuracy}%</div>
+                        <div className="text-gray-400">%</div>
+                      </div>
+                    </div>
+                    
+                    {/* Numbers Grid */}
+                    <CardContent className="p-2">
+                      <div className="grid grid-cols-5 gap-1">
+                        {ticket.ticket_numbers?.sort((a, b) => a - b).map(num => {
+                          const isDrawn = drawnQuestions[num];
+                          const wasAnswered = playerAnswers[num] !== undefined;
+                          const wasCorrect = playerAnswers[num] === true;
+                          
+                          return (
+                            <div 
+                              key={num} 
+                              className={cn(
+                                "aspect-square flex items-center justify-center text-[10px] font-bold rounded",
+                                isDrawn && wasAnswered && wasCorrect 
+                                  ? "bg-green-500 text-white" 
+                                  : isDrawn && wasAnswered && !wasCorrect
+                                  ? "bg-red-500 text-white"
+                                  : isDrawn
+                                  ? "bg-primary text-white"
+                                  : "bg-gray-100 text-gray-400"
+                              )}
+                            >
+                              {num}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           </div>
         )}
