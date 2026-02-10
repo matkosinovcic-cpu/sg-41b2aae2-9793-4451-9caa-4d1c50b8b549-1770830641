@@ -12,6 +12,20 @@ import { Loader2, Ticket as TicketIcon, Trophy, Ban, RefreshCcw, AlertCircle } f
 import { toast } from "@/hooks/use-toast";
 import Head from "next/head";
 import { cn } from "@/lib/utils";
+import { OnboardingModal } from "@/components/OnboardingModal";
+
+// Helper: Synchronous Preview detection
+function isPreviewEnvironment(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = window.location.host;
+  return (
+    host.includes("softgen.ai") ||
+    host.includes("softgen.dev") ||
+    host.includes("vercel.app") ||
+    host.includes("localhost") ||
+    host.includes("127.0.0.1")
+  );
+}
 
 // Helper for bingo grid checks
 const checkBingoLine = (
@@ -24,7 +38,24 @@ const checkBingoLine = (
 
 export default function PlayerPage() {
   const router = useRouter();
-  const { ticket: ticketId, debug } = router.query;
+  const { ticket: ticketParam, ticketId: ticketIdParam, debug } = router.query;
+  const ticketId = (ticketParam || ticketIdParam) as string;
+
+  const [isPreview, setIsPreview] = useState(false);
+  const [hasRedirected, setHasRedirected] = useState(false);
+  const isDebugMode = debug === "1";
+
+  // Auto-redirect to ?debug=1 in Preview environment (client-side only)
+  useEffect(() => {
+    if (isPreviewEnvironment() && !debug && !hasRedirected) {
+      setHasRedirected(true);
+      const currentPath = router.asPath.split("?")[0];
+      const params = new URLSearchParams(window.location.search);
+      params.set("debug", "1");
+      router.replace(`${currentPath}?${params.toString()}`, undefined, { shallow: true });
+    }
+  }, [debug, hasRedirected, router]);
+
   const [email, setEmail] = useState<string>("");
   
   const [loading, setLoading] = useState(true);
@@ -41,11 +72,15 @@ export default function PlayerPage() {
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const [lastRequest, setLastRequest] = useState<string>("");
   
+  // Instrumentacija
+  useEffect(() => {
+    if (ticketId) {
+      console.log("[PlayerPage] Loaded with ticketId:", ticketId);
+    }
+  }, [ticketId]);
+
   // Confetti effect reference
   const confettiRef = useRef<any>(null);
-
-  const isDebugMode = debug === "1" || isPreview;
-  const [isPreview, setIsPreview] = useState(false);
 
   // Detect preview mode after mount (prevents hydration mismatch)
   useEffect(() => {
