@@ -1,908 +1,591 @@
-import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Head from "next/head";
-import Link from "next/link";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { OnboardingModal } from "@/components/OnboardingModal";
-import { RegistrationModal } from "@/components/RegistrationModal";
-import { ticketService, type Ticket } from "@/services/ticketService";
-import { eventService, type Event, type EventQuestion } from "@/services/eventService";
+import { useEffect, useState, useRef } from "react";
+import { ticketService, Ticket } from "@/services/ticketService";
+import { eventService, Event, EventQuestion } from "@/services/eventService";
 import { answerService } from "@/services/answerService";
 import { supabase } from "@/integrations/supabase/client";
-import { getPlayerSession, updateSessionAfterRegistration, type PlayerSession } from "@/lib/playerHelper";
-import { useToast } from "@/hooks/use-toast";
-
-// Helper: Synchronous Preview detection
-function isPreviewEnvironment(): boolean {
-  if (typeof window === "undefined") return false;
-  const host = window.location.host;
-  return (
-    host.includes("softgen.ai") ||
-    host.includes("softgen.dev") ||
-    host.includes("vercel.app") ||
-    host.includes("localhost") ||
-    host.includes("127.0.0.1")
-  );
-}
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { 
+  Loader2, 
+  AlertCircle, 
+  RefreshCcw,
+  ThumbsUp,
+  ThumbsDown,
+  Trophy,
+  TrendingUp,
+  Ticket as TicketIcon
+} from "lucide-react";
+import { toast } from "@/hooks/use-toast";
+import Head from "next/head";
+import { cn } from "@/lib/utils";
+import { OnboardingModal } from "@/components/OnboardingModal";
+import { RegistrationModal } from "@/components/RegistrationModal";
+import {
+  getPreviewPlayerSession,
+  setPreviewPlayerSession,
+  clearPreviewPlayerSession,
+  isPreviewEnvironment,
+  type PreviewPlayerSession
+} from "@/lib/previewSession";
 
 export default function PlayPage() {
   const router = useRouter();
-  const { debug } = router.query;
-  const { toast } = useToast();
   
+  // State
   const [isPreview, setIsPreview] = useState(false);
-  const [hasRedirected, setHasRedirected] = useState(false);
-  const isDebugMode = debug === "1";
-
-  const [ticket, setTicket] = useState<Ticket[]>([]);
-  const [event, setEvent] = useState<Event | null>(null);
+  const [playerSession, setPlayerSession] = useState<PreviewPlayerSession | null>(null);
+  const [nickname, setNickname] = useState<string>("");
+  const [email, setEmail] = useState<string>("");
   
-  // Loading & Error states
+  const [event, setEvent] = useState<Event | null>(null);
   const [eventLoading, setEventLoading] = useState(true);
   const [eventError, setEventError] = useState<string | null>(null);
-
+  
+  const [ticket, setTicket] = useState<Ticket[]>([]); // Array of tickets
   const [ticketStats, setTicketStats] = useState<Record<string, { answered: number; correct: number; incorrect: number; accuracy: number }>>({});
   
-  // Auth state (Prod + Preview fallback)
-  const [email, setEmail] = useState<string>("");
-  const [nickname, setNickname] = useState<string>("");
+  const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
+  const [questionTimer, setQuestionTimer] = useState(0);
+  const [isQuestionActive, setIsQuestionActive] = useState(false);
+  
+  const [submittingAnswer, setSubmittingAnswer] = useState(false);
+  const [playerAnswers, setPlayerAnswers] = useState<Record<number, { answer: boolean; isCorrect: boolean }>>({});
+  const [answerFeedback, setAnswerFeedback] = useState<{
+    show: boolean;
+    message: string;
+    isCorrect: boolean;
+  }>({ show: false, message: "", isCorrect: false });
+
+  // Modals
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showRegistration, setShowRegistration] = useState(false);
-  const [claiming, setClaiming] = useState(false);
-  const [lastRequest, setLastRequest] = useState<string>("");
 
-  const [globalStats, setGlobalStats] = useState<{
-    drawnQuestions: number;
-    correctAnswers: number;
-    incorrectAnswers: number;
-    accuracy: number;
-  }>({
-    drawnQuestions: 0,
-    correctAnswers: 0,
-    incorrectAnswers: 0,
-    accuracy: 0
-  });
-
-  // Player flow state (Preview only)
-  const [currentQuestion, setCurrentQuestion] = useState<EventQuestion | null>(null);
-  const [questionText, setQuestionText] = useState<string | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState(0);
-  const [playerAnswers, setPlayerAnswers] = useState<Record<number, { answer: boolean; isCorrect: boolean }>>({});
-  const [submittingAnswer, setSubmittingAnswer] = useState(false);
-  const [playerSession, setPlayerSession] = useState<PlayerSession | null>(null);
-
-  // Detect preview mode after mount (prevents hydration mismatch)
+  // Initialize Preview Mode
   useEffect(() => {
-    const hostname = window.location.hostname;
-    setIsPreview(
-      hostname.includes("softgen") ||
-      hostname.includes("vercel.app") ||
-      hostname.includes("localhost")
-    );
+    setIsPreview(isPreviewEnvironment());
   }, []);
 
-  // Load player session (Preview only)
+  // 1. Load Preview Session
   useEffect(() => {
     if (!isPreview) return;
 
-    const loadSession = async () => {
-      try {
-        const session = await getPlayerSession();
-        if (session) {
-          setPlayerSession(session);
-          setNickname(session.nickname);
-          setEmail(session.email);
-          
-          console.log("[PlayPage] Player session loaded:", {
-            playerId: session.playerId.slice(0, 8),
-            nickname: session.nickname
-          });
-
-          // PREVIEW ONLY: Fetch tickets if we have IDs but no tickets in state
-          if (session.ticketIds && session.ticketIds.length > 0) {
-             const { data: ticketsData } = await supabase
-              .from("tickets")
-              .select("*")
-              .in("id", session.ticketIds);
-             
-             if (ticketsData) {
-               console.log("[PlayPage] Loaded tickets from session:", ticketsData.length);
-               setTicket(ticketsData);
-             }
-          }
-        } else {
-          // No session - show onboarding in Preview
-          console.log("[PlayPage] No session found - showing onboarding");
-          setShowOnboarding(true);
-        }
-      } catch (error) {
-        console.error("[PlayPage] Error loading session:", error);
-        
-        // Show onboarding on error
-        setShowOnboarding(true);
-      }
-    };
-
-    loadSession();
+    console.log("[PlayPage] 🔍 Loading Preview session...");
+    const session = getPreviewPlayerSession();
+    
+    if (session) {
+      console.log("[PlayPage] ✅ Session found:", {
+        playerId: session.playerId.slice(0, 8),
+        nickname: session.nickname,
+        ticketCount: session.ticketIds.length
+      });
+      setPlayerSession(session);
+      setNickname(session.nickname);
+      setEmail(session.email);
+    } else {
+      console.log("[PlayPage] ⚠️ No session found - show onboarding");
+      setShowOnboarding(true);
+    }
   }, [isPreview]);
 
-  // ENV validation on mount
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key || url === "invalid_url" || key === "invalid_anon_key") {
-      toast({
-        title: "Supabase nije pravilno konfiguriran.",
-        variant: "destructive",
-      });
-    }
-  }, []);
-
-  // Load active event with timeout and error handling
+  // 2. Load Active Event
   useEffect(() => {
     if (!router.isReady) return;
 
-    // PREVIEW ONLY: Debug logging
-    if (isPreview) {
-      console.log("[PlayPage] 🔍 DEBUG - Starting event load", {
-        isPreview,
-        playerSession: playerSession ? {
-          playerId: playerSession.playerId.slice(0, 8) + "...",
-          nickname: playerSession.nickname
-        } : null
-      });
-    }
-
     const loadActiveEvent = async () => {
-      // Create timeout controller (8 seconds)
+      setEventLoading(true);
+      setEventError(null);
+
+      // Timeout safety for Preview
       const controller = new AbortController();
       const timeoutId = setTimeout(() => {
-        controller.abort();
         if (isPreview) {
-          console.log("[PlayPage] ⏱️ DEBUG - Event load TIMEOUT after 8s");
+          controller.abort();
+          console.log("[PlayPage] ⏱️ Event fetch timeout after 8s");
         }
-        setEventError("Timeout pri učitavanju događaja. Pokušaj ponovno.");
-        setEventLoading(false);
       }, 8000);
 
       try {
-        setEventLoading(true);
-        setEventError(null);
-
-        if (isPreview) {
-          console.log("[PlayPage] 🔄 DEBUG - Fetching active event...");
-        }
-
         const activeEvent = await eventService.getActiveEvent();
-        
         clearTimeout(timeoutId);
         
-        if (isPreview) {
-          console.log("[PlayPage] ✅ DEBUG - Event loaded successfully", {
-            eventId: activeEvent.id.slice(0, 8) + "...",
-            eventName: activeEvent.name,
-            status: activeEvent.status
-          });
-        }
-
         setEvent(activeEvent);
-        setEventError(null);
+        console.log("[PlayPage] ✅ Event loaded:", {
+          id: activeEvent.id.slice(0, 8),
+          name: activeEvent.name,
+          status: activeEvent.status
+        });
       } catch (error: any) {
         clearTimeout(timeoutId);
+        const errorMsg = error.name === 'AbortError' 
+          ? "Timeout: Ne mogu učitati događaj nakon 8 sekundi."
+          : error.message || "Greška pri učitavanju događaja.";
         
-        if (isPreview) {
-          console.error("[PlayPage] ❌ DEBUG - Event load ERROR:", {
-            message: error.message,
-            code: error.code,
-            details: error.details
-          });
-        }
-
-        if (error.name === 'AbortError') {
-          setEventError("Timeout pri učitavanju događaja. Pokušaj ponovno.");
-        } else if (error.code === 'PGRST116') {
-          setEventError("Nema aktivnog događaja. Čekaj da admin pokrene event.");
-        } else {
-          setEventError(error.message || "Greška pri učitavanju događaja.");
-        }
+        console.error("[PlayPage] ❌ Event load error:", errorMsg);
+        setEventError(errorMsg);
       } finally {
-        clearTimeout(timeoutId);
         setEventLoading(false);
       }
     };
 
-    loadActiveEvent();
-  }, [router.isReady, isPreview, playerSession]);
+    // Load if in Preview OR Debug mode
+    if (isPreview || router.query.debug === "1") {
+      loadActiveEvent();
+    }
+  }, [router.isReady, isPreview, router.query.debug]);
 
-  // Auto-load existing tickets
+  // 3. Load Tickets (Preview: from session, Prod: by event)
   useEffect(() => {
-    if (!event || ticket.length > 0) return;
+    if (!event) return;
 
-    const loadExistingTickets = async () => {
+    const loadTickets = async () => {
       try {
-        const savedEmail = localStorage.getItem("player_email");
-        if (!savedEmail) return;
-
-        const tickets = await ticketService.getPlayerTickets(savedEmail, event.id);
-        
-        if (tickets.length > 0) {
+        if (isPreview && playerSession) {
+          // Preview: Load tickets from session IDs
+          console.log("[PlayPage] 📋 Loading Preview tickets:", playerSession.ticketIds);
+          
+          if (playerSession.ticketIds.length > 0) {
+            const ticketPromises = playerSession.ticketIds.map(id => 
+              ticketService.getTicket(id).catch(e => {
+                console.warn(`[PlayPage] Failed to load ticket ${id}`, e);
+                return null;
+              })
+            );
+            
+            const results = await Promise.all(ticketPromises);
+            const validTickets = results.filter(t => t !== null) as Ticket[];
+            setTicket(validTickets);
+            
+            // Init stats
+            const stats: any = {};
+            validTickets.forEach(t => {
+              stats[t.serial_number] = { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+            });
+            setTicketStats(stats);
+          }
+        } else if (!isPreview && email) {
+          // Production: Load by email
+          const tickets = await ticketService.getPlayerTickets(email, event.id);
           setTicket(tickets);
         }
       } catch (error) {
-        console.error("[PlayPage] Error loading existing tickets:", error);
+        console.error("[PlayPage] ❌ Failed to load tickets:", error);
       }
     };
 
-    loadExistingTickets();
-  }, [event, ticket, isDebugMode]);
+    loadTickets();
+  }, [isPreview, playerSession, event, email]);
 
-  // Fetch statistics for all tickets
+  // 4. Realtime Subscription (Event & Questions)
   useEffect(() => {
-    if (!ticket || !event || !isPreview) return;
+    if (!event) return;
 
-    const fetchStats = async () => {
-      try {
-        // Fetch stats for each ticket
-        const statsPromises = ticket.map(async (t) => {
-          const answers = await answerService.getTicketAnswers(t.id);
-          const ticketNumbers = t.ticket_numbers || [];
-          
-          const answered = answers.length;
-          const correct = answers.filter(a => a.is_correct).length;
-          const incorrect = answers.filter(a => !a.is_correct).length;
-          const accuracy = answered > 0 ? Math.round((correct / answered) * 100) : 0;
-
-          return {
-            ticketId: t.id,
-            stats: { answered, correct, incorrect, accuracy }
-          };
-        });
-
-        const results = await Promise.all(statsPromises);
+    const subscription = eventService.subscribeToEvent(event.id, (payload) => {
+      if (payload.new) {
+        const updatedEvent = payload.new as Event;
+        setEvent(updatedEvent);
         
-        // Build stats map
-        const statsMap: typeof ticketStats = {};
-        results.forEach(({ ticketId, stats }) => {
-          statsMap[ticketId] = stats;
-        });
-        setTicketStats(statsMap);
-
-        // Calculate global stats
-        const totalCorrect = results.reduce((sum, { stats }) => sum + stats.correct, 0);
-        const totalIncorrect = results.reduce((sum, { stats }) => sum + stats.incorrect, 0);
-        const totalAnswered = totalCorrect + totalIncorrect;
-        const globalAccuracy = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
-
-        setGlobalStats({
-          drawnQuestions: event.drawn_numbers?.length || 0,
-          correctAnswers: totalCorrect,
-          incorrectAnswers: totalIncorrect,
-          accuracy: globalAccuracy
-        });
-      } catch (error) {
-        console.error("[PlayPage] Error fetching stats:", error);
+        // Handle new question drawn logic here if needed
       }
-    };
+    });
 
-    fetchStats();
-  }, [ticket, event, isPreview]);
-
-  // Realtime subscription for current question (Preview only)
-  useEffect(() => {
-    if (!event || !isPreview) return;
-
-    console.log("[PlayPage] Setting up realtime subscription for event:", event.id);
-
-    const eventSub = supabase
-      .channel(`play-event-${event.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "events",
-          filter: `id=eq.${event.id}`
-        },
-        async (payload) => {
-          const updatedEvent = payload.new as Event;
-          console.log("[PlayPage] Event updated:", {
-            current_number: updatedEvent.current_drawn_number,
-            drawn_count: updatedEvent.drawn_numbers?.length
-          });
-          
-          setEvent(updatedEvent);
-          
-          // Load current question if number changed
-          if (updatedEvent.current_drawn_number) {
-            await loadCurrentQuestion(updatedEvent.id, updatedEvent.current_drawn_number);
-          }
-        }
-      )
-      .subscribe();
-
-    // Load initial current question if exists
-    if (event.current_drawn_number) {
-      loadCurrentQuestion(event.id, event.current_drawn_number);
-    }
+    // Subscribe to questions to get the actual question text immediately
+    const qSub = eventService.subscribeToEventQuestions(event.id, async (payload) => {
+       if (payload.new && payload.new.drawn) {
+         const qData = payload.new as EventQuestion;
+         // Need to fetch full question details including text
+         const fullQuestion = await eventService.getEventQuestion(event.id, qData.question_number);
+         setCurrentQuestion(fullQuestion);
+         setAnswerFeedback({ show: false, message: "", isCorrect: false });
+         setIsQuestionActive(true);
+         // Reset timer logic here if needed
+       }
+    });
 
     return () => {
-      console.log("[PlayPage] Cleaning up subscription");
-      eventSub.unsubscribe();
+      subscription.unsubscribe();
+      qSub.unsubscribe();
     };
-  }, [event?.id, isPreview]);
+  }, [event?.id]);
 
-  // Timer countdown (Preview only)
-  useEffect(() => {
-    if (!event?.question_open_until || !isPreview) {
-      setTimeRemaining(0);
-      return;
-    }
 
-    const interval = setInterval(() => {
-      const now = new Date().getTime();
-      const deadline = new Date(event.question_open_until!).getTime();
-      const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
-      setTimeRemaining(remaining);
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [event?.question_open_until, isPreview]);
-
-  // Load current question details
-  const loadCurrentQuestion = async (eventId: string, questionNumber: number) => {
-    try {
-      console.log(`[PlayPage] Loading question #${questionNumber}`);
-      const data = await eventService.getEventQuestion(eventId, questionNumber);
-      setCurrentQuestion(data);
-
-      // Fetch question text
-      if (data?.question_id) {
-        const { data: qData, error: qError } = await supabase
-          .from("questions")
-          .select("text")
-          .eq("id", data.question_id)
-          .single();
-
-        if (!qError && qData) {
-          console.log("[PlayPage] NEW QUESTION:", data.question_number, qData.text);
-          setQuestionText(qData.text);
-        }
-      }
-    } catch (error) {
-      console.error("[PlayPage] Error loading question:", error);
-    }
-  };
-
-  // Submit answer (Preview only)
+  // Handle Answer
   const handleAnswer = async (answerYesNo: boolean) => {
     if (!currentQuestion || !event) return;
 
-    // In Preview: Use player session
+    if (submittingAnswer) {
+      console.log("[PlayPage] ⚠️ Already submitting");
+      return;
+    }
+
+    // Preview Mode: Check session
     if (isPreview) {
-      if (!playerSession) {
-        toast({
-          title: "Greška",
-          description: "Molimo registrirajte se prvo.",
-          variant: "destructive",
+      // Re-fetch session from localStorage to ensure it's fresh
+      const session = getPreviewPlayerSession();
+      
+      console.log("[PlayPage] 🔍 Preview submit check:", {
+        hasSession: !!session,
+        hasPlayerId: !!session?.playerId,
+        hasTickets: ticket && ticket.length > 0,
+        playerIdPreview: session?.playerId?.slice(0, 8) || "N/A",
+        nicknamePreview: session?.nickname || "N/A"
+      });
+      
+      if (!session || !session.playerId) {
+        console.log("[PlayPage] ❌ No valid Preview session - opening registration");
+        setShowRegistration(true);
+        return;
+      }
+
+      if (!ticket || ticket.length === 0) {
+        console.log("[PlayPage] ❌ No tickets found");
+        setAnswerFeedback({
+          show: true,
+          message: "Nema aktivnih tiketa",
+          isCorrect: false
         });
         return;
       }
 
-      try {
-        setSubmittingAnswer(true);
-
-        // Get or create session
-        const session = await answerService.getOrCreateSession(event.id);
-
-        // Submit answer for first ticket
-        const firstTicket = ticket[0];
-        await answerService.submitAnswer(
-          session.id,
-          event.id,
-          currentQuestion.question_number,
-          answerYesNo ? "YES" : "NO",
-          firstTicket.serial_number
-        );
-
-        // Get correct answer
-        const { data: questionData } = await supabase
-          .from("questions")
-          .select("correct_answer")
-          .eq("id", currentQuestion.question_id)
-          .single();
-
-        const isCorrect = questionData
-          ? (answerYesNo ? "YES" : "NO") === (questionData.correct_answer ? "YES" : "NO")
-          : false;
-
-        // Update local state
-        setPlayerAnswers(prev => ({
-          ...prev,
-          [currentQuestion.question_number]: { answer: answerYesNo, isCorrect }
-        }));
-
-        console.log("[PlayPage] Answer submitted:", {
-          question: currentQuestion.question_number,
-          answer: answerYesNo ? "DA" : "NE",
-          correct: isCorrect,
-          playerId: playerSession.playerId.slice(0, 8),
-          nickname: playerSession.nickname
-        });
-
-        toast({
-          title: isCorrect ? "✓ Točan odgovor!" : "✗ Netočan odgovor",
-          description: `Pitanje #${currentQuestion.question_number}`,
-          variant: isCorrect ? "default" : "destructive",
-        });
-
-        // Refresh page to update statistics
-        setTimeout(() => window.location.reload(), 500);
-
-      } catch (error: any) {
-        console.error("[PlayPage] Submit error:", error);
+      // DEBUG: Log submission
+      console.log("[PlayPage] 🔍 PREVIEW SUBMIT:", {
+        playerId: session.playerId.slice(0, 8),
+        nickname: session.nickname,
+        eventId: event.id.slice(0, 8),
+        ticketId: ticket[0].id.slice(0, 8),
+        ticketSerial: ticket[0].serial_number,
+        questionNumber: currentQuestion.question_number,
+        answer: answerYesNo ? "DA" : "NE"
+      });
+    } else {
+      // Production guard
+      if (!email || !nickname) {
         toast({
           title: "Greška",
-          description: error.message || "Greška pri slanju odgovora",
-          variant: "destructive",
+          description: "Molimo prijavite se prvo.",
+          variant: "destructive"
         });
-      } finally {
-        setSubmittingAnswer(false);
+        return;
       }
-      return;
     }
 
-    // Production: Original guard logic
-    if (!email || !nickname) {
-      alert("Molimo prijavite se prvo");
-      return;
-    }
+    setSubmittingAnswer(true);
 
     try {
-      setSubmittingAnswer(true);
-
       // Get or create session
-      const session = await answerService.getOrCreateSession(event.id);
-
-      // Submit answer for first ticket
+      const dbSession = await answerService.getOrCreateSession(event.id);
       const firstTicket = ticket[0];
+
+      // Submit answer
       await answerService.submitAnswer(
-        session.id,
+        dbSession.id,
         event.id,
         currentQuestion.question_number,
         answerYesNo ? "YES" : "NO",
         firstTicket.serial_number
       );
 
-      // Get correct answer
-      const { data: questionData } = await supabase
-        .from("questions")
-        .select("correct_answer")
-        .eq("id", currentQuestion.question_id)
-        .single();
+      // Check correctness
+      const isCorrect = (answerYesNo ? "YES" : "NO") === 
+        (currentQuestion.questions?.correct_answer ? "YES" : "NO");
 
-      const isCorrect = questionData
-        ? (answerYesNo ? "YES" : "NO") === (questionData.correct_answer ? "YES" : "NO")
-        : false;
-
-      // Update local state
-      setPlayerAnswers(prev => ({
-        ...prev,
-        [currentQuestion.question_number]: { answer: answerYesNo, isCorrect }
-      }));
-
-      console.log("[PlayPage] Answer submitted:", {
+      console.log("[PlayPage] ✅ Answer submitted:", {
         question: currentQuestion.question_number,
         answer: answerYesNo ? "DA" : "NE",
         correct: isCorrect
       });
 
-      toast({
-        title: isCorrect ? "✓ Točan odgovor!" : "✗ Netočan odgovor",
-        description: `Pitanje #${currentQuestion.question_number}`,
-        variant: isCorrect ? "default" : "destructive",
+      // Show feedback
+      setAnswerFeedback({
+        show: true,
+        message: isCorrect ? "✓ Točan odgovor!" : "✗ Netočan odgovor",
+        isCorrect
       });
 
-      // Refresh page to update statistics
-      setTimeout(() => window.location.reload(), 500);
+      // Update ticket stats (local state)
+      setTicketStats(prev => {
+        const current = prev[firstTicket.serial_number] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+        const newAnswered = current.answered + 1;
+        const newCorrect = current.correct + (isCorrect ? 1 : 0);
+        const newIncorrect = current.incorrect + (!isCorrect ? 1 : 0);
+        const newAccuracy = Math.round((newCorrect / newAnswered) * 100);
+
+        return {
+          ...prev,
+          [firstTicket.serial_number]: {
+            answered: newAnswered,
+            correct: newCorrect,
+            incorrect: newIncorrect,
+            accuracy: newAccuracy
+          }
+        };
+      });
+
+      // Update player answers
+      setPlayerAnswers(prev => ({
+        ...prev,
+        [currentQuestion.question_number]: isCorrect ? { answer: answerYesNo, isCorrect: true } : { answer: answerYesNo, isCorrect: false }
+      }));
+
+      toast({
+        title: isCorrect ? "Točno!" : "Netočno",
+        description: isCorrect ? "Odlično!" : "Pokušaj bolje sljedeći put."
+      });
 
     } catch (error: any) {
-      console.error("[PlayPage] Submit error:", error);
+      console.error("[PlayPage] ❌ Submit error:", error);
       toast({
         title: "Greška",
-        description: error.message || "Greška pri slanju odgovora",
-        variant: "destructive",
+        description: error.message || "Neuspjelo slanje odgovora.",
+        variant: "destructive"
       });
     } finally {
       setSubmittingAnswer(false);
     }
   };
 
-  const handleRegistrationSuccess = (result: any) => {
-    console.log("[PlayPage] Registration successful:", result);
-    
-    if (result.success && result.tickets) {
-      setTicket(result.tickets);
-      setShowRegistration(false);
-    }
-  };
 
-  const handleOpenRegistration = () => {
-    setShowRegistration(true);
-  };
+  // --- RENDER ---
+  
+  // PREVIEW: Hide UI if no session
+  if (isPreview && !playerSession) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 flex items-center justify-center">
+        <Head>
+          <title>Pitalica Skitalica - Igraj</title>
+        </Head>
 
-  const handleClaimTickets = async () => {
-    const savedEmail = localStorage.getItem("player_email");
-    const savedNickname = localStorage.getItem("player_nickname");
+        {/* Onboarding Modal */}
+        <OnboardingModal
+          open={showOnboarding}
+          onOpenChange={setShowOnboarding}
+          onDismiss={(dontShowAgain) => {
+            setShowOnboarding(false);
+            setShowRegistration(true);
+          }}
+        />
 
-    if (!savedEmail || !savedNickname) {
-      setShowRegistration(true);
-      return;
-    }
+        {/* Registration Modal */}
+        <RegistrationModal
+          open={showRegistration}
+          onOpenChange={setShowRegistration}
+          eventId={event?.id || ""}
+          venueId=""
+          onSuccess={(result) => {
+            console.log("[PlayPage] ✅ Registration success:", {
+              player_id: result.player_id,
+              nickname: result.nickname,
+              tickets_created: result.tickets_created
+            });
 
-    const requestKey = `${savedEmail}-${savedNickname}`;
-    if (lastRequest === requestKey) {
-      console.log("[PlayPage] Duplicate request blocked");
-      return;
-    }
+            // CRITICAL: Save Preview session to localStorage
+            const session: Omit<PreviewPlayerSession, "timestamp"> = {
+              eventId: event?.id || "",
+              playerId: result.player_id,
+              nickname: result.nickname,
+              email: result.email,
+              ticketIds: result.tickets.map((t: any) => t.id)
+            };
+            
+            setPreviewPlayerSession(session);
+            
+            // Update all state from saved session
+            setPlayerSession({
+              ...session,
+              timestamp: Date.now()
+            });
+            setNickname(result.nickname);
+            setEmail(result.email);
+            setTicket(result.tickets);
+            
+            console.log("[PlayPage] 💾 Preview session saved:", {
+              playerId: session.playerId.slice(0, 8),
+              nickname: session.nickname,
+              ticketIds: session.ticketIds
+            });
 
-    setClaiming(true);
-    setLastRequest(requestKey);
+            setShowRegistration(false);
+            
+            toast({
+              title: "Uspješno!",
+              description: `Preuzeto ${result.tickets_created} listića.`
+            });
+          }}
+        />
 
-    try {
-      const result = await ticketService.claimFreeTickets(savedEmail, savedNickname);
-      
-      if (result.success && result.tickets) {
-        setTicket(result.tickets);
-      }
-    } catch (error: any) {
-      console.error("[PlayPage] Claim error:", error);
-      alert(error.message || "Greška pri preuzimanju listića");
-    } finally {
-      setClaiming(false);
-      setTimeout(() => setLastRequest(""), 2000);
-    }
-  };
-
-  // Get color for ticket number based on answer
-  const getNumberColor = (ticketId: string, questionNumber: number, drawnNumbers: number[]) => {
-    if (!drawnNumbers.includes(questionNumber)) {
-      return "bg-gray-200 text-gray-800"; // Not drawn yet
-    }
-
-    // Check if answered
-    const answers = ticketStats[ticketId];
-    if (!answers) return "bg-gray-200 text-gray-800";
-
-    // This is simplified - in real app, you'd need to check specific answer for this question
-    // For now, we'll use a placeholder logic
-    return "bg-gray-200 text-gray-800";
-  };
-
-  return (
-    <>
-      <Head>
-        <title>Pitalica Skitalica - Pregled listića</title>
-      </Head>
-
-      <div className="min-h-screen bg-gradient-to-br from-purple-500 via-purple-400 to-orange-400">
-        {/* DEBUG Banner - Preview Only */}
-        {isPreview && event && (
-          <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
-            <strong>PREVIEW MODE</strong>
-            <span className="ml-4">
-              Event: {event.name} | 
-              Questions: {globalStats.drawnQuestions}/90 | 
-              Stats: T{globalStats.correctAnswers}·N{globalStats.incorrectAnswers}·{globalStats.accuracy}%
-              {playerSession && (
-                <span className="ml-4 text-yellow-300">
-                  playerId={playerSession.playerId.slice(0, 8)}... | nick={playerSession.nickname}
-                </span>
-              )}
-            </span>
+        {/* Loading state while waiting for event */}
+        {!showOnboarding && !showRegistration && (
+          <div className="text-center text-white">
+            <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4" />
+            <p>Učitavanje...</p>
           </div>
         )}
+      </div>
+    );
+  }
 
-        {/* Header */}
-        <div className="bg-white shadow-sm border-b">
-          <div className="container mx-auto px-4 py-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-purple-600">PITALICA SKITALICA</h1>
-                <p className="text-sm text-gray-600">
-                  {isPreview && playerSession ? playerSession.nickname : (nickname || "Igrač")}
-                </p>
-              </div>
-            </div>
-          </div>
+  // STANDARD UI (Production OR Preview with Session)
+  
+  if (eventLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <span className="ml-2 text-gray-500">Učitavanje...</span>
+      </div>
+    );
+  }
+
+  if (eventError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 p-4">
+        <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
+        <h3 className="text-lg font-bold text-red-700">Greška</h3>
+        <p className="text-red-600 mb-4">{eventError}</p>
+        <Button onClick={() => window.location.reload()} variant="outline">
+          <RefreshCcw className="mr-2 h-4 w-4" /> Pokušaj ponovno
+        </Button>
+      </div>
+    );
+  }
+
+  if (!event) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center p-6 bg-white rounded-lg shadow-sm">
+          <p className="text-gray-500">Nema aktivnog događaja.</p>
         </div>
+      </div>
+    );
+  }
 
-        <div className="container mx-auto px-4 py-6 max-w-4xl">
-          {eventLoading ? (
-            <Card className="max-w-md mx-auto shadow-md">
-              <CardContent className="p-6 text-center">
-                <p className="text-gray-600">Učitavanje aktivnog događaja...</p>
-                {isPreview && (
-                  <p className="text-xs text-gray-400 mt-2">
-                    Debug: Timeout nakon 8s
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          ) : eventError ? (
-            <Card className="max-w-md mx-auto shadow-md border-red-200">
-              <CardContent className="p-6 text-center space-y-4">
-                <div className="text-red-500 text-lg font-semibold">
-                  Ne mogu učitati aktivni događaj
-                </div>
-                <p className="text-gray-600">{eventError}</p>
-                <Button
-                  onClick={() => window.location.reload()}
-                  className="w-full"
-                >
-                  Pokušaj ponovno
-                </Button>
-                {isPreview && (
-                  <div className="text-xs text-gray-400 mt-4 p-2 bg-gray-50 rounded">
-                    <p className="font-mono">
-                      Debug: Provjeri Network tab u DevTools
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ) : !event ? (
-            <Card className="max-w-md mx-auto shadow-md">
-              <CardContent className="p-6 text-center">
-                <p className="text-gray-600">Nema aktivnog događaja.</p>
-                <p className="text-sm text-gray-500 mt-2">
-                  Čekaj da admin pokrene event.
-                </p>
-              </CardContent>
-            </Card>
-          ) : !ticket ? (
-            <Card className="max-w-md mx-auto shadow-md">
-              <CardContent className="p-6 text-center">
-                <h2 className="text-xl font-bold mb-4">Preuzmi listiće</h2>
-                <p className="text-gray-600 mb-6">
-                  Klikni na gumb ispod da bi preuzeo besplatne listiće za {event.name}.
-                </p>
-                <Button
-                  onClick={handleClaimTickets}
-                  disabled={claiming}
-                  className="w-full"
-                >
-                  {claiming ? "Preuzimanje..." : "Preuzmi listiće"}
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-6">
-              {/* Global Statistics Header */}
-              {isPreview && (
-                <Card className="bg-white shadow-lg rounded-2xl overflow-hidden">
-                  <CardContent className="p-6">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h1 className="text-2xl font-bold text-black">PITALICA SKITALICA</h1>
-                        <p className="text-xl font-semibold text-gray-800 mt-1">
-                          {localStorage.getItem("player_nickname") || "Igrač"}
-                        </p>
-                        <p className="text-gray-600">{event.name}</p>
-                      </div>
-                      <Badge className="bg-green-500 text-white px-4 py-1 text-sm rounded-full">
-                        {event.status === "active" ? "U toku" : "Završeno"}
-                      </Badge>
-                    </div>
+  return (
+    <div className="min-h-screen bg-gray-50 pb-20">
+      <Head>
+        <title>Pitalica Skitalica - Igraj</title>
+      </Head>
 
-                    <div className="grid grid-cols-4 gap-4 text-center">
-                      <div>
-                        <div className="text-3xl font-bold text-black">
-                          {globalStats.drawnQuestions}/90
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-3xl font-bold text-green-600">
-                          T {globalStats.correctAnswers}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-3xl font-bold text-red-600">
-                          N {globalStats.incorrectAnswers}
-                        </div>
-                      </div>
-                      <div>
-                        <div className={`text-3xl font-bold ${
-                          globalStats.accuracy >= 50 ? "text-green-600" : "text-red-600"
-                        }`}>
-                          {globalStats.accuracy}%
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
+      {/* DEBUG BANNER (Preview Only) */}
+      {isPreview && (
+        <div className="bg-green-600 text-white text-xs font-mono py-1 px-2 text-center">
+          PREVIEW | Player: {playerSession?.nickname || nickname || "N/A"} | ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} | Tickets: {ticket.length}
+        </div>
+      )}
 
-              {/* Current Question Panel (Preview only) */}
-              {isPreview && currentQuestion && (
-                <Card className="bg-white shadow-lg rounded-2xl overflow-hidden">
-                  <CardContent className="p-6">
-                    <div className="text-center space-y-4">
-                      <div className="text-lg text-purple-600 font-semibold">
-                        Trenutno pitanje #{currentQuestion.question_number}
-                      </div>
-                      
-                      {timeRemaining > 0 && (
-                        <div className="text-5xl font-bold text-orange-500 animate-pulse">
-                          {timeRemaining}s
-                        </div>
-                      )}
-                      
-                      {questionText && (
-                        <div className="bg-gray-50 rounded-xl p-6 my-4">
-                          <p className="text-xl text-gray-800 leading-relaxed">
-                            {questionText}
-                          </p>
-                        </div>
-                      )}
-                      
-                      {timeRemaining > 0 && !playerAnswers[currentQuestion.question_number] && (
-                        <div className="flex gap-4 justify-center mt-6">
-                          <Button
-                            onClick={() => handleAnswer(true)}
-                            disabled={submittingAnswer}
-                            className="bg-green-500 hover:bg-green-600 text-white text-2xl font-bold py-6 px-12 rounded-xl"
-                          >
-                            DA
-                          </Button>
-                          <Button
-                            onClick={() => handleAnswer(false)}
-                            disabled={submittingAnswer}
-                            className="bg-red-500 hover:bg-red-600 text-white text-2xl font-bold py-6 px-12 rounded-xl"
-                          >
-                            NE
-                          </Button>
-                        </div>
-                      )}
-                      
-                      {playerAnswers[currentQuestion.question_number] && (
-                        <div className={`text-xl font-bold ${
-                          playerAnswers[currentQuestion.question_number].isCorrect 
-                            ? "text-green-600" 
-                            : "text-red-600"
-                        }`}>
-                          {playerAnswers[currentQuestion.question_number].isCorrect 
-                            ? "✓ Točan odgovor!" 
-                            : "✗ Netočan odgovor"}
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Tickets Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ticket.map((t) => {
-                  const stats = ticketStats[t.id] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
-                  const ticketNumbers = t.ticket_numbers || [];
-                  const drawnNumbers = event.drawn_numbers || [];
-
-                  return (
-                    <Link 
-                      key={t.id} 
-                      href={`/player?ticketId=${t.id}`}
-                      passHref
-                      className="block"
-                      onClick={() => console.log("[PlayPage] Ticket clicked:", t.id)}
-                    >
-                      <Card
-                        className="overflow-hidden border-2 shadow-md hover:shadow-lg transition-shadow cursor-pointer h-full"
-                      >
-                        <CardContent className="p-4">
-                          {/* Serial Number */}
-                          <div className="mb-3">
-                            <h3 className="text-lg font-bold text-black">{t.serial_number}</h3>
-                            {isPreview && (
-                              <p className="text-sm text-gray-500">
-                                {stats.answered}/15 | 
-                                <span className="text-green-600"> T {stats.correct}</span> · 
-                                <span className="text-red-600"> N {stats.incorrect}</span> | 
-                                <span className={stats.accuracy >= 50 ? "text-green-600" : "text-red-600"}>
-                                  {stats.accuracy}%
-                                </span>
-                              </p>
-                            )}
-                          </div>
-
-                          {/* Numbers Grid - 5 columns x 3 rows */}
-                          <div className="grid grid-cols-5 gap-2">
-                            {ticketNumbers.slice(0, 15).map((num, idx) => {
-                              const isDrawn = drawnNumbers.includes(num);
-                              const answer = playerAnswers[num];
-                              
-                              let colorClass = "bg-gray-200 text-gray-800"; // Not drawn yet
-                              
-                              if (isDrawn && answer) {
-                                // Question was drawn and answered
-                                colorClass = answer.isCorrect 
-                                  ? "bg-green-500 text-white" // Correct answer
-                                  : "bg-red-500 text-white";  // Incorrect answer
-                              } else if (isDrawn && !answer) {
-                                // Question was drawn but not answered
-                                colorClass = "bg-gray-400 text-white"; // Missed
-                              }
-
-                              return (
-                                <div
-                                  key={idx}
-                                  className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg ${colorClass}`}
-                                >
-                                  {num}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </Link>
-                  );
-                })}
-              </div>
-
-              <div className="text-center">
-                <p className="text-white text-sm font-semibold">
-                  Limit 4 tiketa (promo faza)
-                </p>
-              </div>
-            </div>
-          )}
+      {/* HEADER */}
+      <div className="bg-white border-b sticky top-0 z-10 px-4 py-3 flex justify-between items-center shadow-sm">
+        <div>
+          <h1 className="font-bold text-primary text-lg">Pitalica Skitalica</h1>
+          <p className="text-xs text-gray-500">
+            {playerSession?.nickname || nickname || "Igrač"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+           <Badge variant={event.status === 'active' ? 'default' : 'secondary'}>
+             {event.status === 'active' ? 'UŽIVO' : event.status}
+           </Badge>
         </div>
       </div>
 
-      <OnboardingModal
-        open={showOnboarding}
-        onOpenChange={setShowOnboarding}
-        onDismiss={(dontShowAgain) => {
-          // If user clicked "Kreni", proceed to registration
-          handleOpenRegistration();
-          // Logic for dontShowAgain could be handled here if needed
-        }}
-      />
+      <main className="container mx-auto px-4 py-6 max-w-lg">
+        
+        {/* ACTIVE QUESTION CARD */}
+        {currentQuestion ? (
+          <Card className="mb-6 border-primary/20 shadow-md overflow-hidden">
+            <div className="bg-primary/5 p-4 border-b border-primary/10 flex justify-between items-center">
+              <span className="font-bold text-primary">Pitanje #{currentQuestion.question_number}</span>
+              {/* Timer placeholder */}
+              <Badge variant="outline" className="bg-white">9s</Badge> 
+            </div>
+            <CardContent className="p-6 text-center space-y-6">
+              <h2 className="text-xl font-bold text-gray-800 leading-relaxed">
+                {currentQuestion.questions?.text || "Učitavanje teksta pitanja..."}
+              </h2>
 
-      {/* Registration Modal */}
-      <RegistrationModal
-        open={showRegistration}
-        onOpenChange={setShowRegistration}
-        onSuccess={async (result) => {
-          setTicket(result.tickets);
-          setShowRegistration(false);
-          toast({
-            title: "Uspješno!",
-            description: `Preuzeto ${result.tickets_created} listića.`,
-          });
-          
-          // Preview only: Save session and reload
-          if (isPreview && result.event) {
-            await updateSessionAfterRegistration(
-              result.email,
-              result.nickname,
-              result.tickets.map(t => t.id),
-              result.event.id
-            );
-            
-            // Reload session
-            const session = await getPlayerSession();
-            setPlayerSession(session);
-          }
-        }}
-        eventId={event?.id || ""}
-        venueId=""
-      />
-    </>
+              {/* FEEDBACK MSG */}
+              {answerFeedback.show && (
+                <div className={cn(
+                  "p-3 rounded-md text-sm font-medium animate-in fade-in slide-in-from-bottom-2",
+                  answerFeedback.message.includes("Nema aktivne") ? "bg-orange-100 text-orange-800" :
+                  answerFeedback.isCorrect ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                )}>
+                  {answerFeedback.message}
+                  {answerFeedback.message.includes("Nema aktivne") && (
+                     <div className="mt-2 text-xs underline cursor-pointer" onClick={() => window.location.reload()}>
+                       Osvježi za registraciju
+                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* ACTION BUTTONS */}
+              <div className="grid grid-cols-2 gap-4 pt-2">
+                <Button 
+                  size="lg" 
+                  className="bg-green-500 hover:bg-green-600 text-white h-16 text-lg"
+                  onClick={() => handleAnswer(true)}
+                  disabled={submittingAnswer || answerFeedback.show}
+                >
+                  <ThumbsUp className="mr-2 h-6 w-6" /> DA
+                </Button>
+                <Button 
+                  size="lg" 
+                  className="bg-red-500 hover:bg-red-600 text-white h-16 text-lg"
+                  onClick={() => handleAnswer(false)}
+                  disabled={submittingAnswer || answerFeedback.show}
+                >
+                  <ThumbsDown className="mr-2 h-6 w-6" /> NE
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="mb-6 bg-gray-100 border-dashed">
+            <CardContent className="p-8 text-center text-gray-500">
+              <Loader2 className="h-8 w-8 mx-auto mb-2 animate-spin opacity-50" />
+              <p>Čekanje na iduće pitanje...</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* TICKET GRID (2x2) */}
+        {ticket.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="font-bold text-gray-700 flex items-center gap-2">
+              <TicketIcon className="h-4 w-4" /> Moji Listići ({ticket.length})
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              {ticket.slice(0, 4).map((t, idx) => (
+                <Card key={t.id} className="overflow-hidden border-2 hover:border-primary/30 transition-colors">
+                  <div className="bg-gray-50 p-2 text-xs text-center border-b font-mono text-gray-500 truncate">
+                    {t.serial_number}
+                  </div>
+                  <CardContent className="p-2">
+                    <div className="grid grid-cols-5 gap-1">
+                      {t.ticket_numbers?.sort((a,b)=>a-b).map(num => {
+                        const isDrawn = event.drawn_numbers?.includes(num);
+                        return (
+                          <div 
+                            key={num} 
+                            className={cn(
+                              "aspect-square flex items-center justify-center text-[10px] font-bold rounded",
+                              isDrawn ? "bg-primary text-white" : "bg-gray-100 text-gray-400"
+                            )}
+                          >
+                            {num}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </main>
+    </div>
   );
 }
