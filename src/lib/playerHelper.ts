@@ -23,7 +23,8 @@ export interface PlayerSession {
   nickname: string;
   email: string;
   ticketIds: string[];
-  eventId: string | null;
+  timestamp?: number;
+  eventId?: string | null;
 }
 
 /**

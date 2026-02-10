@@ -99,6 +99,19 @@ export default function PlayPage() {
             playerId: session.playerId.slice(0, 8),
             nickname: session.nickname
           });
+
+          // PREVIEW ONLY: Fetch tickets if we have IDs but no tickets in state
+          if (session.ticketIds && session.ticketIds.length > 0) {
+             const { data: ticketsData } = await supabase
+              .from("tickets")
+              .select("*")
+              .in("id", session.ticketIds);
+             
+             if (ticketsData) {
+               console.log("[PlayPage] Loaded tickets from session:", ticketsData.length);
+               setTicket(ticketsData);
+             }
+          }
         } else {
           // No session - show onboarding in Preview
           console.log("[PlayPage] No session found - showing onboarding");
