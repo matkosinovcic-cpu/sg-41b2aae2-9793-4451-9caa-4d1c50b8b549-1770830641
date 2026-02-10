@@ -28,6 +28,7 @@ export default function PlayPage() {
   const [nickname, setNickname] = useState<string>("");
   const [email, setEmail] = useState<string>("");
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
   
   // Event & Questions
   const [event, setEvent] = useState<Event | null>(null);
@@ -132,36 +133,81 @@ export default function PlayPage() {
   useEffect(() => {
     if (!event || !isPreview) return;
 
-    console.log("[PlayPage] 📡 Subscribing to realtime channels...");
+    console.log("[PlayPage] 📡 Subscribing to events table for real-time sync");
 
     const channel = supabase
-      .channel(`play_updates:${event.id}`)
+      .channel(`events:${event.id}`)
       .on(
         "postgres_changes",
         {
-          event: "*",
+          event: "UPDATE",
           schema: "public",
-          table: "event_questions",
-          filter: `event_id=eq.${event.id}`
+          table: "events",
+          filter: `id=eq.${event.id}`
         },
-        (payload) => {
-          console.log("[PlayPage] 🔔 Question update:", payload.eventType);
+        async (payload) => {
+          console.log("[PlayPage] 🔔 Event update received:", payload);
           setRealtimeConnected(true);
 
-          if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
-            const qData = payload.new as EventQuestion;
-            // Only update if it's the active question
-            if (qData.drawn_at && qData.question_open_until) {
-              const now = Date.now();
-              const openUntil = new Date(qData.question_open_until).getTime();
-              const remaining = Math.max(0, Math.floor((openUntil - now) / 1000));
+          const updatedEvent = payload.new as any;
 
-              // If it's a new question or current one updated
-              if (!currentQuestion || currentQuestion.question_number !== qData.question_number) {
-                 setCurrentQuestion(qData);
-                 setTimeRemaining(remaining);
-              }
+          // Check if there's an active question
+          if (
+            updatedEvent.current_question_number &&
+            updatedEvent.question_open_until
+          ) {
+            const questionNumber = updatedEvent.current_question_number;
+            const openUntil = updatedEvent.question_open_until;
+
+            console.log("[PlayPage] ✅ Active question detected:", {
+              questionNumber,
+              openUntil
+            });
+
+            // Fetch question details from event_questions
+            const { data: eventQuestion, error: eqError } = await supabase
+              .from("event_questions")
+              .select(`
+                id,
+                event_id,
+                question_number,
+                question_id,
+                drawn,
+                drawn_at,
+                questions (
+                  id,
+                  text,
+                  correct_answer
+                )
+              `)
+              .eq("event_id", event.id)
+              .eq("question_number", questionNumber)
+              .single();
+
+            if (eqError) {
+              console.error("[PlayPage] ❌ Failed to fetch question details:", eqError);
+              return;
             }
+
+            if (eventQuestion) {
+              console.log("[PlayPage] ✅ Question details fetched:", eventQuestion);
+
+              // Set current question
+              setCurrentQuestion(eventQuestion as any);
+              setLastUpdateTime(Date.now());
+
+              // Calculate time remaining
+              const now = Date.now();
+              const openUntilMs = new Date(openUntil).getTime();
+              const remaining = Math.max(0, Math.floor((openUntilMs - now) / 1000));
+              
+              console.log("[PlayPage] ⏱️ Time remaining:", remaining);
+              setTimeRemaining(remaining);
+            }
+          } else {
+            console.log("[PlayPage] ⚠️ No active question in event");
+            setCurrentQuestion(null);
+            setTimeRemaining(0);
           }
         }
       )
@@ -170,12 +216,93 @@ export default function PlayPage() {
         setRealtimeConnected(status === "SUBSCRIBED");
       });
 
-    channelRef.current = channel;
-
     return () => {
+      console.log("[PlayPage] 🔌 Unsubscribing from events");
       supabase.removeChannel(channel);
     };
   }, [event, isPreview]);
+
+  // Fallback polling for active question (Preview only)
+  useEffect(() => {
+    if (!event || !isPreview) return;
+
+    let pollTimeout: NodeJS.Timeout;
+
+    const pollActiveQuestion = async () => {
+      try {
+        console.log("[PlayPage] 🔄 Polling active question (fallback)");
+
+        // Fetch current event state
+        const { data: currentEvent, error: eventError } = await supabase
+          .from("events")
+          .select("current_question_number, question_open_until")
+          .eq("id", event.id)
+          .single();
+
+        if (eventError) {
+          console.error("[PlayPage] ❌ Polling error:", eventError);
+          return;
+        }
+
+        if (
+          currentEvent?.current_question_number &&
+          currentEvent?.question_open_until
+        ) {
+          const questionNumber = currentEvent.current_question_number;
+
+          // Only update if it's a different question
+          if (currentQuestion?.question_number !== questionNumber) {
+            console.log("[PlayPage] 🆕 New question detected via polling:", questionNumber);
+
+            // Fetch question details
+            const { data: eventQuestion, error: eqError } = await supabase
+              .from("event_questions")
+              .select(`
+                id,
+                event_id,
+                question_number,
+                question_id,
+                drawn,
+                drawn_at,
+                questions (
+                  id,
+                  text,
+                  correct_answer
+                )
+              `)
+              .eq("event_id", event.id)
+              .eq("question_number", questionNumber)
+              .single();
+
+            if (!eqError && eventQuestion) {
+              setCurrentQuestion(eventQuestion as any);
+              setLastUpdateTime(Date.now());
+
+              const now = Date.now();
+              const openUntilMs = new Date(currentEvent.question_open_until).getTime();
+              const remaining = Math.max(0, Math.floor((openUntilMs - now) / 1000));
+              setTimeRemaining(remaining);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("[PlayPage] ❌ Polling exception:", error);
+      } finally {
+        // Continue polling every 2 seconds
+        pollTimeout = setTimeout(pollActiveQuestion, 2000);
+      }
+    };
+
+    // Start polling after 2 seconds (give Realtime a chance first)
+    const initialTimeout = setTimeout(() => {
+      pollActiveQuestion();
+    }, 2000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      if (pollTimeout) clearTimeout(pollTimeout);
+    };
+  }, [event, isPreview, currentQuestion]);
 
   // 5. Countdown & Auto-Negative Logic
   useEffect(() => {
@@ -365,12 +492,17 @@ export default function PlayPage() {
       
       {/* PREVIEW DEBUG BANNER */}
       {isPreview && event && (
-        <div className="bg-green-600 text-white text-center py-2 text-xs font-mono">
-           <strong>PREVIEW MODE</strong> | 
-           Player: {playerSession?.nickname} ({playerSession?.playerId.slice(0,6)}) | 
-           Event: {event.name} | 
-           Q: {currentQuestion?.question_number || 0} | 
-           RT: {realtimeConnected ? "ON" : "OFF"}
+        <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
+          <strong>PREVIEW MODE</strong> | 
+          Player: {playerSession?.nickname} | 
+          ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} | 
+          Event: {event.id.slice(0, 8)}... | 
+          Q: {currentQuestion?.question_number || 0}/90 | 
+          Drawn: {globalStats.answered} | 
+          Tickets: {ticket?.length || 0} |
+          RT: {realtimeConnected ? "✓" : "✗"} | 
+          LastQ: {currentQuestion?.question_id?.slice(0, 8) || "none"} |
+          Updated: {new Date(lastUpdateTime).toLocaleTimeString()}
         </div>
       )}
 
