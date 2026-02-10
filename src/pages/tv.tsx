@@ -720,14 +720,17 @@ export default function TVPage() {
               <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
                 
                 <div className="bg-white/10 backdrop-blur-sm rounded-lg p-6 text-center">
-                  <div className="text-4xl font-black text-white mb-2">
+                  <div 
+                    className="text-4xl font-black text-white mb-2"
+                    style={isPreviewMode ? { fontSize: "1.8rem" } : undefined}
+                  >
                     {isPreviewMode 
-                      ? `${drawnNumbers.size}/90`  // Dynamic counter in preview
-                      : "90 pitanja"  // Static text in production
+                      ? `${drawnNumbers.size}/90`
+                      : "90 pitanja"
                     }
                   </div>
                   <div className="text-white/80 text-sm uppercase tracking-wider">
-                    {isPreviewMode ? "Izvučeno / Ukupno" : "Ukupno pitanja"}
+                    {isPreviewMode ? "Pitanja" : "Ukupno pitanja"}
                   </div>
                 </div>
                 

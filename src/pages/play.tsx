@@ -97,6 +97,36 @@ export default function PlayPage() {
     loadActiveEvent();
   }, [router.isReady, venueSlug, envError, isDebugMode]);
 
+  // Auto-load existing tickets for registered players
+  useEffect(() => {
+    if (!event || ticket) return;
+
+    const loadExistingTickets = async () => {
+      try {
+        const savedEmail = localStorage.getItem("player_email");
+        if (!savedEmail) return;
+
+        if (isDebugMode) {
+          console.log("[PlayPage] Auto-loading tickets for:", savedEmail);
+        }
+
+        const tickets = await ticketService.getPlayerTickets(savedEmail, event.id);
+        
+        if (isDebugMode) {
+          console.log("[PlayPage] Loaded tickets:", tickets.length);
+        }
+
+        if (tickets.length > 0) {
+          setTicket(tickets);
+        }
+      } catch (error) {
+        console.error("[PlayPage] Error loading existing tickets:", error);
+      }
+    };
+
+    loadExistingTickets();
+  }, [event, ticket, isDebugMode]);
+
   const handleRegistrationSuccess = (result: any) => {
     if (result.success && result.tickets) {
       setTicket(result.tickets);
@@ -185,6 +215,33 @@ export default function PlayPage() {
       </Head>
 
       <div className="min-h-screen bg-gray-100">
+        {/* DEBUG Banner - Preview Only */}
+        {typeof window !== "undefined" && 
+         (window.location.hostname.includes("softgen") || 
+          window.location.hostname.includes("vercel.app") ||
+          window.location.hostname.includes("localhost")) && (
+          <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
+            <strong>PLAYER PREVIEW = PROD LOGIC</strong>
+            {event && (
+              <span className="ml-4">
+                Event: {event.id.slice(0, 8)}... | 
+                Tickets: {ticket?.length || 0} | 
+                {ticket && ticket.length > 0 && (() => {
+                  const totalCorrect = ticket.reduce((sum, t) => {
+                    const correct = (t.ticket_questions || []).filter((q: any) => q.is_correct === true).length;
+                    return sum + correct;
+                  }, 0);
+                  const totalIncorrect = ticket.reduce((sum, t) => {
+                    const incorrect = (t.ticket_questions || []).filter((q: any) => q.is_correct === false).length;
+                    return sum + incorrect;
+                  }, 0);
+                  return ` Global T:${totalCorrect} N:${totalIncorrect}`;
+                })()}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Header */}
         <div className="bg-white shadow-sm border-b">
           <div className="container mx-auto px-4 py-4">

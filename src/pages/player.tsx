@@ -303,10 +303,29 @@ export default function PlayerPage() {
   return (
     <>
       <Head>
-        <title>Moj Listić #{ticket.serial_number} | Pitalica Skitalica</title>
+        <title>Pitalica Skitalica - Igraj</title>
       </Head>
 
-      <div className="min-h-screen bg-gray-100 pb-20">
+      <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400">
+        {/* DEBUG Banner - Preview Only */}
+        {typeof window !== "undefined" && 
+         (window.location.hostname.includes("softgen") || 
+          window.location.hostname.includes("vercel.app") ||
+          window.location.hostname.includes("localhost")) && ticket && event && (
+          <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
+            <strong>PLAYER PREVIEW = PROD LOGIC</strong>
+            <span className="ml-4">
+              Event: {event.id.slice(0, 8)}... | 
+              Ticket: {ticket.serial_number} | 
+              Question: {activeQuestion?.question_number || 0}/90 |
+              {(() => {
+                const correct = Object.values(answers).filter(a => a === true).length;
+                const incorrect = Object.values(answers).filter(a => a === false).length;
+                return ` T:${correct} N:${incorrect}`;
+              })()}
+            </span>
+          </div>
+        )}
         {/* Header */}
         <div className="bg-white shadow-sm border-b sticky top-0 z-10">
           <div className="container mx-auto px-4 py-3 flex justify-between items-center">
