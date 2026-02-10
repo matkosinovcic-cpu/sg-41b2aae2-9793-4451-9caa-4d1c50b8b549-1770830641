@@ -13,6 +13,10 @@ import { toast } from "@/hooks/use-toast";
 import Head from "next/head";
 import { cn } from "@/lib/utils";
 import { OnboardingModal } from "@/components/OnboardingModal";
+import { useToast } from "@/hooks/use-toast";
+
+// BUILD FINGERPRINT FOR DIAGNOSTICS
+const BUILD_FINGERPRINT = "2026-02-10T23:10:41Z-player-diagnostics";
 
 // Helper: Synchronous Preview detection
 function isPreviewEnvironment(): boolean {
@@ -71,8 +75,20 @@ export default function PlayerPage() {
   const [timeoutError, setTimeoutError] = useState(false);
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const [lastRequest, setLastRequest] = useState<string>("");
+  const [isLoadingTicket, setIsLoadingTicket] = useState(true);
   const [drawnQuestionsCount, setDrawnQuestionsCount] = useState<number>(0);
   
+  // DEBUG STATE (for ?debug=1 diagnostics)
+  const [debugMode, setDebugMode] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [lastRealtimeAt, setLastRealtimeAt] = useState<number | null>(null);
+  const [lastRealtimeLatency, setLastRealtimeLatency] = useState<number | null>(null);
+  const [realtimeChannel, setRealtimeChannel] = useState<string>("");
+  const [sourceTable, setSourceTable] = useState<string>("");
+  const [counterSource, setCounterSource] = useState<string>("");
+  const [pollingMode, setPollingMode] = useState(false);
+  const [lastPollAt, setLastPollAt] = useState<number | null>(null);
+
   // Instrumentacija
   useEffect(() => {
     if (ticketId) {
@@ -105,6 +121,33 @@ export default function PlayerPage() {
         console.error("[PlayerPage] ❌ Supabase ENV missing");
       }
     }
+  }, []);
+
+  // Load ticket and setup on mount
+  useEffect(() => {
+    const initPlayer = async () => {
+      try {
+        console.log("[PlayerPage] 🚀 Mounting /player page...");
+        
+        // DEBUG MODE DETECTION
+        const urlParams = new URLSearchParams(window.location.search);
+        const debugEnabled = urlParams.get("debug") === "1";
+        setDebugMode(debugEnabled);
+
+        // BUILD FINGERPRINT LOGGING
+        console.log("[BUILD] Fingerprint:", BUILD_FINGERPRINT);
+        console.log("[BUILD] Hostname:", window.location.hostname);
+        console.log("[BUILD] Pathname:", window.location.pathname);
+        console.log("[BUILD] Query:", window.location.search);
+        console.log("[BUILD] Debug mode:", debugEnabled ? "ENABLED" : "DISABLED");
+
+        const ticketSerial = router.query.ticket as string;
+      } catch (error) {
+        console.error("[PlayerPage] Error during initPlayer:", error);
+      }
+    };
+
+    initPlayer();
   }, []);
 
   // Load initial data with timeout
@@ -211,8 +254,9 @@ export default function PlayerPage() {
   useEffect(() => {
     if (!ticket || !ticket.event_id) return;
 
+    // Subscribe to event updates
     const eventSub = supabase
-      .channel(`player-event-${ticket.event_id}`)
+      .channel(`events:${ticket.event_id}`)
       .on(
         "postgres_changes",
         {
@@ -222,10 +266,43 @@ export default function PlayerPage() {
           filter: `id=eq.${ticket.event_id}`
         },
         (payload) => {
-          if (payload.new) {
-            setEvent(payload.new as Event);
-            setLastDrawnNumber(payload.new.current_drawn_number);
+          const updatedEvent = payload.new as any;
+
+          // REALTIME DIAGNOSTICS
+          const receivedAt = Date.now();
+          setLastRealtimeAt(receivedAt);
+          setRealtimeConnected(true);
+          setRealtimeChannel(`events:${ticket.event_id}`);
+          setSourceTable("events");
+
+          // Calculate latency if updated_at exists
+          let latencyMs: number | null = null;
+          if (updatedEvent.updated_at) {
+            try {
+              const updatedAtMs = Date.parse(updatedEvent.updated_at);
+              latencyMs = receivedAt - updatedAtMs;
+              setLastRealtimeLatency(latencyMs);
+            } catch (e) {
+              console.error("[RT] Failed to parse updated_at:", e);
+            }
           }
+
+          console.log("[RT] Event UPDATE received:", {
+            receivedAt,
+            updatedAt: updatedEvent.updated_at,
+            latencyMs,
+            eventId: updatedEvent.id?.slice(0, 8),
+            drawnNumbersLength: updatedEvent.drawn_numbers?.length || 0,
+            currentDrawnNumber: updatedEvent.current_drawn_number,
+            status: updatedEvent.status,
+            channel: `events:${ticket.event_id}`,
+            sourceTable: "events"
+          });
+
+          setEvent(updatedEvent);
+
+          // Update counter source tracking
+          setCounterSource("drawn_numbers.length");
         }
       )
       .subscribe();
@@ -506,6 +583,67 @@ export default function PlayerPage() {
             <p>event_name: {event.name}</p>
             <p>numbers_count: {ticket.ticket_numbers?.length || 0}</p>
             <p>drawn_count: {Object.keys(drawnQuestions).length}</p>
+          </div>
+        )}
+
+        {/* DEBUG OVERLAY (only shown when ?debug=1) */}
+        {debugMode && (
+          <div className="fixed top-2 right-2 bg-black/90 text-white p-3 rounded-lg text-xs font-mono z-[9999] max-w-xs border border-yellow-500">
+            <div className="text-yellow-400 font-bold mb-2 border-b border-yellow-500/30 pb-1">
+              🔍 DEBUG MODE
+            </div>
+            
+            <div className="space-y-1">
+              <div className="text-gray-400">BUILD:</div>
+              <div className="text-white text-[10px] break-all">{BUILD_FINGERPRINT}</div>
+              
+              <div className="text-gray-400 mt-2">HOST:</div>
+              <div className="text-white">{typeof window !== "undefined" ? window.location.host : "N/A"}</div>
+              
+              <div className="text-gray-400 mt-2">RT STATUS:</div>
+              <div className={realtimeConnected ? "text-green-400" : "text-red-400"}>
+                {realtimeConnected ? "✓ CONNECTED" : "✗ DISCONNECTED"}
+              </div>
+              
+              <div className="text-gray-400 mt-2">CHANNEL:</div>
+              <div className="text-white text-[10px]">{realtimeChannel || "N/A"}</div>
+              
+              <div className="text-gray-400 mt-2">SOURCE TABLE:</div>
+              <div className="text-white">{sourceTable || "N/A"}</div>
+              
+              <div className="text-gray-400 mt-2">LAST RT:</div>
+              <div className="text-white">
+                {lastRealtimeAt ? `${Date.now() - lastRealtimeAt}ms ago` : "N/A"}
+              </div>
+              
+              <div className="text-gray-400 mt-2">LATENCY:</div>
+              <div className="text-white">
+                {lastRealtimeLatency !== null ? `${lastRealtimeLatency}ms` : "N/A"}
+              </div>
+              
+              <div className="text-gray-400 mt-2">MODE:</div>
+              <div className={pollingMode ? "text-orange-400" : "text-green-400"}>
+                {pollingMode ? "POLLING" : "REALTIME"}
+              </div>
+              
+              {pollingMode && lastPollAt && (
+                <>
+                  <div className="text-gray-400 mt-2">LAST POLL:</div>
+                  <div className="text-white">{Date.now() - lastPollAt}ms ago</div>
+                </>
+              )}
+              
+              <div className="text-gray-400 mt-2">COUNTER SOURCE:</div>
+              <div className="text-white text-[10px]">{counterSource || "N/A"}</div>
+              
+              <div className="text-gray-400 mt-2">COUNTER VALUE:</div>
+              <div className="text-white">
+                {event?.drawn_numbers?.length || 0} / 90
+              </div>
+              
+              <div className="text-gray-400 mt-2">EVENT STATUS:</div>
+              <div className="text-white">{event?.status || "N/A"}</div>
+            </div>
           </div>
         )}
       </div>
