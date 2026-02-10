@@ -1,103 +1,91 @@
-import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
-import { ticketService, Ticket } from "@/services/ticketService";
-import { eventService, Event } from "@/services/eventService";
-import { getSupabaseDebugInfo } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Loader2, AlertCircle, Ticket as TicketIcon } from "lucide-react";
-import { toast } from "@/hooks/use-toast";
+import { useRouter } from "next/router";
 import Head from "next/head";
-import { RegistrationModal } from "@/components/RegistrationModal";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { OnboardingModal } from "@/components/OnboardingModal";
+import { RegistrationModal } from "@/components/RegistrationModal";
+import { ticketService, type Ticket } from "@/services/ticketService";
+import { eventService, type Event } from "@/services/eventService";
+import { answerService } from "@/services/answerService";
 
 export default function PlayPage() {
   const router = useRouter();
-  const { venue: venueSlug, debug } = router.query;
-  
-  const [loadingEvent, setLoadingEvent] = useState(true);
+  const { venueSlug, debug } = router.query;
+
+  const [envError, setEnvError] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
   const [ticket, setTicket] = useState<Ticket[] | null>(null);
-  const [claiming, setClaiming] = useState(false);
-  const [showRegistration, setShowRegistration] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [envError, setEnvError] = useState(false);
-  const [timeoutError, setTimeoutError] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showRegistration, setShowRegistration] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const [lastRequest, setLastRequest] = useState<string>("");
 
   const isDebugMode = debug === "1";
+  const [isPreview, setIsPreview] = useState(false);
+
+  // Ticket statistics state
+  const [ticketStats, setTicketStats] = useState<{
+    [ticketId: string]: {
+      answered: number;
+      correct: number;
+      incorrect: number;
+      accuracy: number;
+    };
+  }>({});
+
+  // Global statistics state
+  const [globalStats, setGlobalStats] = useState<{
+    drawnQuestions: number;
+    correctAnswers: number;
+    incorrectAnswers: number;
+    accuracy: number;
+  }>({
+    drawnQuestions: 0,
+    correctAnswers: 0,
+    incorrectAnswers: 0,
+    accuracy: 0
+  });
+
+  useEffect(() => {
+    const hostname = window.location.hostname;
+    setIsPreview(
+      hostname.includes("softgen") ||
+      hostname.includes("vercel.app") ||
+      hostname.includes("localhost")
+    );
+  }, []);
 
   // ENV validation on mount
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const info = getSupabaseDebugInfo();
-      setDebugInfo(info);
-      
-      if (!info?.client_ready) {
-        setEnvError(true);
-        console.error("[PlayPage] ❌ Supabase ENV missing");
-      }
+    if (typeof window === "undefined") return;
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key || url === "invalid_url" || key === "invalid_anon_key") {
+      setEnvError("Supabase nije pravilno konfiguriran.");
     }
   }, []);
 
-  // Load active event with timeout
+  // Load active event
   useEffect(() => {
-    if (!router.isReady || envError) {
-      if (envError) setLoadingEvent(false);
-      return;
-    }
+    if (!router.isReady || envError || !isDebugMode) return;
 
     const loadActiveEvent = async () => {
-      const timeoutId = setTimeout(() => {
-        setTimeoutError(true);
-        setLoadingEvent(false);
-        console.error("[PlayPage] ⏱️ Timeout after 8s");
-      }, 8000);
-
       try {
-        setLastRequest("eventService.getActiveEvent");
-        if (isDebugMode) {
-          console.log("[PlayPage] Request: getActiveEvent");
-        }
-
-        // Fix: Removed venueSlug argument as getActiveEvent takes no args
         const activeEvent = await eventService.getActiveEvent();
-        
-        clearTimeout(timeoutId);
-        
-        if (isDebugMode) {
-          console.log("[PlayPage] Response: getActiveEvent", {
-            success: !!activeEvent,
-            event_id: activeEvent?.id,
-            event_name: activeEvent?.name
-          });
-        }
-
         setEvent(activeEvent);
-      } catch (error: any) {
-        clearTimeout(timeoutId);
-        
-        if (isDebugMode) {
-          console.error("[PlayPage] Error: getActiveEvent", {
-            code: error.code,
-            message: error.message,
-            details: error.details
-          });
-        }
-
-        console.error("Error loading active event:", error);
-      } finally {
-        clearTimeout(timeoutId);
-        setLoadingEvent(false);
+      } catch (error) {
+        console.error("[PlayPage] Error loading active event:", error);
       }
     };
 
     loadActiveEvent();
   }, [router.isReady, venueSlug, envError, isDebugMode]);
 
-  // Auto-load existing tickets for registered players
+  // Auto-load existing tickets
   useEffect(() => {
     if (!event || ticket) return;
 
@@ -106,16 +94,8 @@ export default function PlayPage() {
         const savedEmail = localStorage.getItem("player_email");
         if (!savedEmail) return;
 
-        if (isDebugMode) {
-          console.log("[PlayPage] Auto-loading tickets for:", savedEmail);
-        }
-
         const tickets = await ticketService.getPlayerTickets(savedEmail, event.id);
         
-        if (isDebugMode) {
-          console.log("[PlayPage] Loaded tickets:", tickets.length);
-        }
-
         if (tickets.length > 0) {
           setTicket(tickets);
         }
@@ -127,81 +107,145 @@ export default function PlayPage() {
     loadExistingTickets();
   }, [event, ticket, isDebugMode]);
 
+  // Fetch statistics for all tickets
+  useEffect(() => {
+    if (!ticket || !event || !isPreview) return;
+
+    const fetchStats = async () => {
+      try {
+        // Fetch stats for each ticket
+        const statsPromises = ticket.map(async (t) => {
+          const answers = await answerService.getTicketAnswers(t.id);
+          const ticketNumbers = t.ticket_numbers || [];
+          
+          const answered = answers.length;
+          const correct = answers.filter(a => a.is_correct).length;
+          const incorrect = answers.filter(a => !a.is_correct).length;
+          const accuracy = answered > 0 ? Math.round((correct / answered) * 100) : 0;
+
+          return {
+            ticketId: t.id,
+            stats: { answered, correct, incorrect, accuracy }
+          };
+        });
+
+        const results = await Promise.all(statsPromises);
+        
+        // Build stats map
+        const statsMap: typeof ticketStats = {};
+        results.forEach(({ ticketId, stats }) => {
+          statsMap[ticketId] = stats;
+        });
+        setTicketStats(statsMap);
+
+        // Calculate global stats
+        const totalCorrect = results.reduce((sum, { stats }) => sum + stats.correct, 0);
+        const totalIncorrect = results.reduce((sum, { stats }) => sum + stats.incorrect, 0);
+        const totalAnswered = totalCorrect + totalIncorrect;
+        const globalAccuracy = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
+
+        setGlobalStats({
+          drawnQuestions: event.drawn_numbers?.length || 0,
+          correctAnswers: totalCorrect,
+          incorrectAnswers: totalIncorrect,
+          accuracy: globalAccuracy
+        });
+      } catch (error) {
+        console.error("[PlayPage] Error fetching stats:", error);
+      }
+    };
+
+    fetchStats();
+  }, [ticket, event, isPreview]);
+
   const handleRegistrationSuccess = (result: any) => {
+    console.log("[PlayPage] Registration successful:", result);
+    
     if (result.success && result.tickets) {
       setTicket(result.tickets);
       setShowRegistration(false);
-      setShowOnboarding(true);
-      toast({
-        title: "Uspješno!",
-        description: `Kreirano ${result.tickets.length} listića.`,
-      });
+      setShowOnboarding(false);
     }
   };
 
-  // ENV Error Screen
+  const handleOpenRegistration = () => {
+    setShowOnboarding(false);
+    setShowRegistration(true);
+  };
+
+  const handleClaimTickets = async () => {
+    const savedEmail = localStorage.getItem("player_email");
+    const savedNickname = localStorage.getItem("player_nickname");
+
+    if (!savedEmail || !savedNickname) {
+      setShowOnboarding(true);
+      return;
+    }
+
+    const requestKey = `${savedEmail}-${savedNickname}`;
+    if (lastRequest === requestKey) {
+      console.log("[PlayPage] Duplicate request blocked");
+      return;
+    }
+
+    setClaiming(true);
+    setLastRequest(requestKey);
+
+    try {
+      const result = await ticketService.claimFreeTickets(savedEmail, savedNickname);
+      
+      if (result.success && result.tickets) {
+        setTicket(result.tickets);
+      }
+    } catch (error: any) {
+      console.error("[PlayPage] Claim error:", error);
+      alert(error.message || "Greška pri preuzimanju listića");
+    } finally {
+      setClaiming(false);
+      setTimeout(() => setLastRequest(""), 2000);
+    }
+  };
+
+  // Get color for ticket number based on answer
+  const getNumberColor = (ticketId: string, questionNumber: number, drawnNumbers: number[]) => {
+    if (!drawnNumbers.includes(questionNumber)) {
+      return "bg-gray-200 text-gray-800"; // Not drawn yet
+    }
+
+    // Check if answered
+    const answers = ticketStats[ticketId];
+    if (!answers) return "bg-gray-200 text-gray-800";
+
+    // This is simplified - in real app, you'd need to check specific answer for this question
+    // For now, we'll use a placeholder logic
+    return "bg-gray-200 text-gray-800";
+  };
+
   if (envError) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-        <Card className="w-full max-w-md border-red-200 shadow-xl">
-          <CardHeader>
-            <CardTitle className="text-red-500 flex items-center gap-2">
-              <AlertCircle className="h-6 w-6" />
-              Supabase ENV Missing
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-gray-600">
-              Supabase environment variables are missing in this environment.
-            </p>
-            <div className="bg-red-50 p-3 rounded text-sm text-red-700 font-mono">
-              <p>NEXT_PUBLIC_SUPABASE_URL</p>
-              <p>NEXT_PUBLIC_SUPABASE_ANON_KEY</p>
-            </div>
-            <p className="text-sm text-gray-500">
-              Set these in <strong>Softgen Settings → Environment</strong> for Preview.
-            </p>
-            {debugInfo && (
-              <div className="bg-gray-100 p-3 rounded text-xs font-mono space-y-1">
-                <p>hostname: {debugInfo.hostname}</p>
-                <p>supabase_url: {debugInfo.supabase_url_domain}</p>
-                <p>anon_key_present: {String(debugInfo.anon_key_present)}</p>
-              </div>
-            )}
+      <div className="min-h-screen flex items-center justify-center bg-red-50">
+        <Card className="max-w-md">
+          <CardContent className="p-6 text-center">
+            <h2 className="text-xl font-bold text-red-600 mb-2">Greška konfiguracije</h2>
+            <p className="text-gray-600">{envError}</p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // Timeout Error Screen
-  if (timeoutError) {
+  if (!isDebugMode) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-        <Card className="w-full max-w-md border-orange-200 shadow-xl">
-          <CardHeader>
-            <CardTitle className="text-orange-500 flex items-center gap-2">
-              <AlertCircle className="h-6 w-6" />
-              Request Timeout
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-gray-600">
-              Ne mogu dohvatiti podatke (timeout nakon 8s).
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <Card className="max-w-md mx-auto shadow-md">
+          <CardContent className="p-8 text-center">
+            <h2 className="text-2xl font-bold mb-4">Stranica nije dostupna</h2>
+            <p className="text-gray-600 mb-6">
+              Ova stranica je dostupna samo u debug modu.
             </p>
-            <p className="text-sm text-gray-500">
-              Otvori DevTools → Network i provjeri pozive prema *.supabase.co
-            </p>
-            <Button onClick={() => window.location.reload()} className="w-full">
-              Pokušaj ponovno
+            <Button onClick={() => router.push("/")} className="w-full">
+              Povratak na početnu
             </Button>
-            {debugInfo && (
-              <div className="bg-gray-100 p-3 rounded text-xs font-mono space-y-1">
-                <p>hostname: {debugInfo.hostname}</p>
-                <p>supabase_url: {debugInfo.supabase_url_domain}</p>
-                <p>last_request: {lastRequest}</p>
-              </div>
-            )}
           </CardContent>
         </Card>
       </div>
@@ -211,158 +255,174 @@ export default function PlayPage() {
   return (
     <>
       <Head>
-        <title>Igraj Pitalicu Skitalicu</title>
+        <title>Pitalica Skitalica - Pregled listića</title>
       </Head>
 
-      <div className="min-h-screen bg-gray-100">
+      <div className="min-h-screen bg-gradient-to-br from-purple-500 via-purple-400 to-orange-400">
         {/* DEBUG Banner - Preview Only */}
-        {typeof window !== "undefined" && 
-         (window.location.hostname.includes("softgen") || 
-          window.location.hostname.includes("vercel.app") ||
-          window.location.hostname.includes("localhost")) && (
+        {isPreview && (
           <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
             <strong>PLAYER PREVIEW = PROD LOGIC</strong>
             {event && (
               <span className="ml-4">
                 Event: {event.id.slice(0, 8)}... | 
                 Tickets: {ticket?.length || 0} | 
-                {ticket && ticket.length > 0 && (() => {
-                  const totalCorrect = ticket.reduce((sum, t) => {
-                    const correct = (t.ticket_questions || []).filter((q: any) => q.is_correct === true).length;
-                    return sum + correct;
-                  }, 0);
-                  const totalIncorrect = ticket.reduce((sum, t) => {
-                    const incorrect = (t.ticket_questions || []).filter((q: any) => q.is_correct === false).length;
-                    return sum + incorrect;
-                  }, 0);
-                  return ` Global T:${totalCorrect} N:${totalIncorrect}`;
-                })()}
+                Global T:{globalStats.correctAnswers} N:{globalStats.incorrectAnswers}
               </span>
             )}
           </div>
         )}
 
-        {/* Header */}
-        <div className="bg-white shadow-sm border-b">
-          <div className="container mx-auto px-4 py-4">
-            <h1 className="text-2xl font-bold text-center">Pitalica Skitalica</h1>
-          </div>
-        </div>
-
-        <main className="container mx-auto px-4 py-8">
-          {loadingEvent ? (
-            <div className="text-center py-8">
-              <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-              <p className="text-gray-500">Učitavanje kviza...</p>
-            </div>
-          ) : !event ? (
-            <div className="text-center py-8">
-              <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">
-                Nema aktivnog kviza na ovoj lokaciji. Pokušajte kasnije.
-              </p>
-              {isDebugMode && (
-                <p className="text-xs text-gray-400 mt-2">Venue: {venueSlug || "default"}</p>
-              )}
-            </div>
+        <div className="container mx-auto px-4 py-6 max-w-4xl">
+          {!event ? (
+            <Card className="max-w-md mx-auto shadow-md">
+              <CardContent className="p-6 text-center">
+                <p className="text-gray-600">Učitavanje aktivnog događaja...</p>
+              </CardContent>
+            </Card>
           ) : !ticket ? (
             <Card className="max-w-md mx-auto shadow-md">
-              <CardHeader>
-                <CardTitle className="text-center">Dobrodošli!</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-center text-gray-600">
-                  Registrirajte se i preuzmite svoje listiće
+              <CardContent className="p-6 text-center">
+                <h2 className="text-xl font-bold mb-4">Preuzmi listiće</h2>
+                <p className="text-gray-600 mb-6">
+                  Klikni na gumb ispod da bi preuzeo besplatne listiće za {event.name}.
                 </p>
-                <Button 
-                  onClick={() => setShowRegistration(true)}
+                <Button
+                  onClick={handleClaimTickets}
+                  disabled={claiming}
                   className="w-full"
-                  size="lg"
                 >
-                  Preuzmi listiće
+                  {claiming ? "Preuzimanje..." : "Preuzmi listiće"}
                 </Button>
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-6 animate-in fade-in duration-500">
-              <div className="text-center">
-                <h2 className="text-xl font-bold mb-2">Vaši Listići</h2>
-                <Badge variant="outline">{ticket.length} listića</Badge>
+            <div className="space-y-6">
+              {/* Global Statistics Header */}
+              {isPreview && (
+                <Card className="bg-white shadow-lg rounded-2xl overflow-hidden">
+                  <CardContent className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h1 className="text-2xl font-bold text-black">PITALICA SKITALICA</h1>
+                        <p className="text-xl font-semibold text-gray-800 mt-1">
+                          {localStorage.getItem("player_nickname") || "Igrač"}
+                        </p>
+                        <p className="text-gray-600">{event.name}</p>
+                      </div>
+                      <Badge className="bg-green-500 text-white px-4 py-1 text-sm rounded-full">
+                        {event.status === "active" ? "U toku" : "Završeno"}
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-4 text-center">
+                      <div>
+                        <div className="text-3xl font-bold text-black">
+                          {globalStats.drawnQuestions}/90
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-green-600">
+                          T {globalStats.correctAnswers}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-3xl font-bold text-red-600">
+                          N {globalStats.incorrectAnswers}
+                        </div>
+                      </div>
+                      <div>
+                        <div className={`text-3xl font-bold ${
+                          globalStats.accuracy >= 50 ? "text-green-600" : "text-red-600"
+                        }`}>
+                          {globalStats.accuracy}%
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Tickets Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {ticket.map((t) => {
+                  const stats = ticketStats[t.id] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+                  const ticketNumbers = t.ticket_numbers || [];
+                  const drawnNumbers = event.drawn_numbers || [];
+
+                  return (
+                    <Card
+                      key={t.id}
+                      className="bg-white shadow-lg rounded-2xl overflow-hidden cursor-pointer hover:shadow-xl transition-shadow"
+                      onClick={() => router.push(`/player?ticketId=${t.id}`)}
+                    >
+                      <CardContent className="p-6">
+                        {/* Serial Number */}
+                        <div className="mb-3">
+                          <h3 className="text-lg font-bold text-black">{t.serial_number}</h3>
+                          {isPreview && (
+                            <p className="text-sm text-gray-500">
+                              {stats.answered}/15 | 
+                              <span className="text-green-600"> T {stats.correct}</span> · 
+                              <span className="text-red-600"> N {stats.incorrect}</span> | 
+                              <span className={stats.accuracy >= 50 ? "text-green-600" : "text-red-600"}>
+                                {stats.accuracy}%
+                              </span>
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Numbers Grid - 5 columns x 3 rows */}
+                        <div className="grid grid-cols-5 gap-2">
+                          {ticketNumbers.slice(0, 15).map((num, idx) => {
+                            const isDrawn = drawnNumbers.includes(num);
+                            const colorClass = isDrawn 
+                              ? "bg-gray-300 text-gray-800" // Placeholder - will be replaced with actual answer colors
+                              : "bg-gray-200 text-gray-800";
+
+                            return (
+                              <div
+                                key={idx}
+                                className={`aspect-square flex items-center justify-center rounded-lg font-bold text-lg ${colorClass}`}
+                              >
+                                {num}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ticket.map((t) => (
-                  <Card 
-                    key={t.id}
-                    className="cursor-pointer hover:shadow-lg transition-all duration-300 hover:scale-[1.02]"
-                    onClick={() => router.push(`/player?ticket=${t.id}${debug ? '&debug=1' : ''}`)}
-                  >
-                    <CardHeader className="pb-3 bg-gray-50/50">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <TicketIcon className="h-5 w-5 text-primary" />
-                          <span className="font-bold text-lg">{t.serial_number}</span>
-                        </div>
-                        <Badge variant="secondary">Klikni za igru</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-4">
-                      <div className="grid grid-cols-5 gap-2">
-                        {t.ticket_numbers?.sort((a, b) => a - b).slice(0, 15).map((num) => (
-                          <div
-                            key={num}
-                            className="aspect-square rounded bg-white border flex items-center justify-center text-sm font-bold text-gray-700 shadow-sm"
-                          >
-                            {num}
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+              <div className="text-center">
+                <p className="text-white text-sm font-semibold">
+                  Limit 4 tiketa (promo faza)
+                </p>
               </div>
             </div>
           )}
-        </main>
-
-        {/* Debug Panel */}
-        {isDebugMode && debugInfo && (
-          <div className="fixed bottom-4 right-4 bg-black/90 text-white p-4 rounded-lg text-xs font-mono max-w-sm space-y-1 z-50 shadow-2xl border border-gray-700">
-            <p className="font-bold text-yellow-400 mb-2 flex justify-between">
-              <span>🔍 DEBUG MODE</span>
-              <span className="text-gray-400 cursor-pointer" onClick={() => window.location.href = window.location.pathname}>✕</span>
-            </p>
-            <p>hostname: <span className="text-green-300">{debugInfo.hostname}</span></p>
-            <p>supabase_url: <span className="text-blue-300">{debugInfo.supabase_url_domain}</span></p>
-            <p>url_masked: {debugInfo.supabase_url_last6}</p>
-            <p>anon_key: {debugInfo.anon_key_present ? "✅ PRESENT" : "❌ MISSING"}</p>
-            <p>key_masked: {debugInfo.anon_key_last6}</p>
-            <p>client_ready: {debugInfo.client_ready ? "✅ YES" : "❌ NO"}</p>
-            <p className="pt-2 border-t border-gray-600">last_request: <span className="text-yellow-300">{lastRequest}</span></p>
-            {event && (
-              <>
-                <p className="pt-2 border-t border-gray-600">event_id: {event.id.slice(0, 8)}...</p>
-                <p>event_name: {event.name}</p>
-              </>
-            )}
-            {ticket && <p>tickets_count: {ticket.length}</p>}
-          </div>
-        )}
-
-        <RegistrationModal
-          open={showRegistration}
-          onOpenChange={setShowRegistration}
-          onSuccess={handleRegistrationSuccess}
-          eventId={event?.id || ""}
-          venueId={typeof venueSlug === "string" ? venueSlug : ""}
-        />
-
-        <OnboardingModal
-          open={showOnboarding}
-          onOpenChange={setShowOnboarding}
-          onDismiss={() => setShowOnboarding(false)}
-        />
+        </div>
       </div>
+
+      <OnboardingModal
+        open={showOnboarding}
+        onOpenChange={setShowOnboarding}
+        onDismiss={(dontShowAgain) => {
+          // If user clicked "Kreni", proceed to registration
+          handleOpenRegistration();
+          // Logic for dontShowAgain could be handled here if needed
+        }}
+      />
+
+      <RegistrationModal
+        open={showRegistration}
+        onOpenChange={setShowRegistration}
+        onSuccess={handleRegistrationSuccess}
+        eventId={event?.id || ""}
+        venueId={venueSlug as string || ""}
+      />
     </>
   );
 }

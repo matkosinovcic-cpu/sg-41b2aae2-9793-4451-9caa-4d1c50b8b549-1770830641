@@ -362,6 +362,20 @@ export const answerService = {
       .subscribe();
   },
 
+  async getTicketAnswers(ticketId: string) {
+    const { data, error } = await supabase
+      .from("player_answers")
+      .select("*")
+      .eq("ticket_id", ticketId);
+
+    if (error) {
+      console.error("[AnswerService] Error fetching ticket answers:", error);
+      return [];
+    }
+
+    return data || [];
+  },
+
   async getTicketStats(ticketId: string): Promise<TicketStats> {
     const { data, error } = await supabase
       .from("answers")

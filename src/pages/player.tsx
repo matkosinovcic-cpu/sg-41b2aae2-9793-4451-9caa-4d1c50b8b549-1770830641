@@ -25,6 +25,7 @@ const checkBingoLine = (
 export default function PlayerPage() {
   const router = useRouter();
   const { ticket: ticketId, debug } = router.query;
+  const [email, setEmail] = useState<string>("");
   
   const [loading, setLoading] = useState(true);
   const [ticket, setTicket] = useState<Ticket | null>(null);
@@ -44,6 +45,17 @@ export default function PlayerPage() {
   const confettiRef = useRef<any>(null);
 
   const isDebugMode = debug === "1";
+  const [isPreview, setIsPreview] = useState(false);
+
+  // Detect preview mode after mount (prevents hydration mismatch)
+  useEffect(() => {
+    const hostname = window.location.hostname;
+    setIsPreview(
+      hostname.includes("softgen") ||
+      hostname.includes("vercel.app") ||
+      hostname.includes("localhost")
+    );
+  }, []);
 
   // ENV validation on mount
   useEffect(() => {
@@ -308,10 +320,7 @@ export default function PlayerPage() {
 
       <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400">
         {/* DEBUG Banner - Preview Only */}
-        {typeof window !== "undefined" && 
-         (window.location.hostname.includes("softgen") || 
-          window.location.hostname.includes("vercel.app") ||
-          window.location.hostname.includes("localhost")) && ticket && event && (
+        {isPreview && ticket && event && (
           <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
             <strong>PLAYER PREVIEW = PROD LOGIC</strong>
             <span className="ml-4">
