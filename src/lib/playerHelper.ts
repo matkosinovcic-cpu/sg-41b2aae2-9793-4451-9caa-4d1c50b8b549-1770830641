@@ -134,33 +134,35 @@ export async function updateSessionAfterRegistration(
   ticketIds: string[],
   eventId: string
 ): Promise<void> {
-  if (!isPreviewEnvironment()) return;
-
-  console.log("[PlayerHelper] Updating session after registration:", {
-    email,
-    nickname,
-    ticketCount: ticketIds.length
-  });
-
-  // Get player ID from DB
+  // Get or create player ID
   const { data: player } = await supabase
     .from("players")
     .select("id")
     .eq("email", email)
     .maybeSingle();
 
-  if (player) {
-    const session: PlayerSession = {
-      playerId: player.id,
-      nickname,
-      email,
-      ticketIds,
-      eventId
-    };
-
-    savePlayerSession(session);
-    localStorage.setItem("player_email", email);
+  if (!player) {
+    console.error("[updateSessionAfterRegistration] Player not found for email:", email);
+    return;
   }
+
+  const session: PlayerSession = {
+    playerId: player.id,
+    nickname,
+    email,
+    ticketIds,
+    timestamp: Date.now()
+  };
+
+  savePlayerSession(session);
+  localStorage.setItem("player_email", email);
+  localStorage.setItem("player_nickname", nickname);
+  
+  console.log("[updateSessionAfterRegistration] ✅ Session saved:", {
+    playerId: player.id.slice(0, 8),
+    nickname,
+    ticketCount: ticketIds.length
+  });
 }
 
 /**

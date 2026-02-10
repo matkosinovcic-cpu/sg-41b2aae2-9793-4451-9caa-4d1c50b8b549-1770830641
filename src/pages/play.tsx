@@ -38,13 +38,18 @@ export default function PlayPage() {
 
   const [ticket, setTicket] = useState<Ticket[]>([]);
   const [event, setEvent] = useState<Event | null>(null);
+  
+  // Loading & Error states
+  const [eventLoading, setEventLoading] = useState(true);
+  const [eventError, setEventError] = useState<string | null>(null);
+
   const [ticketStats, setTicketStats] = useState<Record<string, { answered: number; correct: number; incorrect: number; accuracy: number }>>({});
   
   // Auth state (Prod + Preview fallback)
   const [email, setEmail] = useState<string>("");
   const [nickname, setNickname] = useState<string>("");
-  const [showRegistration, setShowRegistration] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showRegistration, setShowRegistration] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [lastRequest, setLastRequest] = useState<string>("");
 
@@ -85,26 +90,25 @@ export default function PlayPage() {
     const loadSession = async () => {
       try {
         const session = await getPlayerSession();
-        setPlayerSession(session);
-        
         if (session) {
+          setPlayerSession(session);
+          setNickname(session.nickname);
+          setEmail(session.email);
+          
           console.log("[PlayPage] Player session loaded:", {
             playerId: session.playerId.slice(0, 8),
             nickname: session.nickname
           });
         } else {
-          console.log("[PlayPage] No player session found");
+          // No session - show onboarding in Preview
+          console.log("[PlayPage] No session found - showing onboarding");
+          setShowOnboarding(true);
         }
       } catch (error) {
         console.error("[PlayPage] Error loading session:", error);
         
-        // PREVIEW ONLY: Clean up broken session
-        if (isPreview) {
-          console.log("[PlayPage] 🧹 Cleaning up broken session from localStorage");
-          localStorage.removeItem("player_session");
-          localStorage.removeItem("player_email");
-          localStorage.removeItem("player_nickname");
-        }
+        // Show onboarding on error
+        setShowOnboarding(true);
       }
     };
 
@@ -861,20 +865,21 @@ export default function PlayPage() {
       <RegistrationModal
         open={showRegistration}
         onOpenChange={setShowRegistration}
-        onSuccess={async (data) => {
-          setEmail(data.email);
-          setNickname(data.nickname);
-          setTicket(data.tickets);
-          setEvent(data.event);
+        onSuccess={async (result) => {
+          setTicket(result.tickets);
           setShowRegistration(false);
+          toast({
+            title: "Uspješno!",
+            description: `Preuzeto ${result.tickets_created} listića.`,
+          });
           
-          // Preview only: Save session
-          if (isPreview && data.event) {
+          // Preview only: Save session and reload
+          if (isPreview && result.event) {
             await updateSessionAfterRegistration(
-              data.email,
-              data.nickname,
-              data.tickets.map(t => t.id),
-              data.event.id
+              result.email,
+              result.nickname,
+              result.tickets.map(t => t.id),
+              result.event.id
             );
             
             // Reload session
