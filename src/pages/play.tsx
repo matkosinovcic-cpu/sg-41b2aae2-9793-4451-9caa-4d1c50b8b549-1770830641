@@ -353,10 +353,10 @@ export default function PlayPage() {
                   return (
                     <Card
                       key={t.id}
-                      className="bg-white shadow-lg rounded-2xl overflow-hidden cursor-pointer hover:shadow-xl transition-shadow"
+                      className="overflow-hidden border-2 shadow-md hover:shadow-lg transition-shadow cursor-pointer"
                       onClick={() => router.push(`/player?ticketId=${t.id}`)}
                     >
-                      <CardContent className="p-6">
+                      <CardContent className="p-4">
                         {/* Serial Number */}
                         <div className="mb-3">
                           <h3 className="text-lg font-bold text-black">{t.serial_number}</h3>

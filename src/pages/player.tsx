@@ -44,7 +44,7 @@ export default function PlayerPage() {
   // Confetti effect reference
   const confettiRef = useRef<any>(null);
 
-  const isDebugMode = debug === "1";
+  const isDebugMode = debug === "1" || isPreview;
   const [isPreview, setIsPreview] = useState(false);
 
   // Detect preview mode after mount (prevents hydration mismatch)
