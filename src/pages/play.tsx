@@ -166,32 +166,49 @@ export default function PlayPage() {
     loadTickets();
   }, [isPreview, playerSession, event]);
 
-  // 4. Load Player Stats (CRITICAL - fetch from DB)
+  // 4. Load Player Stats (CRITICAL - fetch from DB after mount and after answers)
   useEffect(() => {
-    if (!event || !isPreview || !playerSession) return;
+    if (!event || !isPreview || !playerSession) {
+      console.log("[PlayPage] ⏭️ Skipping stats load:", {
+        hasEvent: !!event,
+        isPreview,
+        hasPlayerSession: !!playerSession
+      });
+      return;
+    }
 
     const loadPlayerStats = async () => {
       try {
-        console.log("[PlayPage] 📊 Loading player stats from DB...");
+        console.log("[PlayPage] 📊 Loading player stats from player_answers table...");
+        console.log("[PlayPage] 🔍 Query params:", {
+          eventId: event.id?.slice(0, 8),
+          sessionId: playerSession.playerId?.slice(0, 8),
+          ticketCount: ticket?.length || 0
+        });
 
-        // Fetch all player answers for this event
+        // CRITICAL: Fetch all player_answers for this event and session
         const { data: answers, error } = await supabase
           .from("player_answers")
           .select("question_number, is_correct, ticket_id")
           .eq("event_id", event.id)
-          .eq("session_id", playerSession.playerId); // Assuming session_id = playerId
+          .eq("session_id", playerSession.playerId);
 
         if (error) {
-          console.error("[PlayPage] ❌ Stats load error:", error);
+          console.error("[PlayPage] ❌ Stats load error:", {
+            errorMessage: error.message,
+            errorCode: error.code,
+            errorDetails: error.details
+          });
           return;
         }
 
         if (!answers || answers.length === 0) {
-          console.log("[PlayPage] ℹ️ No answers yet");
+          console.log("[PlayPage] ℹ️ No answers yet in player_answers table");
           return;
         }
 
-        console.log("[PlayPage] ✅ Loaded", answers.length, "answers");
+        console.log("[PlayPage] ✅ Loaded", answers.length, "answers from player_answers");
+        console.log("[PlayPage] 📋 Sample answers:", answers.slice(0, 3));
 
         // Calculate global stats
         const correct = answers.filter(a => a.is_correct).length;
@@ -206,6 +223,13 @@ export default function PlayPage() {
           accuracy
         });
 
+        console.log("[PlayPage] ✅ Global stats calculated:", {
+          total,
+          correct,
+          incorrect,
+          accuracy
+        });
+
         // Build playerAnswers map for coloring
         const answersMap: Record<number, boolean> = {};
         answers.forEach(a => {
@@ -213,11 +237,22 @@ export default function PlayPage() {
         });
         setPlayerAnswers(answersMap);
 
+        console.log("[PlayPage] ✅ Player answers map built:", {
+          questionsAnswered: Object.keys(answersMap).length,
+          sampleMap: Object.entries(answersMap).slice(0, 3)
+        });
+
         // Calculate per-ticket stats
+        if (!ticket || ticket.length === 0) {
+          console.log("[PlayPage] ⚠️ No tickets for per-ticket stats");
+          return;
+        }
+
         const ticketStatsMap: Record<string, any> = {};
         
         ticket.forEach(t => {
-          const ticketAnswers = answers.filter(a => a.ticket_id === t.id);
+          // CRITICAL: Match by ticket serial_number (not id!)
+          const ticketAnswers = answers.filter(a => a.ticket_id === t.serial_number);
           const tCorrect = ticketAnswers.filter(a => a.is_correct).length;
           const tIncorrect = ticketAnswers.filter(a => !a.is_correct).length;
           const tTotal = tCorrect + tIncorrect;
@@ -231,7 +266,11 @@ export default function PlayPage() {
         });
 
         setTicketStats(ticketStatsMap);
-        console.log("[PlayPage] ✅ Stats calculated:", { globalStats, ticketStats: ticketStatsMap });
+        
+        console.log("[PlayPage] ✅ Per-ticket stats calculated:", {
+          ticketCount: ticket.length,
+          stats: ticketStatsMap
+        });
 
       } catch (error) {
         console.error("[PlayPage] ❌ Stats loading exception:", error);
@@ -530,57 +569,52 @@ export default function PlayPage() {
   };
 
   const handleAnswer = async (answerYesNo: boolean) => {
-    if (!currentQuestion || !event) {
-      console.log("[PlayPage] ❌ Cannot submit: no question or event");
-      return;
-    }
-
-    if (submittingAnswer) {
-      console.log("[PlayPage] ⚠️ Already submitting answer");
-      return;
-    }
-
     console.log("[PlayPage] 🔍 SUBMIT START:", {
-      question: currentQuestion.question_number,
-      answer: answerYesNo ? "DA" : "NE",
-      correctAnswer: currentQuestion.questions?.correct_answer,
-      eventId: event.id.slice(0, 8),
-      sessionId: playerSession?.playerId?.slice(0, 8)
+      isPreview,
+      hasCurrentQuestion: !!currentQuestion,
+      hasEvent: !!event,
+      answerValue: answerYesNo ? "DA" : "NE",
+      questionNumber: currentQuestion?.question_number,
+      correctAnswer: currentQuestion?.questions?.correct_answer
     });
 
-    // Preview: Check session
+    if (!currentQuestion || !event) {
+      console.log("[PlayPage] ❌ Missing required data");
+      return;
+    }
+
     if (isPreview) {
-      console.log("[PlayPage] 🔍 Preview mode - checking session...");
+      console.log("[PlayPage] 🎭 Preview mode - validating session...");
       
+      // CRITICAL: Re-read session from localStorage to ensure fresh data
       const session = getPreviewPlayerSession();
       
-      console.log("[PlayPage] 🔍 Session check result:", {
+      console.log("[PlayPage] 🔍 Session validation:", {
         sessionExists: !!session,
         hasPlayerId: !!session?.playerId,
-        playerIdValue: session?.playerId ? session.playerId.slice(0, 8) + "..." : "N/A",
+        playerIdValue: session?.playerId?.slice(0, 8) || "N/A",
+        playerIdType: typeof session?.playerId,
         hasNickname: !!session?.nickname,
-        nicknameValue: session?.nickname || "N/A",
-        playerSessionState: playerSession ? {
-          playerId: playerSession.playerId?.slice(0, 8) + "...",
-          nickname: playerSession.nickname
-        } : null
+        hasEmail: !!session?.email,
+        hasTicketIds: !!session?.ticketIds && session.ticketIds.length > 0
       });
-      
-      // CRITICAL: Only check playerId, nothing else
-      if (!session || !session.playerId) {
-        console.log("[PlayPage] ❌ No valid playerId - opening registration");
-        console.log("[PlayPage] Session details:", session);
+
+      // CRITICAL: Validate playerId is valid UUID, not "N/A" string
+      if (!session || !session.playerId || session.playerId === "N/A" || typeof session.playerId !== "string" || session.playerId.length < 36) {
+        console.log("[PlayPage] ❌ Invalid session - playerId is not valid UUID:", session?.playerId);
+        toast({
+          title: "Greška",
+          description: "Session nije ispravan. Molimo registrirajte se ponovo.",
+          variant: "destructive"
+        });
         setShowRegistration(true);
         return;
       }
 
-      console.log("[PlayPage] ✅ Session validated:", {
-        playerId: session.playerId.slice(0, 8) + "...",
-        nickname: session.nickname
-      });
+      console.log("[PlayPage] ✅ Session validated - playerId is valid UUID");
 
       if (!ticket || ticket.length === 0) {
-        console.log("[PlayPage] ❌ No tickets");
+        console.log("[PlayPage] ❌ No tickets available");
         toast({
           title: "Greška",
           description: "Nema tiketa. Registriraj se ponovo.",
@@ -591,111 +625,122 @@ export default function PlayPage() {
 
       console.log("[PlayPage] ✅ Tickets validated:", {
         ticketCount: ticket.length,
-        firstTicket: ticket[0].serial_number
+        firstTicketId: ticket[0].id?.slice(0, 8),
+        firstTicketSerial: ticket[0].serial_number?.slice(-4)
       });
+    } else {
+      // Production guard
+      console.log("[PlayPage] 🌐 Production mode - checking auth...");
+      
+      if (!email || !nickname) {
+        console.log("[PlayPage] ❌ Not authenticated");
+        toast({
+          title: "Greška",
+          description: "Molimo prijavite se prvo.",
+          variant: "destructive"
+        });
+        return;
+      }
     }
 
+    // Disable buttons immediately
     setSubmittingAnswer(true);
 
     try {
-      console.log("[PlayPage] 📤 Getting/creating session...");
+      console.log("[PlayPage] 📤 Getting/creating DB session...");
+      
+      // CRITICAL: Use event.id to get/create session (not playerId!)
+      // The answerService.getOrCreateSession() creates player_sessions record
       const dbSession = await answerService.getOrCreateSession(event.id);
-      console.log("[PlayPage] ✅ Session obtained:", dbSession.id.slice(0, 8));
-
-      const firstTicket = ticket[0];
-      console.log("[PlayPage] 📤 Submitting answer to DB...");
-      console.log("[PlayPage] Submit parameters:", {
-        sessionId: dbSession.id.slice(0, 8) + "...",
-        eventId: event.id.slice(0, 8) + "...",
-        questionNumber: currentQuestion.question_number,
-        answer: answerYesNo ? "YES" : "NO",
-        ticketSerial: firstTicket.serial_number
+      
+      console.log("[PlayPage] ✅ DB Session obtained:", {
+        sessionId: dbSession.id?.slice(0, 8),
+        eventId: dbSession.event_id?.slice(0, 8)
       });
 
+      const firstTicket = ticket[0];
+      
+      console.log("[PlayPage] 📤 Submitting answer to player_answers table:", {
+        sessionId: dbSession.id.slice(0, 8),
+        eventId: event.id.slice(0, 8),
+        questionNumber: currentQuestion.question_number,
+        answerYesNo: answerYesNo ? "YES" : "NO",
+        ticketSerial: firstTicket.serial_number?.slice(-4),
+        ticketId: firstTicket.id?.slice(0, 8)
+      });
+
+      // CRITICAL: answerService.submitAnswer() writes to player_answers table
+      // with UPSERT (conflict on event_id, ticket_id, question_number)
       const result = await answerService.submitAnswer(
-        dbSession.id,
-        event.id,
-        currentQuestion.question_number,
-        answerYesNo ? "YES" : "NO",
-        firstTicket.serial_number
+        dbSession.id,           // session_id (UUID)
+        event.id,              // event_id (UUID)
+        currentQuestion.question_number, // question_number (integer)
+        answerYesNo ? "YES" : "NO",     // answer_yesno ('YES' or 'NO')
+        firstTicket.serial_number       // ticket_id (text - serial number)
       );
 
-      console.log("[PlayPage] ✅ Answer submitted successfully:", result);
+      console.log("[PlayPage] ✅ Answer submitted successfully to player_answers:", {
+        answerId: result.id?.slice(0, 8),
+        isCorrect: result.is_correct,
+        answerYesNo: result.answer_yesno
+      });
 
-      // Calculate correctness
+      // Calculate correctness locally for immediate UI update
       const isCorrect = (answerYesNo ? "YES" : "NO") === 
         (currentQuestion.questions?.correct_answer ? "YES" : "NO");
 
       console.log("[PlayPage] 🎯 Correctness check:", {
         userAnswer: answerYesNo ? "YES" : "NO",
         correctAnswer: currentQuestion.questions?.correct_answer ? "YES" : "NO",
-        isCorrect
+        isCorrect,
+        dbIsCorrect: result.is_correct
       });
 
-      // Update player answers for coloring
+      // CRITICAL: Update playerAnswers map for immediate coloring
+      // true = green (correct), false = red (incorrect)
       setPlayerAnswers(prev => ({
         ...prev,
         [currentQuestion.question_number]: isCorrect
       }));
 
-      // Update global stats
+      console.log("[PlayPage] ✅ Player answers map updated for question:", currentQuestion.question_number);
+
+      // Update global stats immediately (optimistic)
       setGlobalStats(prev => {
         const newStats = {
           answered: prev.answered + 1,
           correct: prev.correct + (isCorrect ? 1 : 0),
           incorrect: prev.incorrect + (!isCorrect ? 1 : 0),
-          accuracy: 0
+          accuracy: Math.round(
+            ((prev.correct + (isCorrect ? 1 : 0)) / (prev.answered + 1)) * 100
+          )
         };
-        newStats.accuracy = Math.round((newStats.correct / newStats.answered) * 100);
         
-        console.log("[PlayPage] 📊 Global stats updated:", newStats);
+        console.log("[PlayPage] ✅ Global stats updated:", newStats);
         return newStats;
       });
 
-      // Update per-ticket stats
-      setTicketStats(prev => {
-        const serial = firstTicket.serial_number;
-        const prevStats = prev[serial] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
-        
-        const newStats = {
-          answered: prevStats.answered + 1,
-          correct: prevStats.correct + (isCorrect ? 1 : 0),
-          incorrect: prevStats.incorrect + (!isCorrect ? 1 : 0),
-          accuracy: 0
-        };
-        newStats.accuracy = Math.round((newStats.correct / newStats.answered) * 100);
-        
-        console.log("[PlayPage] 📊 Ticket stats updated:", { serial, newStats });
-        
-        return {
-          ...prev,
-          [serial]: newStats
-        };
-      });
-
-      // Disable buttons
-      setTimeRemaining(0);
-
+      // Show toast notification
       toast({
         title: isCorrect ? "Točno!" : "Netočno",
-        description: isCorrect ? "Odlično!" : "Pokušaj bolje sljedeći put.",
-        className: isCorrect ? "bg-green-600 text-white" : "bg-red-600 text-white"
+        description: isCorrect ? "Odlično! ✓" : "Pokušaj ponovo kod idućeg pitanja.",
+        variant: isCorrect ? "default" : "destructive"
       });
 
-      console.log("[PlayPage] ✅ SUBMIT COMPLETE");
+      console.log("[PlayPage] ✅ SUBMIT COMPLETE - answer saved to player_answers table");
 
     } catch (error: any) {
-      console.error("[PlayPage] ❌ Submit error:", error);
-      console.error("[PlayPage] ❌ Error details:", {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint
+      console.error("[PlayPage] ❌ Submit error:", {
+        errorMessage: error.message,
+        errorCode: error.code,
+        errorDetails: error.details,
+        errorHint: error.hint
       });
       
+      // Show actual error message from Supabase (not generic "register")
       toast({
-        title: "Greška",
-        description: error.message || "Neuspjelo slanje odgovora.",
+        title: "Greška pri slanju odgovora",
+        description: error.message || "Molimo pokušajte ponovo.",
         variant: "destructive"
       });
     } finally {
