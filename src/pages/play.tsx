@@ -69,25 +69,47 @@ export default function PlayPage() {
 
   // 1. Detect Environment & Load Session
   useEffect(() => {
+    console.log("[PlayPage] 🚀 Mount - detecting environment...");
+    
     const hostname = window.location.hostname;
     const preview = 
       hostname.includes("softgen") ||
       hostname.includes("vercel.app") ||
       hostname.includes("localhost") ||
       hostname.includes("127.0.0.1");
+    
+    console.log("[PlayPage] 🌍 Environment:", {
+      hostname,
+      isPreview: preview
+    });
+    
     setIsPreview(preview);
 
     if (preview) {
+      console.log("[PlayPage] 📋 Preview mode - loading session...");
+      
       const session = getPreviewPlayerSession();
+      
       if (session) {
-        console.log("[PlayPage] ✅ Session restored:", session.nickname);
+        console.log("[PlayPage] ✅ Session restored:", {
+          playerId: session.playerId ? session.playerId.slice(0, 8) + "..." : "N/A",
+          nickname: session.nickname,
+          email: session.email,
+          ticketCount: session.ticketIds?.length || 0
+        });
+        
         setPlayerSession(session);
         setNickname(session.nickname);
         setEmail(session.email);
+        
+        console.log("[PlayPage] ✅ State updated with session data");
       } else {
-        console.log("[PlayPage] ⚠️ No session - showing onboarding");
+        console.log("[PlayPage] ⚠️ No valid session found");
+        console.log("[PlayPage] Opening onboarding modal...");
         setShowOnboarding(true);
       }
+    } else {
+      console.log("[PlayPage] 🌐 Production mode - using standard auth");
     }
   }, []);
 
@@ -535,17 +557,27 @@ export default function PlayPage() {
       console.log("[PlayPage] 🔍 Session check result:", {
         sessionExists: !!session,
         hasPlayerId: !!session?.playerId,
-        playerSession: playerSession ? {
-          playerId: playerSession.playerId?.slice(0, 8),
+        playerIdValue: session?.playerId ? session.playerId.slice(0, 8) + "..." : "N/A",
+        hasNickname: !!session?.nickname,
+        nicknameValue: session?.nickname || "N/A",
+        playerSessionState: playerSession ? {
+          playerId: playerSession.playerId?.slice(0, 8) + "...",
           nickname: playerSession.nickname
         } : null
       });
       
+      // CRITICAL: Only check playerId, nothing else
       if (!session || !session.playerId) {
-        console.log("[PlayPage] ❌ No session, opening registration");
+        console.log("[PlayPage] ❌ No valid playerId - opening registration");
+        console.log("[PlayPage] Session details:", session);
         setShowRegistration(true);
         return;
       }
+
+      console.log("[PlayPage] ✅ Session validated:", {
+        playerId: session.playerId.slice(0, 8) + "...",
+        nickname: session.nickname
+      });
 
       if (!ticket || ticket.length === 0) {
         console.log("[PlayPage] ❌ No tickets");
@@ -557,10 +589,9 @@ export default function PlayPage() {
         return;
       }
 
-      console.log("[PlayPage] ✅ Session validated:", {
-        playerId: session.playerId.slice(0, 8),
-        nickname: session.nickname,
-        ticketCount: ticket.length
+      console.log("[PlayPage] ✅ Tickets validated:", {
+        ticketCount: ticket.length,
+        firstTicket: ticket[0].serial_number
       });
     }
 
@@ -573,6 +604,13 @@ export default function PlayPage() {
 
       const firstTicket = ticket[0];
       console.log("[PlayPage] 📤 Submitting answer to DB...");
+      console.log("[PlayPage] Submit parameters:", {
+        sessionId: dbSession.id.slice(0, 8) + "...",
+        eventId: event.id.slice(0, 8) + "...",
+        questionNumber: currentQuestion.question_number,
+        answer: answerYesNo ? "YES" : "NO",
+        ticketSerial: firstTicket.serial_number
+      });
 
       const result = await answerService.submitAnswer(
         dbSession.id,
@@ -701,20 +739,68 @@ export default function PlayPage() {
           open={showRegistration}
           onOpenChange={setShowRegistration}
           onSuccess={(result) => {
+            console.log("[PlayPage] 🎉 Registration successful!");
+            console.log("[PlayPage] Registration result:", {
+              hasPlayerId: !!result.player_id,
+              playerIdType: typeof result.player_id,
+              playerIdValue: result.player_id ? String(result.player_id).slice(0, 8) + "..." : "MISSING",
+              nickname: result.nickname,
+              email: result.email,
+              ticketCount: result.tickets?.length || 0
+            });
+            
+            // Ensure player_id is a string
+            const playerId = typeof result.player_id === "string" 
+              ? result.player_id 
+              : result.player_id?.id || result.player_id?.toString() || "";
+            
+            console.log("[PlayPage] 🔍 Processed playerId:", {
+              original: result.player_id,
+              processed: playerId ? playerId.slice(0, 8) + "..." : "EMPTY"
+            });
+            
+            if (!playerId) {
+              console.error("[PlayPage] ❌ CRITICAL: No playerId in registration result!");
+              toast({
+                title: "Greška",
+                description: "Registracija neuspješna - nedostaje player ID",
+                variant: "destructive"
+              });
+              return;
+            }
+            
             const session: Omit<PreviewPlayerSession, "timestamp"> = {
               eventId: event?.id || "",
-              playerId: result.player_id,
+              playerId: playerId,
               nickname: result.nickname,
               email: result.email,
               ticketIds: result.tickets.map((t: any) => t.id)
             };
+            
+            console.log("[PlayPage] 💾 Saving session:", {
+              eventId: session.eventId.slice(0, 8) + "...",
+              playerId: session.playerId.slice(0, 8) + "...",
+              nickname: session.nickname,
+              ticketCount: session.ticketIds.length
+            });
+            
             setPreviewPlayerSession(session);
-            setPlayerSession({ ...session, timestamp: Date.now() });
+            const fullSession = { ...session, timestamp: Date.now() };
+            setPlayerSession(fullSession);
+            
+            console.log("[PlayPage] ✅ Session saved and state updated");
+            
             setNickname(result.nickname);
             setTicket(result.tickets);
             setShowRegistration(false);
             setShowOnboarding(false);
-            toast({ title: "Dobrodošli!", description: "Sretno u igri!" });
+            
+            console.log("[PlayPage] ✅ Registration flow complete");
+            
+            toast({ 
+              title: "Dobrodošli!", 
+              description: "Sretno u igri!" 
+            });
           }}
           eventId={event?.id || ""}
           venueId=""
@@ -738,7 +824,7 @@ export default function PlayPage() {
             Player: {playerSession?.nickname || "N/A"}
           </span>
           <span className="inline-block mx-2">
-            ID: {playerSession?.playerId?.slice(0, 8) || "N/A"}
+            ID: {playerSession?.playerId ? playerSession.playerId.slice(0, 8) + "..." : "N/A"}
           </span>
           <span className="inline-block mx-2">
             Event: {event.id.slice(0, 8)}...

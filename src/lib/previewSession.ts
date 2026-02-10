@@ -25,27 +25,53 @@ export function getPreviewPlayerSession(): PreviewPlayerSession | null {
 
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored) return null;
+    
+    console.log("[PreviewSession] 🔍 Getting session from localStorage...");
+    console.log("[PreviewSession] Raw stored data:", stored ? "EXISTS" : "NULL");
+    
+    if (!stored) {
+      console.log("[PreviewSession] ❌ No session in localStorage");
+      return null;
+    }
 
     const session = JSON.parse(stored) as PreviewPlayerSession;
+    
+    console.log("[PreviewSession] 📦 Parsed session:", {
+      playerId: session.playerId ? session.playerId.slice(0, 8) + "..." : "MISSING",
+      nickname: session.nickname || "MISSING",
+      email: session.email || "MISSING",
+      eventId: session.eventId ? session.eventId.slice(0, 8) + "..." : "MISSING",
+      ticketCount: session.ticketIds?.length || 0,
+      timestamp: new Date(session.timestamp).toLocaleString()
+    });
 
     // Validate structure
     if (!session.playerId || !session.eventId || !session.nickname) {
-      console.warn("[PreviewSession] Invalid session structure, clearing...");
+      console.warn("[PreviewSession] ⚠️ Invalid session structure:", {
+        hasPlayerId: !!session.playerId,
+        hasEventId: !!session.eventId,
+        hasNickname: !!session.nickname
+      });
+      console.warn("[PreviewSession] Clearing invalid session...");
       clearPreviewPlayerSession();
       return null;
     }
 
     // Check expiration
     if (Date.now() - session.timestamp > SESSION_TTL) {
-      console.warn("[PreviewSession] Session expired, clearing...");
+      console.warn("[PreviewSession] ⏰ Session expired:", {
+        age: Math.round((Date.now() - session.timestamp) / 1000 / 60),
+        ttl: Math.round(SESSION_TTL / 1000 / 60)
+      });
+      console.warn("[PreviewSession] Clearing expired session...");
       clearPreviewPlayerSession();
       return null;
     }
 
+    console.log("[PreviewSession] ✅ Valid session loaded");
     return session;
   } catch (error) {
-    console.error("[PreviewSession] Failed to parse session:", error);
+    console.error("[PreviewSession] ❌ Failed to parse session:", error);
     clearPreviewPlayerSession();
     return null;
   }
@@ -57,20 +83,41 @@ export function getPreviewPlayerSession(): PreviewPlayerSession | null {
 export function setPreviewPlayerSession(session: Omit<PreviewPlayerSession, "timestamp">): void {
   if (typeof window === "undefined") return;
 
+  console.log("[PreviewSession] 💾 Saving session to localStorage...");
+  console.log("[PreviewSession] Input data:", {
+    playerId: session.playerId ? session.playerId.slice(0, 8) + "..." : "MISSING",
+    nickname: session.nickname || "MISSING",
+    email: session.email || "MISSING",
+    eventId: session.eventId ? session.eventId.slice(0, 8) + "..." : "MISSING",
+    ticketCount: session.ticketIds?.length || 0
+  });
+
   const fullSession: PreviewPlayerSession = {
     ...session,
     timestamp: Date.now()
   };
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(fullSession));
-    console.log("[PreviewSession] ✅ Session saved:", {
-      playerId: session.playerId.slice(0, 8),
-      nickname: session.nickname,
-      ticketCount: session.ticketIds.length
+    const serialized = JSON.stringify(fullSession);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    
+    console.log("[PreviewSession] ✅ Session saved successfully");
+    console.log("[PreviewSession] Saved data:", {
+      playerId: fullSession.playerId.slice(0, 8) + "...",
+      nickname: fullSession.nickname,
+      ticketCount: fullSession.ticketIds.length,
+      timestamp: new Date(fullSession.timestamp).toLocaleString()
     });
+    
+    // Verify it was saved
+    const verified = localStorage.getItem(STORAGE_KEY);
+    if (verified) {
+      console.log("[PreviewSession] ✅ Verified: Session exists in localStorage");
+    } else {
+      console.error("[PreviewSession] ❌ ERROR: Session NOT saved to localStorage!");
+    }
   } catch (error) {
-    console.error("[PreviewSession] Failed to save session:", error);
+    console.error("[PreviewSession] ❌ Failed to save session:", error);
   }
 }
 
