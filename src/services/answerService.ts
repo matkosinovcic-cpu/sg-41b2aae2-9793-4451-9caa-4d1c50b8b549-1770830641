@@ -91,30 +91,67 @@ function checkCorrectness(
 export const answerService = {
   /**
    * Get or create a session for the player/event
+   * @param playerId - Player UUID from registration
+   * @param eventId - Event UUID
    */
-  async getOrCreateSession(eventId: string): Promise<PlayerSession> {
-    // Try to find existing session in localStorage first to avoid DB calls if possible
-    // But for now, let's just use DB to be safe
-    const { data: existingSession } = await supabase
+  async getOrCreateSession(playerId: string, eventId: string): Promise<PlayerSession> {
+    console.log("[AnswerService] 🔍 getOrCreateSession called:", {
+      playerId: playerId?.slice(0, 8) + "...",
+      eventId: eventId?.slice(0, 8) + "..."
+    });
+
+    // Try to find existing session
+    console.log("[AnswerService] 📖 Querying player_sessions table...");
+    const { data: existingSession, error: queryError } = await supabase
       .from("player_sessions")
       .select("*")
+      .eq("player_id", playerId)
       .eq("event_id", eventId)
       .maybeSingle();
 
+    if (queryError) {
+      console.error("[AnswerService] ❌ Query error:", queryError);
+      throw queryError;
+    }
+
     if (existingSession) {
+      console.log("[AnswerService] ✅ Existing session found:", {
+        sessionId: existingSession.id?.slice(0, 8) + "...",
+        playerId: existingSession.player_id?.slice(0, 8) + "...",
+        eventId: existingSession.event_id?.slice(0, 8) + "..."
+      });
       return existingSession;
     }
 
-    const { data: newSession, error } = await supabase
+    console.log("[AnswerService] ⚠️ No existing session - creating new one...");
+
+    // Create new session
+    const { data: newSession, error: insertError } = await supabase
       .from("player_sessions")
       .insert({ 
+        player_id: playerId,
         event_id: eventId,
         session_token: crypto.randomUUID()
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (insertError) {
+      console.error("[AnswerService] ❌ Insert error:", {
+        message: insertError.message,
+        code: insertError.code,
+        details: insertError.details,
+        hint: insertError.hint
+      });
+      throw insertError;
+    }
+
+    console.log("[AnswerService] ✅ New session created:", {
+      sessionId: newSession.id?.slice(0, 8) + "...",
+      playerId: newSession.player_id?.slice(0, 8) + "...",
+      eventId: newSession.event_id?.slice(0, 8) + "..."
+    });
+
     return newSession;
   },
 
@@ -129,18 +166,33 @@ export const answerService = {
     answerYesNo: string | boolean,
     ticketSerial: string
   ): Promise<PlayerAnswer> {
+    console.log("[AnswerService] 🚀 submitAnswer called:", {
+      sessionId: sessionId?.slice(0, 8) + "...",
+      eventId: eventId?.slice(0, 8) + "...",
+      questionNumber,
+      answerYesNo,
+      ticketSerial: ticketSerial?.slice(-4)
+    });
+
     // 1. Normalize answer to YES/NO
+    console.log("[AnswerService] 🔄 Normalizing answer...");
     const normalizedAnswer = normalizeYesNo(answerYesNo);
+    
+    console.log("[AnswerService] ✅ Answer normalized:", {
+      original: answerYesNo,
+      normalized: normalizedAnswer
+    });
     
     // 2. Validate before attempting insert
     if (!normalizedAnswer || !["YES", "NO"].includes(normalizedAnswer)) {
-      console.error("[submitAnswer] Invalid answer value:", answerYesNo);
+      console.error("[AnswerService] ❌ Invalid answer value:", answerYesNo);
       throw new Error(
         "Nevažeći odgovor. Molimo odaberite DA ili NE."
       );
     }
 
     // 3. Get question details
+    console.log("[AnswerService] 📖 Fetching event_questions...");
     const { data: eventQuestion, error: eqError } = await supabase
       .from("event_questions")
       .select("question_id")
@@ -149,9 +201,15 @@ export const answerService = {
       .single();
 
     if (eqError || !eventQuestion) {
+      console.error("[AnswerService] ❌ event_questions error:", eqError);
       throw new Error("Pitanje nije pronađeno");
     }
 
+    console.log("[AnswerService] ✅ Event question found:", {
+      questionId: eventQuestion.question_id?.slice(0, 8) + "..."
+    });
+
+    console.log("[AnswerService] 📖 Fetching question details...");
     const { data: question, error: qError } = await supabase
       .from("questions")
       .select("correct_answer")
@@ -159,13 +217,25 @@ export const answerService = {
       .single();
 
     if (qError || !question) {
+      console.error("[AnswerService] ❌ questions error:", qError);
       throw new Error("Pitanje nije pronađeno");
     }
 
+    console.log("[AnswerService] ✅ Question details found:", {
+      correctAnswer: question.correct_answer
+    });
+
     // 4. Calculate correctness
     const isCorrect = checkCorrectness(answerYesNo, question.correct_answer);
+    
+    console.log("[AnswerService] 🎯 Correctness calculated:", {
+      playerAnswer: normalizedAnswer,
+      correctAnswer: question.correct_answer,
+      isCorrect
+    });
 
     // 5. UPSERT answer (now guaranteed to be "YES" or "NO")
+    console.log("[AnswerService] 💾 Upserting to player_answers...");
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -174,7 +244,7 @@ export const answerService = {
           event_id: eventId,
           question_number: questionNumber,
           question_id: eventQuestion.question_id,
-          answer_yesno: normalizedAnswer, // ← ALWAYS "YES" or "NO"
+          answer_yesno: normalizedAnswer,
           ticket_id: ticketSerial,
           is_correct: isCorrect,
         },
@@ -187,13 +257,26 @@ export const answerService = {
       .single();
 
     if (error) {
-      console.error("[submitAnswer] UPSERT error:", error);
+      console.error("[AnswerService] ❌ UPSERT error:", {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint
+      });
       throw new Error("Greška pri spremanju odgovora");
     }
 
+    console.log("[AnswerService] ✅ Answer upserted successfully:", {
+      answerId: data.id?.slice(0, 8) + "...",
+      isCorrect: data.is_correct,
+      answerYesNo: data.answer_yesno
+    });
+
     // 6. Check for winner
+    console.log("[AnswerService] 🏆 Checking for winners...");
     await supabase.rpc("check_winner_tickets", { p_event_id: eventId });
 
+    console.log("[AnswerService] ✅ submitAnswer complete");
     return data as PlayerAnswer;
   },
 
