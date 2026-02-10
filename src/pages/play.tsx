@@ -29,6 +29,7 @@ export default function PlayPage() {
   const [email, setEmail] = useState<string>("");
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
+  const [drawnCount, setDrawnCount] = useState(0);
   
   // Event & Questions
   const [event, setEvent] = useState<Event | null>(null);
@@ -97,6 +98,20 @@ export default function PlayPage() {
         const currentEvent = await eventService.getActiveEvent();
         if (currentEvent) {
           setEvent(currentEvent);
+          
+          // Fetch drawn count
+          if (isPreview) {
+            const { count, error } = await supabase
+              .from("event_questions")
+              .select("*", { count: "exact", head: true })
+              .eq("event_id", currentEvent.id)
+              .eq("drawn", true);
+            
+            if (!error && count !== null) {
+              setDrawnCount(count);
+              console.log("[PlayPage] ✅ Drawn count loaded:", count);
+            }
+          }
         }
       } catch (error) {
         console.error("Error loading event:", error);
@@ -105,7 +120,7 @@ export default function PlayPage() {
       }
     };
     loadEvent();
-  }, []);
+  }, [isPreview]);
 
   // 3. Load Tickets (Filtered by Player Session in Preview)
   useEffect(() => {
@@ -129,7 +144,82 @@ export default function PlayPage() {
     loadTickets();
   }, [isPreview, playerSession, event]);
 
-  // 4. Realtime Subscription (Questions & Answers)
+  // 4. Load Player Stats (CRITICAL - fetch from DB)
+  useEffect(() => {
+    if (!event || !isPreview || !playerSession) return;
+
+    const loadPlayerStats = async () => {
+      try {
+        console.log("[PlayPage] 📊 Loading player stats from DB...");
+
+        // Fetch all player answers for this event
+        const { data: answers, error } = await supabase
+          .from("player_answers")
+          .select("question_number, is_correct, ticket_id")
+          .eq("event_id", event.id)
+          .eq("session_id", playerSession.playerId); // Assuming session_id = playerId
+
+        if (error) {
+          console.error("[PlayPage] ❌ Stats load error:", error);
+          return;
+        }
+
+        if (!answers || answers.length === 0) {
+          console.log("[PlayPage] ℹ️ No answers yet");
+          return;
+        }
+
+        console.log("[PlayPage] ✅ Loaded", answers.length, "answers");
+
+        // Calculate global stats
+        const correct = answers.filter(a => a.is_correct).length;
+        const incorrect = answers.filter(a => !a.is_correct).length;
+        const total = correct + incorrect;
+        const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
+
+        setGlobalStats({
+          answered: total,
+          correct,
+          incorrect,
+          accuracy
+        });
+
+        // Build playerAnswers map for coloring
+        const answersMap: Record<number, boolean> = {};
+        answers.forEach(a => {
+          answersMap[a.question_number] = a.is_correct;
+        });
+        setPlayerAnswers(answersMap);
+
+        // Calculate per-ticket stats
+        const ticketStatsMap: Record<string, any> = {};
+        
+        ticket.forEach(t => {
+          const ticketAnswers = answers.filter(a => a.ticket_id === t.id);
+          const tCorrect = ticketAnswers.filter(a => a.is_correct).length;
+          const tIncorrect = ticketAnswers.filter(a => !a.is_correct).length;
+          const tTotal = tCorrect + tIncorrect;
+          
+          ticketStatsMap[t.serial_number] = {
+            answered: tTotal,
+            correct: tCorrect,
+            incorrect: tIncorrect,
+            accuracy: tTotal > 0 ? Math.round((tCorrect / tTotal) * 100) : 0
+          };
+        });
+
+        setTicketStats(ticketStatsMap);
+        console.log("[PlayPage] ✅ Stats calculated:", { globalStats, ticketStats: ticketStatsMap });
+
+      } catch (error) {
+        console.error("[PlayPage] ❌ Stats loading exception:", error);
+      }
+    };
+
+    loadPlayerStats();
+  }, [event, isPreview, playerSession, ticket]);
+
+  // Subscribe to events table for real-time question updates
   useEffect(() => {
     if (!event || !isPreview) return;
 
@@ -164,6 +254,9 @@ export default function PlayPage() {
               openUntil
             });
 
+            // Only increment drawnCount if this is a NEW question (not same as current)
+            const isNewQuestion = !currentQuestion || currentQuestion.question_number !== questionNumber;
+
             // Fetch question details from event_questions
             const { data: eventQuestion, error: eqError } = await supabase
               .from("event_questions")
@@ -196,6 +289,15 @@ export default function PlayPage() {
               setCurrentQuestion(eventQuestion as any);
               setLastUpdateTime(Date.now());
 
+              // Only increment drawnCount for NEW questions
+              if (isNewQuestion) {
+                setDrawnCount(prev => {
+                  const newCount = prev + 1;
+                  console.log("[PlayPage] 📊 Drawn count incremented:", newCount);
+                  return newCount;
+                });
+              }
+
               // Calculate time remaining
               const now = Date.now();
               const openUntilMs = new Date(openUntil).getTime();
@@ -218,6 +320,53 @@ export default function PlayPage() {
 
     return () => {
       console.log("[PlayPage] 🔌 Unsubscribing from events");
+      supabase.removeChannel(channel);
+    };
+  }, [event, isPreview, currentQuestion]);
+
+  // Subscribe to event_questions table for accurate drawn count tracking
+  useEffect(() => {
+    if (!event || !isPreview) return;
+
+    console.log("[PlayPage] 📡 Subscribing to event_questions for drawn count");
+
+    const channel = supabase
+      .channel(`event_questions_drawn:${event.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "event_questions",
+          filter: `event_id=eq.${event.id}`
+        },
+        async (payload) => {
+          const updated = payload.new as any;
+          
+          // Only count if question was just marked as drawn
+          if (updated.drawn && !payload.old?.drawn) {
+            console.log("[PlayPage] 📊 New question drawn:", updated.question_number);
+            
+            // Refetch accurate count from DB
+            const { count, error } = await supabase
+              .from("event_questions")
+              .select("*", { count: "exact", head: true })
+              .eq("event_id", event.id)
+              .eq("drawn", true);
+            
+            if (!error && count !== null) {
+              console.log("[PlayPage] ✅ Drawn count synced from DB:", count);
+              setDrawnCount(count);
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("[PlayPage] event_questions subscription status:", status);
+      });
+
+    return () => {
+      console.log("[PlayPage] 🔌 Unsubscribing from event_questions");
       supabase.removeChannel(channel);
     };
   }, [event, isPreview]);
@@ -275,9 +424,23 @@ export default function PlayPage() {
               .single();
 
             if (!eqError && eventQuestion) {
-              setCurrentQuestion(eventQuestion as any);
+              console.log("[PlayPage] ✅ Question details loaded:", eventQuestion);
+              setCurrentQuestion(eventQuestion as EventQuestion);
               setLastUpdateTime(Date.now());
+              
+              // Refetch accurate drawn count from DB
+              const { count, error: countError } = await supabase
+                .from("event_questions")
+                .select("*", { count: "exact", head: true })
+                .eq("event_id", event.id)
+                .eq("drawn", true);
+              
+              if (!countError && count !== null) {
+                console.log("[PlayPage] ✅ Drawn count synced:", count);
+                setDrawnCount(count);
+              }
 
+              // Calculate time remaining
               const now = Date.now();
               const openUntilMs = new Date(currentEvent.question_open_until).getTime();
               const remaining = Math.max(0, Math.floor((openUntilMs - now) / 1000));
@@ -345,30 +508,73 @@ export default function PlayPage() {
   };
 
   const handleAnswer = async (answerYesNo: boolean) => {
-    if (!currentQuestion || !event) return;
-    if (submittingAnswer) return;
+    if (!currentQuestion || !event) {
+      console.log("[PlayPage] ❌ Cannot submit: no question or event");
+      return;
+    }
 
-    // Preview Session Check
+    if (submittingAnswer) {
+      console.log("[PlayPage] ⚠️ Already submitting answer");
+      return;
+    }
+
+    console.log("[PlayPage] 🔍 SUBMIT START:", {
+      question: currentQuestion.question_number,
+      answer: answerYesNo ? "DA" : "NE",
+      correctAnswer: currentQuestion.questions?.correct_answer,
+      eventId: event.id.slice(0, 8),
+      sessionId: playerSession?.playerId?.slice(0, 8)
+    });
+
+    // Preview: Check session
     if (isPreview) {
+      console.log("[PlayPage] 🔍 Preview mode - checking session...");
+      
       const session = getPreviewPlayerSession();
+      
+      console.log("[PlayPage] 🔍 Session check result:", {
+        sessionExists: !!session,
+        hasPlayerId: !!session?.playerId,
+        playerSession: playerSession ? {
+          playerId: playerSession.playerId?.slice(0, 8),
+          nickname: playerSession.nickname
+        } : null
+      });
+      
       if (!session || !session.playerId) {
-        setShowRegistration(true); // Open registration, don't show error toast
+        console.log("[PlayPage] ❌ No session, opening registration");
+        setShowRegistration(true);
         return;
       }
+
       if (!ticket || ticket.length === 0) {
-        toast({ title: "Greška", description: "Nema listića.", variant: "destructive" });
+        console.log("[PlayPage] ❌ No tickets");
+        toast({
+          title: "Greška",
+          description: "Nema tiketa. Registriraj se ponovo.",
+          variant: "destructive"
+        });
         return;
       }
+
+      console.log("[PlayPage] ✅ Session validated:", {
+        playerId: session.playerId.slice(0, 8),
+        nickname: session.nickname,
+        ticketCount: ticket.length
+      });
     }
 
     setSubmittingAnswer(true);
 
     try {
-      // 1. Submit to DB
+      console.log("[PlayPage] 📤 Getting/creating session...");
       const dbSession = await answerService.getOrCreateSession(event.id);
-      const firstTicket = ticket[0]; // Use first ticket for submission context
-      
-      await answerService.submitAnswer(
+      console.log("[PlayPage] ✅ Session obtained:", dbSession.id.slice(0, 8));
+
+      const firstTicket = ticket[0];
+      console.log("[PlayPage] 📤 Submitting answer to DB...");
+
+      const result = await answerService.submitAnswer(
         dbSession.id,
         event.id,
         currentQuestion.question_number,
@@ -376,52 +582,84 @@ export default function PlayPage() {
         firstTicket.serial_number
       );
 
-      // 2. Optimistic Update
+      console.log("[PlayPage] ✅ Answer submitted successfully:", result);
+
+      // Calculate correctness
       const isCorrect = (answerYesNo ? "YES" : "NO") === 
         (currentQuestion.questions?.correct_answer ? "YES" : "NO");
 
-      // Update player answers (for coloring)
+      console.log("[PlayPage] 🎯 Correctness check:", {
+        userAnswer: answerYesNo ? "YES" : "NO",
+        correctAnswer: currentQuestion.questions?.correct_answer ? "YES" : "NO",
+        isCorrect
+      });
+
+      // Update player answers for coloring
       setPlayerAnswers(prev => ({
         ...prev,
         [currentQuestion.question_number]: isCorrect
       }));
 
-      // Update per-ticket stats
-      const newStats = { ...ticketStats };
-      ticket.forEach(t => {
-        const prev = newStats[t.serial_number] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
-        const newCorrect = prev.correct + (isCorrect ? 1 : 0);
-        const newAnswered = prev.answered + 1;
-        newStats[t.serial_number] = {
-          answered: newAnswered,
-          correct: newCorrect,
+      // Update global stats
+      setGlobalStats(prev => {
+        const newStats = {
+          answered: prev.answered + 1,
+          correct: prev.correct + (isCorrect ? 1 : 0),
           incorrect: prev.incorrect + (!isCorrect ? 1 : 0),
-          accuracy: Math.round((newCorrect / newAnswered) * 100)
+          accuracy: 0
+        };
+        newStats.accuracy = Math.round((newStats.correct / newStats.answered) * 100);
+        
+        console.log("[PlayPage] 📊 Global stats updated:", newStats);
+        return newStats;
+      });
+
+      // Update per-ticket stats
+      setTicketStats(prev => {
+        const serial = firstTicket.serial_number;
+        const prevStats = prev[serial] || { answered: 0, correct: 0, incorrect: 0, accuracy: 0 };
+        
+        const newStats = {
+          answered: prevStats.answered + 1,
+          correct: prevStats.correct + (isCorrect ? 1 : 0),
+          incorrect: prevStats.incorrect + (!isCorrect ? 1 : 0),
+          accuracy: 0
+        };
+        newStats.accuracy = Math.round((newStats.correct / newStats.answered) * 100);
+        
+        console.log("[PlayPage] 📊 Ticket stats updated:", { serial, newStats });
+        
+        return {
+          ...prev,
+          [serial]: newStats
         };
       });
-      setTicketStats(newStats);
 
-      // Update global stats
-      setGlobalStats(prev => ({
-        answered: prev.answered + 1,
-        correct: prev.correct + (isCorrect ? 1 : 0),
-        incorrect: prev.incorrect + (!isCorrect ? 1 : 0),
-        accuracy: Math.round(
-          ((prev.correct + (isCorrect ? 1 : 0)) / (prev.answered + 1)) * 100
-        )
-      }));
-
-      // Stop timer & UI feedback
+      // Disable buttons
       setTimeRemaining(0);
+
       toast({
         title: isCorrect ? "Točno!" : "Netočno",
-        description: isCorrect ? "Odlično!" : "Više sreće idući put.",
+        description: isCorrect ? "Odlično!" : "Pokušaj bolje sljedeći put.",
         className: isCorrect ? "bg-green-600 text-white" : "bg-red-600 text-white"
       });
 
+      console.log("[PlayPage] ✅ SUBMIT COMPLETE");
+
     } catch (error: any) {
-      console.error("Submit error:", error);
-      toast({ title: "Greška", description: "Neuspjelo slanje.", variant: "destructive" });
+      console.error("[PlayPage] ❌ Submit error:", error);
+      console.error("[PlayPage] ❌ Error details:", {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint
+      });
+      
+      toast({
+        title: "Greška",
+        description: error.message || "Neuspjelo slanje odgovora.",
+        variant: "destructive"
+      });
     } finally {
       setSubmittingAnswer(false);
     }
@@ -493,16 +731,36 @@ export default function PlayPage() {
       {/* PREVIEW DEBUG BANNER */}
       {isPreview && event && (
         <div className="bg-green-600 text-white text-center py-2 text-sm font-mono">
-          <strong>PREVIEW MODE</strong> | 
-          Player: {playerSession?.nickname} | 
-          ID: {playerSession?.playerId?.slice(0, 8) || "N/A"} | 
-          Event: {event.id.slice(0, 8)}... | 
-          Q: {currentQuestion?.question_number || 0}/90 | 
-          Drawn: {globalStats.answered} | 
-          Tickets: {ticket?.length || 0} |
-          RT: {realtimeConnected ? "✓" : "✗"} | 
-          LastQ: {currentQuestion?.question_id?.slice(0, 8) || "none"} |
-          Updated: {new Date(lastUpdateTime).toLocaleTimeString()}
+          <span className="inline-block mx-2">
+            <strong>PREVIEW MODE</strong>
+          </span>
+          <span className="inline-block mx-2">
+            Player: {playerSession?.nickname || "N/A"}
+          </span>
+          <span className="inline-block mx-2">
+            ID: {playerSession?.playerId?.slice(0, 8) || "N/A"}
+          </span>
+          <span className="inline-block mx-2">
+            Event: {event.id.slice(0, 8)}...
+          </span>
+          <span className="inline-block mx-2">
+            Q: {currentQuestion?.question_number || 0}/90
+          </span>
+          <span className="inline-block mx-2">
+            Drawn: {drawnCount}
+          </span>
+          <span className="inline-block mx-2">
+            Tickets: {ticket?.length || 0}
+          </span>
+          <span className="inline-block mx-2">
+            RT: {realtimeConnected ? "✓" : "✗"}
+          </span>
+          <span className="inline-block mx-2">
+            LastQ: {currentQuestion?.question_id?.slice(0, 8) || "none"}
+          </span>
+          <span className="inline-block mx-2">
+            Updated: {new Date(lastUpdateTime).toLocaleTimeString()}
+          </span>
         </div>
       )}
 
@@ -522,13 +780,15 @@ export default function PlayPage() {
             </div>
           </div>
 
-          {/* GLOBAL STATS */}
-          <div className="mt-4 flex flex-wrap gap-4 text-sm border-t border-white/20 pt-2">
-            <div className="font-mono">Pitanje: <b>{currentQuestion?.question_number || 0}/90</b></div>
-            <div className="font-mono">T: <b className="text-green-300">{globalStats.correct}</b></div>
-            <div className="font-mono">N: <b className="text-red-300">{globalStats.incorrect}</b></div>
-            <div className="font-mono">%: <b>{globalStats.accuracy}%</b></div>
-          </div>
+          {/* Global Stats */}
+          {event && (
+            <div className="mt-4 flex items-center gap-4 text-sm border-t border-white/20 pt-2">
+              <div className="font-mono">Pitanje: <b>{drawnCount}/90</b></div>
+              <div className="font-mono">T: <b className="text-green-300">{globalStats.correct}</b></div>
+              <div className="font-mono">N: <b className="text-red-300">{globalStats.incorrect}</b></div>
+              <div className="font-mono">%: <b>{globalStats.accuracy}%</b></div>
+            </div>
+          )}
         </div>
       </header>
 
