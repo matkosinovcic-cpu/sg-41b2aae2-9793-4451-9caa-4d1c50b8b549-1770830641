@@ -362,7 +362,7 @@ export default function PlayerPage() {
             <span className="ml-4">
               Event: {event.id.slice(0, 8)}... | 
               Ticket: {ticket.serial_number} | 
-              Question: {drawnQuestionsCount}/90 |
+              Question: {event.drawn_numbers.length}/90 |
               {(() => {
                 const correct = Object.values(answers).filter(a => a === true).length;
                 const incorrect = Object.values(answers).filter(a => a === false).length;
