@@ -17,16 +17,8 @@ interface TicketData {
   ticket_questions: Array<{ question_number: number }>;
 }
 
-export default function TVPage() {
+export default function TVScreen() {
   const router = useRouter();
-  const { venue: venueSlug = "boiler" } = router.query;
-  
-  // Preview mode detection (for UI testing only)
-  const isPreviewMode = typeof window !== "undefined" && 
-    (window.location.hostname.includes("softgen") || 
-     window.location.hostname.includes("localhost") ||
-     window.location.hostname.includes("vercel.app"));
-
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string>("");
   const [event, setEvent] = useState<Event | null>(null);
@@ -41,13 +33,6 @@ export default function TVPage() {
   const [tickets, setTickets] = useState<TicketData[]>([]);
   const [detailedResults, setDetailedResults] = useState<Map<string, TicketDetailedResults>>(new Map());
   const [ticketStats, setTicketStats] = useState<TicketStats[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setShowDebug(window.location.search.includes("debug=1"));
-    }
-  }, []);
 
   useEffect(() => {
     // Initialize AudioContext with error handling
@@ -647,15 +632,8 @@ export default function TVPage() {
                       <div className="text-lg text-indigo-300 tracking-wide uppercase">
                         Trenutno pitanje
                       </div>
-                      {/* Question Number - white in preview, brand color in production */}
-                      <div 
-                        className="font-black mb-8 animate-fade-in" 
-                        style={{ 
-                          fontSize: "3.4rem",
-                          color: isPreviewMode ? "#FFFFFF" : undefined
-                        }}
-                      >
-                        {currentQuestion?.question_number}
+                      <div className="text-8xl font-black text-white drop-shadow-2xl">
+                        #{event.current_drawn_number}
                       </div>
                       {timeRemaining > 0 && (
                         <div className="text-5xl font-bold text-yellow-300 animate-pulse">
@@ -719,19 +697,9 @@ export default function TVPage() {
               {/* 3️⃣ FOOTER (12% height) */}
               <div className="flex-none h-[12%] grid grid-cols-3 gap-4 items-center px-8">
                 
-                <div className="bg-white/10 backdrop-blur-sm rounded-lg p-6 text-center">
-                  <div 
-                    className="text-4xl font-black text-white mb-2"
-                    style={isPreviewMode ? { fontSize: "1.8rem" } : undefined}
-                  >
-                    {isPreviewMode 
-                      ? `${drawnNumbers.size}/90`
-                      : "90 pitanja"
-                    }
-                  </div>
-                  <div className="text-white/80 text-sm uppercase tracking-wider">
-                    {isPreviewMode ? "Pitanja" : "Ukupno pitanja"}
-                  </div>
+                <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">
+                  <div className="text-3xl font-bold text-yellow-300">90</div>
+                  <div className="text-sm text-gray-300 mt-1">pitanja</div>
                 </div>
                 
                 <div className="bg-white/5 backdrop-blur-sm rounded-xl p-3 text-center border border-white/10">

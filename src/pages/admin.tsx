@@ -1,7 +1,7 @@
 import { SEO } from "@/components/SEO";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
-import { eventService, Event, EventQuestion, Ticket, Question, Answer } from "@/services/eventService";
+import { eventService, Event, EventQuestion, Ticket } from "@/services/eventService";
 import { answerService, TicketStats } from "@/services/answerService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 const ANSWER_SECONDS = 9;  // Players have 9 seconds to answer
 const AUTO_DRAW_INTERVAL_MS = (ANSWER_SECONDS + 1) * 1000;  // Auto-draw waits 10s (answer time + 1s buffer)
 
-export default function AdminPage() {
+export default function AdminPanel() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [eventQuestions, setEventQuestions] = useState<EventQuestion[]>([]);
@@ -29,7 +29,6 @@ export default function AdminPage() {
   const [newEventName, setNewEventName] = useState("");
   const [ticketCount, setTicketCount] = useState(10);
   const [loading, setLoading] = useState(false);
-  const [mounted, setMounted] = useState(false);
   
   // CRITICAL: Continue mode state - defaults to FALSE for each event
   const [continueAfterWinner, setContinueAfterWinner] = useState<Record<string, boolean>>({});
@@ -43,10 +42,6 @@ export default function AdminPage() {
   const [autoDrawingState, setAutoDrawingState] = useState<Record<string, boolean>>({});
   
   const { toast } = useToast();
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useEffect(() => {
     loadEvents();
@@ -973,23 +968,6 @@ export default function AdminPage() {
           </Tabs>
         </div>
       </div>
-
-      {mounted && (
-        <div className="fixed bottom-0 left-0 right-0 bg-black/80 text-white text-xs p-2 z-50">
-          <div className="flex justify-between items-center">
-            <div>
-              <span className="font-bold">Build Info:</span> 
-              {" "}Commit: {process.env.GIT_COMMIT?.substring(0, 7) || "local"}
-              {" | "}Build: {new Date(process.env.BUILD_TIME || Date.now()).toLocaleString()}
-            </div>
-            <div>
-              <span className="font-bold">Supabase:</span> 
-              {" "}...{process.env.NEXT_PUBLIC_SUPABASE_URL?.split(".")[0].slice(-6) || "N/A"}
-              {" | "}ENV: {process.env.ENV_NAME || "dev"}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

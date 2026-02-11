@@ -25,7 +25,6 @@ export interface EventQuestion {
   question_id: string;
   drawn: boolean;
   drawn_at: string | null;
-  question_open_until?: string | null;
   questions?: Question;
 }
 
@@ -159,6 +158,7 @@ export const eventService = {
     const tickets = [];
     
     for (let i = 0; i < count; i++) {
+      // Generate truly unique serial number with timestamp + random component + index
       const timestamp = Date.now();
       const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, "0");
       const serialNumber = `T${timestamp}-${randomPart}-${i.toString().padStart(4, "0")}`;
@@ -170,29 +170,15 @@ export const eventService = {
 
       const { data: ticket, error: ticketError } = await supabase
         .from("tickets")
-        .insert({ 
-          serial_number: serialNumber, 
-          event_id: eventId
-        } as any)
+        .insert({ serial_number: serialNumber, event_id: eventId })
         .select()
         .single();
       
       if (ticketError) throw ticketError;
 
-      // Get question_ids for these numbers from event_questions
-      const { data: eventQuestions, error: eqError } = await supabase
-        .from("event_questions")
-        .select("question_number, question_id")
-        .eq("event_id", eventId)
-        .in("question_number", Array.from(numbers));
-      
-      if (eqError) throw eqError;
-
-      // Create ticket_questions with question_id mapping
-      const ticketQuestions = eventQuestions.map(eq => ({
+      const ticketQuestions = Array.from(numbers).map(num => ({
         ticket_id: ticket.id,
-        question_number: eq.question_number,
-        question_id: eq.question_id
+        question_number: num
       }));
 
       const { error: questionsError } = await supabase
@@ -462,31 +448,14 @@ export const eventService = {
     // Get all tickets with their questions
     const { data: tickets } = await supabase
       .from("tickets")
-      .select("id, serial_number, ticket_numbers")
+      .select("id, serial_number, ticket_questions(question_number)")
       .eq("event_id", eventId);
 
     if (!tickets || tickets.length === 0) return null;
 
     // Check each ticket for all 15 numbers drawn
     for (const ticket of tickets) {
-      const ticketNumbers = ticket.ticket_numbers || [];
-      
-      // ✅ CRITICAL GUARD: Skip "broken" tickets (1-15 sequence)
-      // This prevents false winners from old test tickets
-      const isBrokenTicket = 
-        ticketNumbers.length === 15 &&
-        ticketNumbers.every((num, idx) => num === idx + 1);
-      
-      if (isBrokenTicket) {
-        console.log("[checkForWinner] ⚠️ Skipping broken ticket (1-15):", ticket.serial_number);
-        continue;
-      }
-      
-      // ✅ CRITICAL GUARD: Skip tickets without proper numbers
-      if (!ticketNumbers || ticketNumbers.length !== 15) {
-        console.log("[checkForWinner] ⚠️ Skipping ticket without 15 numbers:", ticket.serial_number);
-        continue;
-      }
+      const ticketNumbers = ticket.ticket_questions.map((tq: any) => tq.question_number);
       
       // Check if ALL 15 ticket numbers have been drawn
       const allNumbersDrawn = ticketNumbers.every((num: number) => drawnNumbers.includes(num));
@@ -637,29 +606,23 @@ export const eventService = {
   },
 
   async getDrawnQuestions(eventId: string) {
-    console.log("[eventService] getDrawnQuestions called for event:", eventId);
+    const { data, error } = await supabase
+      .from("event_questions")
+      .select("question_number, questions(id, text, correct_answer)")
+      .eq("event_id", eventId)
+      .eq("drawn", true);
     
-    const { data: event, error: eventError } = await supabase
-      .from("events")
-      .select("drawn_numbers")
-      .eq("id", eventId)
-      .single();
+    if (error) throw error;
     
-    if (eventError) {
-      console.error("[eventService] ❌ getDrawnQuestions event error:", eventError);
-      throw eventError;
-    }
-
-    const drawnNumbers = event?.drawn_numbers || [];
-    console.log("[eventService] ✅ Drawn numbers:", drawnNumbers);
-
-    // Return simple map: question_number -> true if drawn
-    const drawnMap: Record<number, boolean> = {};
-    drawnNumbers.forEach((num: number) => {
-      drawnMap[num] = true;
+    // Transform to simple map: question_number -> correct_answer
+    const correctAnswersMap: Record<number, boolean> = {};
+    data.forEach((item: any) => {
+      if (item.questions) {
+        correctAnswersMap[item.question_number] = item.questions.correct_answer;
+      }
     });
     
-    return drawnMap;
+    return correctAnswersMap;
   },
 
   /**

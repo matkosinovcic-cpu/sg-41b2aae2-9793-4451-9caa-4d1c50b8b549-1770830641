@@ -1,135 +1,360 @@
 import { supabase } from "@/integrations/supabase/client";
+import { generateTicketSerial } from "@/lib/utils";
+
+// Standardized Storage Keys
+const STORAGE_KEYS = {
+  SESSION_ID: "ps_session_id",
+  PLAYER_ID: "ps_player_id",
+  // Legacy keys to clear/migrate
+  LEGACY_SESSION: "session_id",
+  LEGACY_PLAYER: "player_id",
+  LEGACY_PLAYER_SESSION: "player_session_id"
+};
 
 export interface Ticket {
   id: string;
-  serial_number: string;
   event_id: string;
-  venue_id?: string;
-  is_winner: boolean;
-  ticket_numbers?: number[];
-  ticket_questions?: any[];
+  serial_number: string;
   created_at: string;
+  session_id: string;
+  player_id: string | null;
+  is_winner: boolean;
+  ticket_questions?: {
+    id: string;
+    ticket_id: string;
+    question_number: number;
+  }[];
 }
 
-export const ticketService = {
-  // RPC Claim Function
-  async claimFreeTickets(email: string, nickname: string) {
-    console.log("=== [TicketService] CLAIM FREE TICKETS START ===");
+export interface TicketQuestion {
+  id: string;
+  ticket_id: string;
+  question_number: number;
+}
+
+/**
+ * Ensures a valid player session exists in the database.
+ * This prevents FK constraint errors when creating tickets.
+ */
+async function ensureValidSession(eventId: string, playerId?: string): Promise<string> {
+  // 1. Clean legacy keys
+  try {
+    const legacyKeys = [STORAGE_KEYS.LEGACY_SESSION, STORAGE_KEYS.LEGACY_PLAYER, STORAGE_KEYS.LEGACY_PLAYER_SESSION];
+    legacyKeys.forEach(key => localStorage.removeItem(key));
+  } catch (e) {
+    // Ignore storage errors
+  }
+
+  // 2. Check for existing session in localStorage
+  let sessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
+
+  if (sessionId) {
+    // Verify it exists in DB
+    const { data } = await supabase
+      .from("player_sessions")
+      .select("id")
+      .eq("id", sessionId)
+      .maybeSingle();
+
+    if (data) {
+      // Session is valid
+      return data.id;
+    } else {
+      // Session in storage is invalid/stale - clear it
+      console.warn("[Session] Found invalid session in storage, clearing:", sessionId);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+      sessionId = null;
+    }
+  }
+
+  // 3. Create NEW session if none exists or was invalid
+  if (!sessionId) {
+    console.log("[Session] Creating new player session...");
+    const sessionToken = crypto.randomUUID(); 
     
-    const rpcName = "claim_free_tickets";
-    const payload = {
-      p_email: email,
-      p_nickname: nickname,
-      p_limit: 4  // ✅ Changed from 1 to 4 for promo phase
-    };
+    const { data: newSession, error } = await supabase
+      .from("player_sessions")
+      .insert({
+        event_id: eventId,
+        player_id: playerId || null,
+        session_token: sessionToken
+      })
+      .select("id")
+      .single();
 
-    console.log("[TicketService] Calling RPC:", rpcName);
-    console.log("[TicketService] Payload:", JSON.stringify(payload, null, 2));
+    if (error) {
+      console.error("[Session] Failed to create session:", error);
+      // Fallback: retry logic handled by caller or UI, but we can try once more
+      const retryToken = crypto.randomUUID();
+      const { data: retrySession, error: retryError } = await supabase
+        .from("player_sessions")
+        .insert({
+          event_id: eventId,
+          player_id: playerId || null,
+          session_token: retryToken
+        })
+        .select("id")
+        .single();
+        
+      if (retryError) throw retryError;
+      sessionId = retrySession.id;
+    } else {
+      sessionId = newSession.id;
+    }
 
+    // 4. Save valid session
+    localStorage.setItem(STORAGE_KEYS.SESSION_ID, sessionId);
+  }
+  
+  return sessionId;
+}
+
+const ticketService = {
+  // Expose max tickets constant
+  getMaxFreeTickets: () => 4,
+
+  /**
+   * Create a FREE ticket for a player
+   * Handles session creation automatically to prevent FK errors.
+   */
+  async createFreeTicket(eventId: string, playerId?: string): Promise<Ticket> {
     try {
-      const { data: rawData, error } = await supabase.rpc(rpcName, payload);
-      const data = rawData as any;
+      console.log("[TicketService] Creating free ticket for event:", eventId);
+      
+      // CRITICAL: Ensure we have a valid DB session first
+      const sessionId = await ensureValidSession(eventId, playerId);
+      console.log("[TicketService] Using verified session:", sessionId);
+
+      // 1. Generate unique serial
+      const serialNumber = await this.generateUniqueSerial();
+
+      // 2. Create ticket
+      const { data, error } = await supabase
+        .from("tickets")
+        .insert({
+          event_id: eventId,
+          serial_number: serialNumber,
+          session_id: sessionId,
+          player_id: playerId || null,
+          is_winner: false
+        })
+        .select("*, ticket_questions(*)")
+        .single();
 
       if (error) {
-        console.error("[TicketService] ❌ RPC Error:", {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint
-        });
+        console.error("[TicketService] DB Insert Error:", error);
+        // If error is FK constraint on session, retry session creation once
+        if (error.code === '23503' && error.message.includes('tickets_session_id_fkey')) {
+           console.warn("[TicketService] Session FK error, forcing new session and retrying...");
+           localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+           const newSessionId = await ensureValidSession(eventId, playerId);
+           
+           const { data: retryData, error: retryError } = await supabase
+            .from("tickets")
+            .insert({
+              event_id: eventId,
+              serial_number: serialNumber,
+              session_id: newSessionId,
+              player_id: playerId || null,
+              is_winner: false
+            })
+            .select("*, ticket_questions(*)")
+            .single();
+            
+            if (retryError) throw retryError;
+            // Generate numbers for retry
+            await this.generateTicketNumbers(retryData.id);
+            return retryData as Ticket;
+        }
         throw error;
       }
 
-      console.log("[TicketService] ✅ RPC Success:", {
-        success: data?.success,
-        tickets_created: data?.tickets_created,
-        event_id: data?.event_id,
-        venue_id: data?.venue_id,
-        player_id: data?.player_id
-      });
+      // 3. Generate random numbers for ticket
+      await this.generateTicketNumbers(data.id);
 
-      // Log first 2 tickets preview
-      if (data?.tickets && Array.isArray(data.tickets)) {
-        const preview = data.tickets.slice(0, 2).map((t: any) => ({
-          id: t.id,
-          serial: t.serial_number,
-          has_numbers: Array.isArray(t.ticket_numbers) && t.ticket_numbers.length > 0,
-          numbers_count: t.numbers_count || (Array.isArray(t.ticket_numbers) ? t.ticket_numbers.length : 0),
-          first_5_numbers: t.ticket_numbers?.slice(0, 5) || []
-        }));
-        console.log("[TicketService] First 2 tickets preview:", preview);
-      }
-
-      console.log("=== [TicketService] CLAIM FREE TICKETS END ===");
-
-      return data;
-    } catch (err: any) {
-      console.error("[TicketService] Claim Error:", JSON.stringify(err, null, 2));
-      throw err;
+      // 4. Return complete ticket (fetch again to get questions if needed, but select should handle it)
+      // Since ticket_questions are inserted AFTER ticket, the initial select returned empty array
+      // We need to construct the return object or fetch again.
+      // Fetching again is safer.
+      const completeTicket = await this.getTicket(data.id);
+      
+      console.log("[TicketService] Ticket created:", data.serial_number);
+      return completeTicket || data as Ticket;
+    } catch (error) {
+      console.error("[TicketService] Failed to create ticket:", error);
+      throw error;
     }
   },
 
-  // Added for compatibility with play.tsx
-  getMaxFreeTickets() {
-    return 1;
-  },
-
-  // Added for compatibility with play.tsx (legacy direct call, redirect to claim)
-  async createFreeTicket(email: string, nickname: string, eventId: string) {
-    return this.claimFreeTickets(email, nickname);
-  },
-
-  // Standard get ticket (needed for player.tsx)
-  async getTicket(ticketId: string) {
-    console.log("[ticketService] getTicket called with ID:", ticketId);
+  /**
+   * Helper: Generate ticket numbers (1-90)
+   */
+  async generateTicketNumbers(ticketId: string) {
+    // Generate 15 unique random numbers between 1-90
+    const numbers = new Set<number>();
+    while (numbers.size < 15) {
+      numbers.add(Math.floor(Math.random() * 90) + 1);
+    }
     
-    const { data, error } = await supabase
-      .from("tickets")
-      .select("*")
-      .eq("id", ticketId)
-      .single();
-    
+    const ticketQuestions = Array.from(numbers).map(num => ({
+      ticket_id: ticketId,
+      question_number: num
+    }));
+
+    const { error } = await supabase
+      .from("ticket_questions")
+      .insert(ticketQuestions);
+
     if (error) {
-      console.error("[ticketService] ❌ getTicket error:", {
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint
-      });
+      console.error("[TicketService] Failed to generate numbers:", error);
+    }
+  },
+
+  /**
+   * Helper: Generate unique serial number
+   */
+  async generateUniqueSerial(): Promise<string> {
+    let isUnique = false;
+    let serial = "";
+    
+    while (!isUnique) {
+      serial = generateTicketSerial();
+      
+      // Check if exists
+      const { count } = await supabase
+        .from("tickets")
+        .select("*", { count: 'exact', head: true })
+        .eq("serial_number", serial);
+        
+      if (count === 0) isUnique = true;
+    }
+    return serial;
+  },
+
+  /**
+   * Get total free tickets count for this device/session
+   */
+  async getFreeTicketsCount(eventId: string): Promise<number> {
+    const sessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
+    if (!sessionId) return 0;
+
+    const { count } = await supabase
+      .from("tickets")
+      .select("*", { count: 'exact', head: true })
+      .eq("event_id", eventId)
+      .eq("session_id", sessionId);
+
+    return count || 0;
+  },
+
+  /**
+   * Check if player can get more free tickets
+   */
+  async canGetFreeTicket(eventId: string): Promise<boolean> {
+    const count = await this.getFreeTicketsCount(eventId);
+    // Hardcoded max tickets limit (e.g., 4)
+    return count < 4;
+  },
+
+  /**
+   * Get a ticket by ID
+   */
+  async getTicket(ticketId: string): Promise<Ticket | null> {
+    try {
+      const { data, error } = await supabase
+        .from("tickets")
+        .select("*, ticket_questions(*)")
+        .eq("id", ticketId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as Ticket | null;
+    } catch (error) {
+      console.error("[TicketService] ❌ Failed to get ticket by ID:", error);
       throw error;
+    }
+  },
+
+  /**
+   * Get a ticket by serial number
+   */
+  async getTicketBySerial(serialNumber: string): Promise<Ticket | null> {
+    try {
+      const { data, error } = await supabase
+        .from("tickets")
+        .select("*, ticket_questions(*)")
+        .eq("serial_number", serialNumber)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data as Ticket | null;
+    } catch (error) {
+      console.error("[TicketService] ❌ Failed to get ticket:", error);
+      throw error;
+    }
+  }
+};
+
+/**
+ * Atomically claim free tickets for a player (max 4)
+ * Uses RPC function to ensure transaction safety and idempotency
+ */
+export async function claimFreeTickets(
+  email: string,
+  nickname: string,
+  limit: number = 4
+): Promise<{
+  success: boolean;
+  tickets_created: number;
+  total_tickets: number;
+  session_id: string;
+  user_id: string;
+  tickets: Array<{
+    id: string;
+    serial_number: string;
+    source: string;
+    created_at: string;
+  }>;
+  error?: string;
+}> {
+  console.log(`[TicketService] 🎟️ Claiming free tickets for ${email} (limit: ${limit})`);
+
+  // Normalize email (lowercase + trim) before sending to backend
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const { data, error } = await supabase.rpc("claim_free_tickets", {
+      p_email: normalizedEmail,
+      p_nickname: nickname.trim(),
+      p_limit: limit,
+    });
+
+    if (error) {
+      console.error("[TicketService] ❌ RPC error:", error);
+      throw new Error(error.message || "Failed to claim tickets");
     }
 
     if (!data) {
-      throw new Error("Ticket not found");
+      throw new Error("No data returned from RPC");
     }
-    
-    console.log("[ticketService] ✅ getTicket result:", {
-      id: data.id,
-      serial: data.serial_number,
-      has_numbers: Array.isArray(data.ticket_numbers),
-      numbers_count: data.ticket_numbers?.length || 0,
-      numbers: data.ticket_numbers
-    });
-    
-    return data as Ticket;
-  },
 
-  async getPlayerTickets(email: string, eventId: string) {
-    const { data: player } = await supabase
-      .from("players")
-      .select("id")
-      .eq("email", email)
-      .single();
+    // Parse RPC response
+    const result = typeof data === "string" ? JSON.parse(data) : data;
 
-    if (!player) return [];
+    if (!result.success) {
+      console.error("[TicketService] ❌ RPC returned error:", result.error);
+      throw new Error(result.error || "Failed to claim tickets");
+    }
 
-    const { data, error } = await supabase
-      .from("tickets")
-      .select("*")
-      .eq("event_id", eventId)
-      .eq("player_id", player.id);
-    
-    if (error) throw error;
-    return data as Ticket[];
+    console.log(
+      `[TicketService] ✅ Successfully claimed ${result.tickets_created} tickets (total: ${result.total_tickets})`
+    );
+
+    return result;
+  } catch (err) {
+    console.error("[TicketService] ❌ Failed to claim free tickets:", err);
+    throw err;
   }
-};
+}
+
+export default ticketService;

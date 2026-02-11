@@ -23,8 +23,14 @@ export interface SessionStats {
   accuracy: number;
 }
 
-// Relaxed type to satisfy both player.tsx (simple stats) and admin.tsx (complex stats)
-export type TicketStats = any;
+export interface TicketStats {
+  ticket_serial: string;
+  correct: number;
+  answered: number;
+  missed: number;
+  drawn_on_ticket: number;
+  percentage: number;
+}
 
 export interface TicketDetailedResults {
   ticket_serial: string;
@@ -91,80 +97,30 @@ function checkCorrectness(
 export const answerService = {
   /**
    * Get or create a session for the player/event
-   * @param playerId - Player UUID (optional, required for Preview)
-   * @param eventId - Event UUID
    */
-  async getOrCreateSession(playerId: string | undefined, eventId: string): Promise<PlayerSession> {
-    console.log("[AnswerService] 🔍 getOrCreateSession called:", {
-      playerId: playerId ? playerId.slice(0, 8) + "..." : "UNDEFINED",
-      eventId: eventId?.slice(0, 8) + "..."
-    });
-
-    // Try to find existing session
-    console.log("[AnswerService] 📖 Querying player_sessions table...");
-    
-    let query = supabase
+  async getOrCreateSession(eventId: string): Promise<PlayerSession> {
+    // Try to find existing session in localStorage first to avoid DB calls if possible
+    // But for now, let's just use DB to be safe
+    const { data: existingSession } = await supabase
       .from("player_sessions")
       .select("*")
-      .eq("event_id", eventId);
-      
-    // If playerId provided, use it. Otherwise rely on RLS/Event scope (legacy/prod behavior)
-    if (playerId) {
-      query = query.eq("player_id", playerId);
-    }
-      
-    const { data: existingSession, error: queryError } = await query.maybeSingle();
-
-    if (queryError) {
-      console.error("[AnswerService] ❌ Query error:", queryError);
-      throw queryError;
-    }
+      .eq("event_id", eventId)
+      .maybeSingle();
 
     if (existingSession) {
-      console.log("[AnswerService] ✅ Existing session found:", {
-        sessionId: existingSession.id?.slice(0, 8) + "...",
-        playerId: existingSession.player_id?.slice(0, 8) + "...",
-        eventId: existingSession.event_id?.slice(0, 8) + "..."
-      });
       return existingSession;
     }
 
-    console.log("[AnswerService] ⚠️ No existing session - creating new one...");
-
-    // Prepare insert data
-    const insertData: any = { 
-      event_id: eventId,
-      session_token: crypto.randomUUID()
-    };
-    
-    // Only add player_id if provided
-    if (playerId) {
-      insertData.player_id = playerId;
-    }
-
-    // Create new session
-    const { data: newSession, error: insertError } = await supabase
+    const { data: newSession, error } = await supabase
       .from("player_sessions")
-      .insert(insertData)
+      .insert({ 
+        event_id: eventId,
+        session_token: crypto.randomUUID()
+      })
       .select()
       .single();
 
-    if (insertError) {
-      console.error("[AnswerService] ❌ Insert error:", {
-        message: insertError.message,
-        code: insertError.code,
-        details: insertError.details,
-        hint: insertError.hint
-      });
-      throw insertError;
-    }
-
-    console.log("[AnswerService] ✅ New session created:", {
-      sessionId: newSession.id?.slice(0, 8) + "...",
-      playerId: newSession.player_id?.slice(0, 8) + "...",
-      eventId: newSession.event_id?.slice(0, 8) + "..."
-    });
-
+    if (error) throw error;
     return newSession;
   },
 
@@ -179,33 +135,18 @@ export const answerService = {
     answerYesNo: string | boolean,
     ticketSerial: string
   ): Promise<PlayerAnswer> {
-    console.log("[AnswerService] 🚀 submitAnswer called:", {
-      sessionId: sessionId?.slice(0, 8) + "...",
-      eventId: eventId?.slice(0, 8) + "...",
-      questionNumber,
-      answerYesNo,
-      ticketSerial: ticketSerial?.slice(-4)
-    });
-
     // 1. Normalize answer to YES/NO
-    console.log("[AnswerService] 🔄 Normalizing answer...");
     const normalizedAnswer = normalizeYesNo(answerYesNo);
-    
-    console.log("[AnswerService] ✅ Answer normalized:", {
-      original: answerYesNo,
-      normalized: normalizedAnswer
-    });
     
     // 2. Validate before attempting insert
     if (!normalizedAnswer || !["YES", "NO"].includes(normalizedAnswer)) {
-      console.error("[AnswerService] ❌ Invalid answer value:", answerYesNo);
+      console.error("[submitAnswer] Invalid answer value:", answerYesNo);
       throw new Error(
         "Nevažeći odgovor. Molimo odaberite DA ili NE."
       );
     }
 
     // 3. Get question details
-    console.log("[AnswerService] 📖 Fetching event_questions...");
     const { data: eventQuestion, error: eqError } = await supabase
       .from("event_questions")
       .select("question_id")
@@ -214,15 +155,9 @@ export const answerService = {
       .single();
 
     if (eqError || !eventQuestion) {
-      console.error("[AnswerService] ❌ event_questions error:", eqError);
       throw new Error("Pitanje nije pronađeno");
     }
 
-    console.log("[AnswerService] ✅ Event question found:", {
-      questionId: eventQuestion.question_id?.slice(0, 8) + "..."
-    });
-
-    console.log("[AnswerService] 📖 Fetching question details...");
     const { data: question, error: qError } = await supabase
       .from("questions")
       .select("correct_answer")
@@ -230,25 +165,13 @@ export const answerService = {
       .single();
 
     if (qError || !question) {
-      console.error("[AnswerService] ❌ questions error:", qError);
       throw new Error("Pitanje nije pronađeno");
     }
 
-    console.log("[AnswerService] ✅ Question details found:", {
-      correctAnswer: question.correct_answer
-    });
-
     // 4. Calculate correctness
     const isCorrect = checkCorrectness(answerYesNo, question.correct_answer);
-    
-    console.log("[AnswerService] 🎯 Correctness calculated:", {
-      playerAnswer: normalizedAnswer,
-      correctAnswer: question.correct_answer,
-      isCorrect
-    });
 
     // 5. UPSERT answer (now guaranteed to be "YES" or "NO")
-    console.log("[AnswerService] 💾 Upserting to player_answers...");
     const { data, error } = await supabase
       .from("player_answers")
       .upsert(
@@ -257,7 +180,7 @@ export const answerService = {
           event_id: eventId,
           question_number: questionNumber,
           question_id: eventQuestion.question_id,
-          answer_yesno: normalizedAnswer,
+          answer_yesno: normalizedAnswer, // ← ALWAYS "YES" or "NO"
           ticket_id: ticketSerial,
           is_correct: isCorrect,
         },
@@ -270,26 +193,13 @@ export const answerService = {
       .single();
 
     if (error) {
-      console.error("[AnswerService] ❌ UPSERT error:", {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint
-      });
+      console.error("[submitAnswer] UPSERT error:", error);
       throw new Error("Greška pri spremanju odgovora");
     }
 
-    console.log("[AnswerService] ✅ Answer upserted successfully:", {
-      answerId: data.id?.slice(0, 8) + "...",
-      isCorrect: data.is_correct,
-      answerYesNo: data.answer_yesno
-    });
-
     // 6. Check for winner
-    console.log("[AnswerService] 🏆 Checking for winners...");
     await supabase.rpc("check_winner_tickets", { p_event_id: eventId });
 
-    console.log("[AnswerService] ✅ submitAnswer complete");
     return data as PlayerAnswer;
   },
 
@@ -456,37 +366,5 @@ export const answerService = {
         callback
       )
       .subscribe();
-  },
-
-  async getTicketAnswers(ticketId: string) {
-    const { data, error } = await supabase
-      .from("player_answers")
-      .select("*")
-      .eq("ticket_id", ticketId);
-
-    if (error) {
-      console.error("[AnswerService] Error fetching ticket answers:", error);
-      return [];
-    }
-
-    return data || [];
-  },
-
-  async getTicketStats(ticketId: string): Promise<TicketStats> {
-    const { data, error } = await supabase
-      .from("answers")
-      .select("*")
-      .eq("ticket_id", ticketId);
-      
-    if (error) {
-      console.error("Error fetching ticket stats:", error);
-      return { total: 0, correct: 0 };
-    }
-    
-    // Calculate stats based on answers
-    return {
-      total: data.length,
-      correct: data.filter(a => a.answer === true).length // Assuming answer is boolean
-    };
   }
 };
