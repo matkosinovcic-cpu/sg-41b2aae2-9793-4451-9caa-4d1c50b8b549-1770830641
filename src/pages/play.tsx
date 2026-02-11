@@ -16,6 +16,10 @@ import {
   type PreviewPlayerSession
 } from "@/lib/previewSession";
 
+// Build stamp for version tracking
+const BUILD_STAMP = "2026-02-11T00:13:00Z";
+const FILE_PATH = "src/pages/play.tsx";
+
 export default function PlayPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -1014,6 +1018,16 @@ export default function PlayPage() {
           })}
         </div>
       </main>
+
+      {/* Debug BUILD STAMP - Only show when ?debug=1 */}
+      {router.query.debug === "1" && (
+        <div className="fixed bottom-4 right-4 bg-black/80 text-white p-3 rounded text-xs font-mono border border-gray-700 z-50">
+          <div className="text-yellow-400 font-bold mb-1">🐛 DEBUG MODE</div>
+          <div className="text-gray-400">BUILD: {BUILD_STAMP}</div>
+          <div className="text-gray-400">FILE: {FILE_PATH}</div>
+          <div className="text-gray-400">ROUTE: {router.pathname}</div>
+        </div>
+      )}
     </div>
   );
 }

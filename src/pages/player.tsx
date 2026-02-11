@@ -287,17 +287,19 @@ export default function PlayerPage() {
             }
           }
 
-          console.log("[RT] Event UPDATE received:", {
-            receivedAt,
-            updatedAt: updatedEvent.updated_at,
-            latencyMs,
-            eventId: updatedEvent.id?.slice(0, 8),
-            drawnNumbersLength: updatedEvent.drawn_numbers?.length || 0,
-            currentDrawnNumber: updatedEvent.current_drawn_number,
-            status: updatedEvent.status,
-            channel: `events:${ticket.event_id}`,
-            sourceTable: "events"
-          });
+          if (isDebugMode) {
+            console.log("[RT] Event UPDATE received:", {
+              receivedAt,
+              updatedAt: updatedEvent.updated_at,
+              latencyMs,
+              eventId: updatedEvent.id?.slice(0, 8),
+              drawnNumbersLength: updatedEvent.drawn_numbers?.length || 0,
+              currentDrawnNumber: updatedEvent.current_drawn_number,
+              status: updatedEvent.status,
+              channel: `events:${ticket.event_id}`,
+              sourceTable: "events"
+            });
+          }
 
           setEvent(updatedEvent);
 
